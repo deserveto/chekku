@@ -6,6 +6,7 @@ import { PinoLogger } from '@mastra/loggers';
 import { env } from '../config/env.js';
 import { requestIdInjector, requestLogger } from '../config/middleware.js';
 import { mainAgent } from '../agents/main-agent.js';
+import { pmAgent } from '../agents/pm-agent.js';
 import { qaWebAgent } from '../agents/qa-web-agent.js';
 import { OpenAICompatibleGateway } from './gateways/openai-compatible.js';
 import { healthRoute } from './routes/health.js';
@@ -21,7 +22,7 @@ const storage = new LibSQLStore({
 });
 
 export const mastra = new Mastra({
-  agents: { mainAgent, qaWebAgent },
+  agents: { mainAgent, pmAgent, qaWebAgent },
   tools: storedAgentTools,
   storage,
   editor: new MastraEditor({ source: 'db' }),
