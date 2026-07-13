@@ -1,0 +1,38 @@
+{
+  "name": "agent",
+  "version": "0.1.0",
+  "description": "Chekku's Mastra agent runtime.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "dev": "mastra dev",
+    "build": "mastra build",
+    "start": "mastra start"
+  },
+  "keywords": [
+    "mastra",
+    "agents",
+    "browser-automation"
+  ],
+  "author": "",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.22.0"
+  },
+  "dependencies": {
+    "@ai-sdk/openai-compatible-v5": "npm:@ai-sdk/openai-compatible@1.0.39",
+    "@mastra/agent-browser": "^0.4.0",
+    "@mastra/core": "^1.49.0",
+    "@mastra/editor": "^0.13.5",
+    "@mastra/libsql": "^1.15.0",
+    "@mastra/loggers": "^1.2.0",
+    "@mastra/memory": "^1.22.1",
+    "dotenv": "^17.3.1",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "mastra": "^1.18.0",
+    "typescript": "^6.0.3"
+  }
+}

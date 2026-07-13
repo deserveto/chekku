@@ -1,0 +1,59 @@
+# Dependencies
+node_modules/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# Build output and caches
+.next/
+out/
+build/
+dist/
+.mastra/
+.turbo/
+.cache/
+coverage/
+*.tsbuildinfo
+
+# Local databases
+mastra.db
+mastra.db-*
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Test and browser artifacts
+playwright-report/
+test-results/
+.nyc_output/
+*.log
+
+# Local tooling and editors
+.vscode/
+.idea/
+*.swp
+*.swo
+.playwright-mcp/
+.agents/
+.codex/
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Chekku reconstruction artifacts
+.chekku-*-backup-*/
+*.patch
+*.zip
+
+# Local-only scratch files
+PROMPT.md
+DESIGN.md
+agent/test-client.js
+/after-fix-screenshot.png
+/webapp-screenshot.png
