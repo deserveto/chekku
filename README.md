@@ -21,9 +21,11 @@ Chekku provides a focused interface for managing agents, creating agent-specific
 - **Agent-isolated history** — each agent owns its own Memory threads and conversation list.
 - **OpenAI-compatible models** — connect Rafiqspace LLM, LiteLLM, vLLM, or another compatible endpoint with server-only credentials.
 - **Browser QA agent** — navigate and inspect live websites using Mastra Agent Browser.
+- **Social media agent** — role-switchable content assistant reachable over Telegram (X, Instagram, LinkedIn, TikTok roles).
 - **Hosted-vLLM compatibility** — final prompt normalization keeps system messages at the beginning.
 - **Local-first storage** — agent definitions, versions, memory, and threads live in LibSQL.
 - **Same-origin client traffic** — browser requests go through the Next.js proxy instead of calling the Mastra server directly.
+- **Email + time + calculator tools** — registered for stored agents and bound to code-defined agents; email delivery goes through Resend.
 
 ## Architecture
 
@@ -36,15 +38,17 @@ Next.js client :3000
   │  same-origin server proxy
   ▼
 Mastra server :4111
-  ├── main-agent
-  ├── qa-web-agent
-  ├── @mastra/editor stored agents
-  ├── Mastra Memory
-  ├── calculator + current-time tools
-  └── OpenAI-compatible gateway
-          │
-          ▼
-  Rafiqspace LLM / LiteLLM / vLLM / compatible endpoint
+   ├── main-agent
+   ├── qa-web-agent
+   ├── social-media-agent (Telegram channel)
+   ├── @mastra/editor stored agents
+   ├── Mastra Memory
+   ├── calculator + current-time + send-email tools
+   ├── Chat SDK + Telegram adapter
+   └── OpenAI-compatible gateway
+           │
+           ▼
+   Rafiqspace LLM / LiteLLM / vLLM / compatible endpoint
 
 LibSQL stores agent definitions, versions, memory, and threads.
 ```
@@ -85,6 +89,13 @@ LLM_MODELS=qwen3.6-35b-a3b-fast,qwen3.6-35b-a3b
 ```
 
 Never expose `LLM_API_KEY` through a `NEXT_PUBLIC_*` variable or commit `agent/.env`.
+
+#### Optional integrations
+
+- **Telegram (social-media-agent)** — create a bot with [@BotFather](https://t.me/BotFather), then set `TELEGRAM_BOT_TOKEN`. Keep `TELEGRAM_MODE=polling` for local dev; switch to `webhook` with `TELEGRAM_WEBHOOK_SECRET_TOKEN` for production.
+- **Email outbound (send-email tool)** — sign up at [resend.com](https://resend.com), set `RESEND_API_KEY`, and (for production) a Resend-verified sender in `RESEND_FROM_EMAIL`. The default `onboarding@resend.dev` sender only delivers to the account owner.
+
+Both are optional; Chekku boots fine without them. Code-defined agents (`qa-web-agent`, `social-media-agent`) already bind these tools, and stored agents can opt in from the builder's **Capabilities** section.
 
 ### 3. Configure the client
 
@@ -129,6 +140,12 @@ Local file: `agent/.env`
 | `CHEKKU_DEFAULT_AGENT_ID` | No | `main-agent` | Default agent for new sessions. |
 | `CHEKKU_LOCAL_USER_ID` | No | `local-user` | Development identity and Memory resource ID. |
 | `BROWSER_HEADLESS` | No | `true` | Run the QA browser without a visible window. |
+| `TELEGRAM_BOT_TOKEN` | Conditional | empty | Bot token from [@BotFather](https://t.me/BotFather). Required when running `social-media-agent`. |
+| `TELEGRAM_MODE` | No | `polling` | Adapter mode: `polling` (dev, no tunnel), `webhook` (prod, public URL), or `auto`. |
+| `TELEGRAM_WEBHOOK_SECRET_TOKEN` | No | empty | Checked against `x-telegram-bot-api-secret-token`. Webhook mode only. |
+| `TELEGRAM_BOT_USERNAME` | No | empty | Override the bot username. Optional. |
+| `RESEND_API_KEY` | Conditional | empty | Resend API key. Required when an agent uses the `send-email` tool. |
+| `RESEND_FROM_EMAIL` | No | `Chekku <onboarding@resend.dev>` | Default sender. Use a Resend-verified domain to deliver beyond the account owner. |
 
 ### Client
 
@@ -162,7 +179,7 @@ The client uses system font stacks, so `next build` does not download fonts from
 .
 ├── agent/                  # Mastra server and agent runtime
 │   └── src/
-│       ├── agents/         # main-agent and qa-web-agent
+│       ├── agents/         # main-agent, qa-web-agent, social-media-agent
 │       ├── config/         # environment and middleware
 │       ├── mastra/
 │       │   ├── gateways/   # OpenAI-compatible gateway and normalization

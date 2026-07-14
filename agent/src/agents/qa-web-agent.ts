@@ -3,6 +3,9 @@ import { Memory } from '@mastra/memory';
 
 import { browser } from '../mastra/browsers.js';
 import { gatewayCompatibilityProcessor } from '../mastra/processors/gateway-compatibility.js';
+import { calculatorTool } from '../mastra/tools/calculator.js';
+import { getCurrentTimeTool } from '../mastra/tools/get-current-time.js';
+import { sendEmailTool } from '../mastra/tools/send-email.js';
 import { getServerModel } from '../providers/model.js';
 import { providerContextSchema, type ProviderContext } from './context.js';
 
@@ -14,6 +17,7 @@ const qaWebAgentConfig: AgentConfig<string, ToolsInput, undefined, ProviderConte
   model: () => getServerModel(),
   requestContextSchema: providerContextSchema,
   browser,
+  tools: { calculatorTool, getCurrentTimeTool, sendEmailTool },
   inputProcessors: [gatewayCompatibilityProcessor],
   memory: new Memory(),
   defaultOptions: ({ requestContext }) => ({

@@ -42,13 +42,15 @@ Chekku is an npm workspace containing a Next.js client and a Mastra agent server
 
 `agent/src/mastra/index.ts` creates the single `Mastra` instance and registers:
 
-- `mainAgent` and `qaWebAgent`;
+- `mainAgent`, `qaWebAgent`, and `socialMediaAgent`;
 - `storedAgentTools`;
 - `LibSQLStore`;
 - `MastraEditor` with database storage;
 - `OpenAICompatibleGateway`;
 - structured logging and request middleware;
 - `/healthz` and `/models` custom routes.
+
+`socialMediaAgent` also wires a Telegram channel adapter. Once Mastra initializes the agent's `AgentChannels`, `index.ts` registers the agent's slash-command handlers (`/help`, `/roles`, `/role`, `/switch`) on the Chat SDK so Telegram-intercepted bot commands reach the role logic.
 
 All other agent, Memory, editor, and storage APIs are provided by Mastra. Chekku does not maintain a parallel custom conversation or agent database.
 
@@ -63,6 +65,18 @@ All other agent, Memory, editor, and storage APIs are provided by Mastra. Chekku
 `qa-web-agent` adds Mastra Agent Browser to the common model and Memory stack. Memory is mandatory because browser context processors need a live Memory context during tool loops.
 
 Interactive browser tools require approval unless the request context explicitly enables full browser access. Consequential actions still require user confirmation through the agent instructions.
+
+### Social Media Agent
+
+`social-media-agent` is a role-switchable content assistant reachable over a Mastra channel (Telegram today, other platforms later). It shares the common server model and Memory stack with the other code agents and adds a Telegram adapter through the Chat SDK.
+
+Users drive it from the chat platform with slash commands:
+
+- `/help` — show available commands;
+- `/roles` — list roles; `/role` — show the active role;
+- `/switch <role>` — switch between `general`, `x-writer`, `instagram-writer`, `linkedin-writer`, and `tiktok-writer`.
+
+The active role is held in-memory keyed by `${platform}:${userId}`. The agent reads the role from the channel context on `requestContext` and rebuilds its instructions on each turn. Phase scope is drafting and planning only; destination-platform publishing is a later phase.
 
 ### Stored agents
 

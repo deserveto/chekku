@@ -125,6 +125,30 @@ Browser automation can fail when a site:
 
 Report the blocker rather than bypassing access controls.
 
+## Telegram channel (social-media-agent)
+
+```dotenv
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_MODE=polling
+```
+
+Create a bot with [@BotFather](https://t.me/BotFather) and paste its token. `TELEGRAM_MODE`:
+
+- `polling` (default) — long-polls `getUpdates`; works behind a firewall and needs no public URL. Use for local dev.
+- `webhook` — receives updates at a public URL; requires `TELEGRAM_WEBHOOK_SECRET_TOKEN` and a reachable deployment.
+- `auto` — let the adapter choose based on runtime signals.
+
+Slash commands (`/help`, `/roles`, `/role`, `/switch`) are registered on the Chat SDK after Mastra initializes the agent's channels (see `agent/src/mastra/index.ts`). The active role is in-memory and resets on restart.
+
+## Email outbound (send-email tool)
+
+```dotenv
+RESEND_API_KEY=
+RESEND_FROM_EMAIL=Chekku <onboarding@resend.dev>
+```
+
+Get a key at [resend.com](https://resend.com). The default `onboarding@resend.dev` sender can only deliver to the account owner; production should use a Resend-verified domain in `RESEND_FROM_EMAIL`. The tool fails with a clear error when `RESEND_API_KEY` is missing.
+
 ## Common failures
 
 ### Model access denied
@@ -228,4 +252,5 @@ Before deploying beyond local development:
 - restrict `WEB_URL` to the deployed client origin;
 - configure an authenticated server-to-server hop if the Mastra service is exposed separately;
 - review browser approval and network policies;
+- if the social-media-agent is enabled, set `TELEGRAM_MODE=webhook` with a public URL and `TELEGRAM_WEBHOOK_SECRET_TOKEN`, and provision a Resend-verified sender for the send-email tool;
 - add rate limits, audit logging, and backup procedures appropriate to the environment.

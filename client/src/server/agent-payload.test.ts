@@ -31,6 +31,25 @@ describe('stored-agent payload', () => {
     });
   });
 
+  it('preserves all three registered studio tools and drops unknowns', () => {
+    expect(toStoredAgentPayload({
+      id: 'demo',
+      name: 'Demo',
+      description: '',
+      instructions: 'Help',
+      model: 'model-a',
+      tools: ['calculator', 'get-current-time', 'send-email', 'mars-rover'],
+      agents: [],
+      memoryEnabled: true,
+    })).toMatchObject({
+      tools: {
+        calculator: {},
+        'get-current-time': {},
+        'send-email': {},
+      },
+    });
+  });
+
   it('disables memory without sending null', () => {
     expect(toStoredAgentPayload({
       id: 'demo',

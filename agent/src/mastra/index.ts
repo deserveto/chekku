@@ -7,6 +7,10 @@ import { env } from '../config/env.js';
 import { requestIdInjector, requestLogger } from '../config/middleware.js';
 import { mainAgent } from '../agents/main-agent.js';
 import { qaWebAgent } from '../agents/qa-web-agent.js';
+import {
+  socialMediaAgent,
+  registerSocialSlashCommands,
+} from '../agents/social-media-agent.js';
 import { OpenAICompatibleGateway } from './gateways/openai-compatible.js';
 import { healthRoute } from './routes/health.js';
 import { modelsRoute } from './routes/models.js';
@@ -21,7 +25,7 @@ const storage = new LibSQLStore({
 });
 
 export const mastra = new Mastra({
-  agents: { mainAgent, qaWebAgent },
+  agents: { mainAgent, qaWebAgent, socialMediaAgent },
   tools: storedAgentTools,
   storage,
   editor: new MastraEditor({ source: 'db' }),
@@ -40,3 +44,21 @@ export const mastra = new Mastra({
     apiRoutes: [healthRoute, modelsRoute],
   },
 });
+
+// Telegram intercepts /command messages as native slash commands and routes
+// them through the Chat SDK's slash-command pipeline — they never reach the
+// agent's onDirectMessage handler. Register our command handlers on the SDK
+// once it's initialized (Mastra fires AgentChannels.initialize() asynchronously).
+const socialChannels = socialMediaAgent.getChannels();
+if (socialChannels) {
+  void (async () => {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const sdk = socialChannels.sdk;
+      if (sdk) {
+        registerSocialSlashCommands(sdk);
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  })();
+}

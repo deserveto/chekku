@@ -50,14 +50,35 @@ function toggle(values: string[], id: string): string[] {
     : [...values, id];
 }
 
+const TOOL_META: Record<string, { title: string; description: string; icon: string }> = {
+  calculator: {
+    title: 'Calculator',
+    description: 'Evaluates deterministic arithmetic without relying on the model.',
+    icon: '∑',
+  },
+  'get-current-time': {
+    title: 'Current time',
+    description: 'Returns time, date, day, and UTC offset for an IANA timezone.',
+    icon: '◷',
+  },
+  'send-email': {
+    title: 'Send email',
+    description:
+      'Delivers an agent-produced artifact via Resend. Requires RESEND_API_KEY.',
+    icon: '✉',
+  },
+};
+
 function titleForTool(id: string): string {
-  return id === 'get-current-time' ? 'Current time' : 'Calculator';
+  return TOOL_META[id]?.title ?? id;
 }
 
 function descriptionForTool(id: string): string {
-  return id === 'get-current-time'
-    ? 'Returns time, date, day, and UTC offset for an IANA timezone.'
-    : 'Evaluates deterministic arithmetic without relying on the model.';
+  return TOOL_META[id]?.description ?? '';
+}
+
+function iconForTool(id: string): string {
+  return TOOL_META[id]?.icon ?? '◆';
 }
 
 
@@ -363,7 +384,7 @@ export function AgentBuilderPage({
                         disabled={submitting}
                       />
                       <span className="studio-capability-icon">
-                        {toolId === 'calculator' ? '∑' : '◷'}
+                        {iconForTool(toolId)}
                       </span>
                       <span>
                         <strong>{titleForTool(toolId)}</strong>
