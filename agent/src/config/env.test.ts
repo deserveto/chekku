@@ -12,6 +12,11 @@ describe('env config', () => {
     expect(value.LLM_DISPLAY_NAME).toBe('OpenAI-compatible endpoint');
     expect(value.LLM_MODELS).toBe('');
     expect(value.CHEKKU_DEFAULT_AGENT_ID).toBe('main-agent');
+    expect(value.GARAGE_ENDPOINT).toBe('');
+    expect(value.GARAGE_REGION).toBe('');
+    expect(value.GARAGE_BUCKET).toBe('');
+    expect(value.GARAGE_ACCESS_KEY_ID).toBe('');
+    expect(value.GARAGE_SECRET_ACCESS_KEY).toBe('');
   });
 
   it('accepts the Rafiqspace OpenAI-compatible server configuration', () => {
@@ -37,6 +42,22 @@ describe('env config', () => {
     expect(value.LLM_BASE_URL).toBe('');
     expect(value.LLM_API_KEY).toBe('');
     expect(value.LLM_DEFAULT_MODEL).toBe('');
+  });
+
+  it('accepts Garage object storage server configuration', () => {
+    const value = loadEnv({
+      GARAGE_ENDPOINT: 'https://garage.example.test',
+      GARAGE_REGION: 'garage',
+      GARAGE_BUCKET: 'pm-reports',
+      GARAGE_ACCESS_KEY_ID: 'access-key',
+      GARAGE_SECRET_ACCESS_KEY: 'secret-key',
+    });
+
+    expect(value.GARAGE_ENDPOINT).toBe('https://garage.example.test');
+    expect(value.GARAGE_REGION).toBe('garage');
+    expect(value.GARAGE_BUCKET).toBe('pm-reports');
+    expect(value.GARAGE_ACCESS_KEY_ID).toBe('access-key');
+    expect(value.GARAGE_SECRET_ACCESS_KEY).toBe('secret-key');
   });
 
   it('rejects invalid URLs and unsupported logging levels', () => {

@@ -38,6 +38,18 @@ LLM_MODELS=qwen3.6-35b-a3b-fast,qwen3.6-35b-a3b
 
 `LLM_MODELS` is a fallback list. When the endpoint exposes `GET /models`, Chekku uses the discovered IDs.
 
+PM Agent report storage uses Garage/S3-compatible object storage:
+
+```dotenv
+GARAGE_ENDPOINT=https://garage.example.com
+GARAGE_REGION=garage
+GARAGE_BUCKET=chekku-pm-reports
+GARAGE_ACCESS_KEY_ID=replace-with-server-only-access-key
+GARAGE_SECRET_ACCESS_KEY=replace-with-server-only-secret-key
+```
+
+Garage credentials remain server-side in `agent/.env` or deployment secrets. Do not add them to `client/.env.local` or any `NEXT_PUBLIC_*` variable.
+
 ### `client/.env.local`
 
 ```dotenv
@@ -107,6 +119,16 @@ rm -f mastra.db mastra.db-wal mastra.db-shm
 ```
 
 This removes stored agents and conversation history.
+
+PM Agent weekly report analyses are separate from LibSQL. They are stored in Garage under:
+
+```text
+pm-reports/<reportId>/input.md
+pm-reports/<reportId>/analysis.md
+pm-reports/<reportId>/metadata.json
+```
+
+If PM Agent report save/list/view fails with `Garage storage not configured`, set all five `GARAGE_*` values in `agent/.env` and restart the agent server.
 
 ## Browser operation
 

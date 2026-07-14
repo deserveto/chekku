@@ -21,6 +21,7 @@ Chekku provides a focused interface for managing agents, creating agent-specific
 - **Agent-isolated history** — each agent owns its own Memory threads and conversation list.
 - **OpenAI-compatible models** — connect Rafiqspace LLM, LiteLLM, vLLM, or another compatible endpoint with server-only credentials.
 - **Browser QA agent** — navigate and inspect live websites using Mastra Agent Browser.
+- **PM Agent report storage** — analyze weekly reports and save results to Garage/S3-compatible object storage.
 - **Hosted-vLLM compatibility** — final prompt normalization keeps system messages at the beginning.
 - **Local-first storage** — agent definitions, versions, memory, and threads live in LibSQL.
 - **Same-origin client traffic** — browser requests go through the Next.js proxy instead of calling the Mastra server directly.
@@ -35,9 +36,10 @@ Next.js client :3000
   │  /api/agent/*
   │  same-origin server proxy
   ▼
-Mastra server :4111
-  ├── main-agent
-  ├── qa-web-agent
+   Mastra server :4111
+   ├── main-agent
+   ├── pm-agent ──► Garage/S3-compatible report storage
+   ├── qa-web-agent
   ├── @mastra/editor stored agents
   ├── Mastra Memory
   ├── calculator + current-time tools
@@ -129,6 +131,11 @@ Local file: `agent/.env`
 | `CHEKKU_DEFAULT_AGENT_ID` | No | `main-agent` | Default agent for new sessions. |
 | `CHEKKU_LOCAL_USER_ID` | No | `local-user` | Development identity and Memory resource ID. |
 | `BROWSER_HEADLESS` | No | `true` | Run the QA browser without a visible window. |
+| `GARAGE_ENDPOINT` | Yes for PM report storage | empty | Garage/S3-compatible endpoint. |
+| `GARAGE_REGION` | Yes for PM report storage | empty | Garage/S3 region value. |
+| `GARAGE_BUCKET` | Yes for PM report storage | empty | Bucket for PM report objects. |
+| `GARAGE_ACCESS_KEY_ID` | Yes for PM report storage | empty | Server-only Garage access key. |
+| `GARAGE_SECRET_ACCESS_KEY` | Yes for PM report storage | empty | Server-only Garage secret key. |
 
 ### Client
 
@@ -162,7 +169,7 @@ The client uses system font stacks, so `next build` does not download fonts from
 .
 ├── agent/                  # Mastra server and agent runtime
 │   └── src/
-│       ├── agents/         # main-agent and qa-web-agent
+│       ├── agents/         # main-agent, pm-agent, and qa-web-agent
 │       ├── config/         # environment and middleware
 │       ├── mastra/
 │       │   ├── gateways/   # OpenAI-compatible gateway and normalization
@@ -191,6 +198,7 @@ These rules keep the repository from drifting back into parallel implementations
 5. Thread IDs must include the agent and resource prefix.
 6. QA Web Agent must keep active Memory and final system-message normalization.
 7. Client HTTP traffic must use `/api/agent/*` unless a protocol cannot be proxied by Next.js.
+8. Garage credentials stay server-side and are used only by PM Agent report tools.
 
 Detailed contributor constraints are in [AGENTS.md](AGENTS.md).
 

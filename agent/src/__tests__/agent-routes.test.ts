@@ -22,29 +22,30 @@ describe('agent server routes', () => {
   });
 
   it('registers the reconstructed server routes', () => {
-  expect(Object.keys(mastra.listAgents()).sort()).toEqual([
-    'mainAgent',
-    'qaWebAgent',
-  ]);
+    expect(Object.keys(mastra.listAgents()).sort()).toEqual([
+      'mainAgent',
+      'pmAgent',
+      'qaWebAgent',
+    ]);
 
-  const server = mastra.getServer();
+    const server = mastra.getServer();
 
-  expect(server?.cors).toMatchObject({
-    origin: 'http://localhost:3000',
-  });
+    expect(server?.cors).toMatchObject({
+      origin: 'http://localhost:3000',
+    });
 
-  expect(server?.middleware).toHaveLength(2);
+    expect(server?.middleware).toHaveLength(2);
 
-  const routePaths = server?.apiRoutes?.map((route) => route.path) ?? [];
+    const routePaths = server?.apiRoutes?.map((route) => route.path) ?? [];
 
-  expect(routePaths).toEqual(
-    expect.arrayContaining([
-      '/healthz',
-      '/models',
-    ]),
-  );
+    expect(routePaths).toEqual(
+      expect.arrayContaining([
+        '/healthz',
+        '/models',
+      ]),
+    );
 
-  expect(routePaths).not.toContain('/api/model-info');
-  expect(routePaths).not.toContain('/api/conversations');
+    expect(routePaths).not.toContain('/api/model-info');
+    expect(routePaths).not.toContain('/api/conversations');
   });
 });

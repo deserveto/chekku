@@ -20,9 +20,10 @@ Chekku is an npm workspace containing a Next.js client and a Mastra agent server
 ┌──────────────────────────────────────────┐
 │ Mastra server :4111                      │
 │                                          │
-│  Code agents      Stored agents          │
-│  - main-agent     - @mastra/editor       │
-│  - qa-web-agent   - database versions    │
+│  Code agents           Stored agents     │
+│  - main-agent          - @mastra/editor  │
+│  - pm-agent            - db versions     │
+│  - qa-web-agent                          │
 │                                          │
 │  Memory + LibSQLStore                    │
 │  Calculator + current-time tools         │
@@ -43,6 +44,7 @@ Chekku is an npm workspace containing a Next.js client and a Mastra agent server
 `agent/src/mastra/index.ts` creates the single `Mastra` instance and registers:
 
 - `mainAgent` and `qaWebAgent`;
+- `pmAgent`;
 - `storedAgentTools`;
 - `LibSQLStore`;
 - `MastraEditor` with database storage;
@@ -63,6 +65,10 @@ All other agent, Memory, editor, and storage APIs are provided by Mastra. Chekku
 `qa-web-agent` adds Mastra Agent Browser to the common model and Memory stack. Memory is mandatory because browser context processors need a live Memory context during tool loops.
 
 Interactive browser tools require approval unless the request context explicitly enables full browser access. Consequential actions still require user confirmation through the agent instructions.
+
+### PM Agent
+
+`pm-agent` analyzes engineering weekly reports, rates project risk, and saves report input, analysis, and metadata to Garage/S3-compatible object storage through server-side tools. The object layout is `pm-reports/<reportId>/input.md`, `analysis.md`, and `metadata.json`.
 
 ### Stored agents
 
@@ -115,6 +121,8 @@ This normalization applies to both `doGenerate` and `doStream`.
 - other Mastra-managed state.
 
 The default URL is `file:./mastra.db`. The actual file location depends on the working directory used to launch the agent workspace.
+
+PM Agent report files are not stored in LibSQL. They use server-side Garage/S3-compatible object storage configured by `GARAGE_ENDPOINT`, `GARAGE_REGION`, `GARAGE_BUCKET`, `GARAGE_ACCESS_KEY_ID`, and `GARAGE_SECRET_ACCESS_KEY`.
 
 ## Conversation ownership
 

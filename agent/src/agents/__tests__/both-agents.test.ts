@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { mainAgent } from '../main-agent.js';
+import { pmAgent } from '../pm-agent.js';
 import { qaWebAgent } from '../qa-web-agent.js';
 
 describe('main-agent (general Chekku Assistant)', () => {
@@ -23,6 +24,29 @@ describe('qa-web-agent (browser QA)', () => {
 
   it('has listBrowserTools method (browser integration present)', () => {
     expect(typeof (qaWebAgent as unknown as Record<string, unknown>).listBrowserTools).toBe('function');
+  });
+});
+
+describe('pm-agent (weekly report analysis)', () => {
+  it('has id pm-agent', () => {
+    expect(pmAgent.id).toBe('pm-agent');
+  });
+
+  it('has name PM Agent', () => {
+    expect(pmAgent.name).toBe('PM Agent');
+  });
+
+  it('uses Garage report tools instead of local report tools', async () => {
+    const tools = await pmAgent.listTools();
+
+    expect(Object.keys(tools)).toEqual(expect.arrayContaining([
+      'save_pm_report_to_garage',
+      'list_pm_reports_from_garage',
+      'view_pm_report_from_garage',
+    ]));
+    expect(tools.save_pm_report).toBeUndefined();
+    expect(tools.list_pm_reports).toBeUndefined();
+    expect(tools.view_pm_report).toBeUndefined();
   });
 });
 
