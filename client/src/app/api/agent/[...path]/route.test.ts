@@ -6,8 +6,11 @@ vi.mock('@/server/auth', () => ({
   getUserId: vi.fn(async () => 'local-user'),
 }));
 vi.mock('@/server/proxy-url', () => ({
-  buildAgentProxyUrl: (baseUrl: string, path: string[], search: string) =>
-    `${baseUrl}/${path.join('/')}${search}`,
+  normalizeAgentProxyPath: (path: string[]) => path[0] === 'api' ? path : ['api', ...path],
+  buildAgentProxyUrl: (baseUrl: string, path: string[], search: string) => {
+    const normalized = path[0] === 'api' ? path : ['api', ...path];
+    return `${baseUrl}/${normalized.join('/')}${search}`;
+  },
 }));
 
 import { DELETE, GET, HEAD, PATCH, POST, PUT } from './route';
@@ -21,6 +24,8 @@ function request(method: string, path: string, body?: unknown): NextRequest {
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 }
+
+const mutationRoute = (method: string) => ({ POST, PATCH, PUT })[method as 'POST' | 'PATCH' | 'PUT'];
 
 describe('agent proxy', () => {
   beforeEach(() => {
@@ -62,6 +67,44 @@ describe('agent proxy', () => {
     await expect(absent.text()).resolves.toBe('streamed');
     expect(canonical.status).toBe(201);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ['POST', ['api', 'stored', 'agents'], { mcpClients: { evil: { url: 'https://example.test/mcp' } } }],
+    ['PATCH', ['api', 'stored', 'agents', 'demo'], { mcpClients: { garage: { command: 'npx', args: ['evil'] } } }],
+    ['PUT', ['api', 'stored', 'agents', 'demo'], { mcpClients: { garage: { tools: {}, env: { API_KEY: 'secret' } } } }],
+  ])('rejects noncanonical MCP config on aliased %s /%s', async (method, path, body) => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await mutationRoute(method)(request(method, path.join('/'), body), context(path));
+
+    expect(response.status).toBe(400);
+    await expect(response.text()).resolves.toBe('Invalid stored-agent MCP configuration.');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['POST', ['api', 'stored', 'agents']],
+    ['PATCH', ['api', 'stored', 'agents', 'demo']],
+    ['PUT', ['api', 'stored', 'agents', 'demo']],
+  ])('forwards exact Garage config on aliased %s /%s', async (method, path) => {
+    const fetchMock = vi.fn(async () => new Response('streamed', {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await mutationRoute(method)(request(method, path.join('/'), {
+      mcpClients: { garage: { tools: {} } },
+    }), context(path));
+
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toBe('streamed');
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://agent.internal:4111/${path.join('/')}`,
+      expect.objectContaining({ method }),
+    );
   });
 
   it('keeps every supported proxy method available', () => {

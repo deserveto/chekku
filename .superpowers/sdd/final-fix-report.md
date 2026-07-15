@@ -119,3 +119,38 @@ Disposition: verified; realistic lifecycle coverage added.
 - Mutation queue releases on success and failure and removes idle keys.
 - No unsupported ETag compatibility was invented.
 - Remaining cross-process race is documented Garage v2.3.0 capability limit.
+
+## Re-Review Fixes
+
+Status: `DONE_WITH_CONCERNS`.
+
+### Proxy Alias Authorization
+
+- Verified `buildAgentProxyUrl` accepts both `stored/agents` and leading `api/stored/agents`; both resolve to upstream `/api/stored/agents`.
+- Root cause: MCP authorization classified raw catch-all segments while URL forwarding normalized them.
+- Added shared `normalizeAgentProxyPath`; proxy URL construction and authorization now use the same canonical path.
+- Added adversarial alias tests for POST with MCP URL, PATCH with command/package arguments, and PUT with credentials. All reject before upstream fetch.
+- Added POST, PATCH, and PUT alias tests for exact `{ garage: { tools: {} } }` forwarding and streamed response preservation.
+- Existing GET, POST, PUT, PATCH, DELETE, and HEAD exports remain unchanged.
+
+TDD evidence:
+
+- RED: all three forbidden leading-`api` alias requests reached mocked upstream and failed while reading its undefined response.
+- GREEN: focused proxy/path/payload suite passed 25 tests.
+
+### README Storage Guarantee
+
+- Removed the claim that create is conditionally safe on Garage v2.3.
+- README now matches architecture and operations documentation: same-key mutations serialize only within one adapter instance, existence is checked immediately, and external Garage writers can race.
+
+### Re-Review Verification
+
+- Client typecheck: passed.
+- Client lint: passed.
+- `npm run check`: 31 test files and 193 tests passed.
+- `npm run build`: Mastra and Next.js builds passed.
+- `git diff --check`: passed before report append; final commit diff rechecked before commit.
+- Generated `client/next-env.d.ts` build change restored and excluded.
+- No push performed.
+
+Concern remains unchanged: Garage v2.3 lacks destination conditional PUT/DELETE semantics, so cross-process or external-writer compare-and-swap cannot be guaranteed.

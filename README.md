@@ -223,11 +223,13 @@ Stored agents may select the whitelisted `garage` capability in the builder. Sel
 
 Garage MCP exposes exactly five generic tools:
 
-- `create_text_object` conditionally creates a new key and fails on collision.
+- `create_text_object` rejects a key that already exists.
 - `get_text_object` reads an existing UTF-8 text object.
 - `list_text_objects` returns at most 100 relative keys plus a `truncated` flag.
 - `replace_text_object` replaces an existing object and requires approval.
 - `delete_object` deletes an existing object and requires approval.
+
+Garage v2.3 does not provide destination conditional PUT/DELETE semantics. Chekku serializes same-key mutations within one storage adapter instance and checks existence immediately before mutation; external Garage writers can still race these operations.
 
 Every operation requires trusted `context.agent.agentId`. Physical keys use `agents/<base64url-agent-id>/<relative-key>`, while inputs and responses contain relative keys only. Relative keys are limited to 512 UTF-8 bytes and reject absolute paths, backslashes, traversal, control characters, and empty segments. Text is limited to 262,144 UTF-8 bytes.
 
