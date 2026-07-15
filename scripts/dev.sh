@@ -36,6 +36,80 @@ if ! docker compose --env-file storage/.env.local config --quiet >/dev/null 2>&1
   exit 1
 fi
 
+normalize_decimal() {
+  local value="$1"
+  [[ "$value" =~ ^[0-9]+$ ]] || return 1
+  while [[ ${#value} -gt 1 && "${value:0:1}" == 0 ]]; do value="${value:1}"; done
+  printf '%s' "$value"
+}
+
+ready_timeout_seconds="$(normalize_decimal "${CHEKKU_READY_TIMEOUT_SECONDS:-30}")" || {
+  echo "CHEKKU_READY_TIMEOUT_SECONDS must be an integer from 1 to 300." >&2
+  exit 1
+}
+if [[ "$ready_timeout_seconds" == 0 ]] || ((${#ready_timeout_seconds} > 3)) ||
+  ((10#$ready_timeout_seconds > 300)); then
+  echo "CHEKKU_READY_TIMEOUT_SECONDS must be an integer from 1 to 300." >&2
+  exit 1
+fi
+ready_timeout_seconds=$((10#$ready_timeout_seconds))
+
+ready_interval_seconds="$(normalize_decimal "${CHEKKU_READY_INTERVAL_SECONDS:-1}")" || {
+  echo "CHEKKU_READY_INTERVAL_SECONDS must be a positive integer." >&2
+  exit 1
+}
+if [[ "$ready_interval_seconds" == 0 ]]; then
+  echo "CHEKKU_READY_INTERVAL_SECONDS must be a positive integer." >&2
+  exit 1
+fi
+if ((${#ready_interval_seconds} > 1)); then
+  ready_interval_seconds=5
+else
+  ready_interval_seconds=$((10#$ready_interval_seconds))
+  if ((ready_interval_seconds > 5)); then ready_interval_seconds=5; fi
+fi
+
+run_with_timeout() {
+  local timeout_seconds="$1"
+  local command_pid command_status output_file timed_out_file watchdog_pid
+  shift
+  output_file="$(mktemp "${TMPDIR:-/tmp}/chekku-health-output.XXXXXX")"
+  timed_out_file="${output_file}.timeout"
+
+  set -m
+  "$@" >"$output_file" 2>/dev/null &
+  command_pid=$!
+  (
+    sleep "$timeout_seconds"
+    : >"$timed_out_file"
+    kill -TERM -- "-$command_pid" 2>/dev/null || true
+    sleep 0.25
+    kill -KILL -- "-$command_pid" 2>/dev/null || true
+  ) &
+  watchdog_pid=$!
+
+  set +e
+  wait "$command_pid" 2>/dev/null
+  command_status=$?
+  set -e
+  kill -TERM -- "-$watchdog_pid" 2>/dev/null || true
+  wait "$watchdog_pid" 2>/dev/null || true
+  set +m
+
+  cat "$output_file"
+  rm -f "$output_file"
+  if [[ -f "$timed_out_file" ]]; then
+    rm -f "$timed_out_file"
+    return 124
+  fi
+  return "$command_status"
+}
+
+docker_health_timeout() {
+  echo "Docker health command timed out before Garage became ready. Check Docker responsiveness." >&2
+  exit 1
+}
+
 garage_port_conflicts() {
   node - ${CHEKKU_GARAGE_PORTS:-3900 3901 3902 3903} <<'NODE'
 const net = require('node:net');
@@ -63,7 +137,15 @@ Promise.all(ports.map(check)).then((results) => {
 NODE
 }
 
-service_id="$(docker compose --env-file storage/.env.local ps -q garage)"
+set +e
+service_id="$(run_with_timeout "$ready_timeout_seconds" docker compose --env-file storage/.env.local ps -q garage)"
+health_status=$?
+set -e
+if [[ "$health_status" == 124 ]]; then docker_health_timeout; fi
+if [[ "$health_status" != 0 ]]; then
+  echo "Could not query Garage service status. Check Docker responsiveness." >&2
+  exit 1
+fi
 if [[ -z "$service_id" ]]; then
   conflicts="$(garage_port_conflicts)"
   if [[ -n "$conflicts" ]]; then
@@ -88,25 +170,28 @@ if ! docker compose --env-file storage/.env.local "${start_args[@]}"; then
   exit 1
 fi
 
-ready_timeout_seconds="${CHEKKU_READY_TIMEOUT_SECONDS:-30}"
-ready_interval_seconds="${CHEKKU_READY_INTERVAL_SECONDS:-1}"
-if [[ ! "$ready_timeout_seconds" =~ ^[1-9][0-9]{0,2}$ ]] || ((10#$ready_timeout_seconds > 300)); then
-  echo "CHEKKU_READY_TIMEOUT_SECONDS must be an integer from 1 to 300." >&2
-  exit 1
-fi
-if [[ ! "$ready_interval_seconds" =~ ^[1-9][0-9]*$ ]]; then
-  echo "CHEKKU_READY_INTERVAL_SECONDS must be a positive integer." >&2
-  exit 1
-fi
-if ((${#ready_interval_seconds} > 1)) || ((10#$ready_interval_seconds > 5)); then
-  ready_interval_seconds=5
-fi
-
 ready=false
 ready_deadline=$((SECONDS + ready_timeout_seconds))
 while ((SECONDS < ready_deadline)); do
-  service_id="$(docker compose --env-file storage/.env.local ps -q garage)"
-  if [[ -n "$service_id" ]] && [[ "$(docker inspect --format '{{.State.Health.Status}}' "$service_id" 2>/dev/null || true)" == healthy ]]; then
+  remaining_seconds=$((ready_deadline - SECONDS))
+  if ((remaining_seconds <= 0)); then break; fi
+  set +e
+  service_id="$(run_with_timeout "$remaining_seconds" docker compose --env-file storage/.env.local ps -q garage)"
+  health_status=$?
+  set -e
+  if [[ "$health_status" == 124 ]]; then docker_health_timeout; fi
+
+  health_status_value=''
+  if [[ -n "$service_id" ]]; then
+    remaining_seconds=$((ready_deadline - SECONDS))
+    if ((remaining_seconds <= 0)); then break; fi
+    set +e
+    health_status_value="$(run_with_timeout "$remaining_seconds" docker inspect --format '{{.State.Health.Status}}' "$service_id")"
+    health_status=$?
+    set -e
+    if [[ "$health_status" == 124 ]]; then docker_health_timeout; fi
+  fi
+  if [[ "$health_status_value" == healthy ]]; then
     ready=true
     break
   fi
@@ -128,6 +213,8 @@ fi
 printf 'Garage ready\n  endpoint: %s\n  region: %s\n  bucket: %s\n' \
   "$GARAGE_ENDPOINT" "$GARAGE_REGION" "$GARAGE_BUCKET"
 
+garage_app_cleanup='for garage_name in ${!GARAGE_@}; do case "$garage_name" in GARAGE_ENDPOINT|GARAGE_REGION|GARAGE_BUCKET|GARAGE_ACCESS_KEY_ID|GARAGE_SECRET_ACCESS_KEY) ;; *) unset "$garage_name" ;; esac; done'
+
 if [[ "${CHEKKU_NO_TMUX:-0}" != 1 ]] && command -v tmux >/dev/null 2>&1; then
   root_hash="$(node - "$ROOT" <<'NODE'
 const { createHash } = require('node:crypto');
@@ -136,11 +223,11 @@ NODE
 )"
   session_name="chekku-dev-$root_hash"
   if ! tmux has-session -t "$session_name" 2>/dev/null; then
-    if ! tmux new-session -d -s "$session_name" -c "$ROOT" "source scripts/storage-env.sh && exec npm run dev:agent"; then
+    if ! tmux new-session -d -s "$session_name" -c "$ROOT" "source scripts/storage-env.sh && $garage_app_cleanup && exec npm run dev:agent"; then
       echo "Could not create tmux session '$session_name'." >&2
       exit 1
     fi
-    if ! tmux split-window -h -t "$session_name" -c "$ROOT" "source scripts/storage-env.sh && exec npm run dev:client" ||
+    if ! tmux split-window -h -t "$session_name" -c "$ROOT" "source scripts/storage-env.sh && $garage_app_cleanup && exec npm run dev:client" ||
       ! tmux select-layout -t "$session_name" even-horizontal; then
       tmux kill-session -t "$session_name" 2>/dev/null || true
       echo "Could not configure tmux session '$session_name'; partial session removed." >&2
@@ -170,6 +257,7 @@ cleanup() {
 }
 trap 'cleanup' INT TERM EXIT
 
+eval "$garage_app_cleanup"
 set -m
 npm run dev:agent &
 AGENT_PID=$!

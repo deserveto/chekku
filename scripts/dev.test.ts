@@ -58,6 +58,7 @@ function fixture(options: {
   npm?: boolean;
   agentEnv?: string | null;
   rejectedSleep?: string;
+  captureNpmEnv?: boolean;
 } = {}): string {
   const root = mkdtempSync(resolve(tmpdir(), 'chekku-dev-'));
   fixtures.push(root);
@@ -75,6 +76,15 @@ function fixture(options: {
 
   executable(resolve(root, 'bin/docker'), `
 echo "$*" >> "$MOCK_LOG/docker"
+if [[ "\${HANG_DOCKER_COMMAND:-}" == "$1" ]] ||
+  { [[ "\${HANG_DOCKER_COMMAND:-}" == ps ]] && [[ "$*" == *" ps -q garage" ]]; }; then
+  (
+    sleep 3
+    touch "$MOCK_LOG/orphan-finished"
+  ) &
+  printf '%s\\n' "$!" > "$MOCK_LOG/orphan-pid"
+  wait
+fi
 if [[ "$1" == compose ]]; then
   if [[ "$*" == *" version" ]]; then [[ "\${COMPOSE_AVAILABLE:-1}" == 1 ]]; exit; fi
   if [[ "$*" == *" config --quiet" ]]; then [[ "\${COMPOSE_CONFIG_FAIL:-0}" != 1 ]]; exit; fi
@@ -84,7 +94,17 @@ if [[ "$1" == compose ]]; then
   fi
   if [[ "$*" == *" up "* ]]; then exit 0; fi
 fi
-if [[ "$1" == inspect ]]; then printf '%s\\n' "\${DOCKER_HEALTH:-healthy}"; fi
+if [[ "$1" == inspect ]]; then
+  if [[ "\${DOCKER_HEALTH_ON_SECOND:-0}" == 1 ]]; then
+    count=0
+    if [[ -f "$MOCK_LOG/inspect-count" ]]; then count="$(<"$MOCK_LOG/inspect-count")"; fi
+    count=$((count + 1))
+    printf '%s' "$count" > "$MOCK_LOG/inspect-count"
+    if ((count < 2)); then printf 'starting\\n'; else printf 'healthy\\n'; fi
+  else
+    printf '%s\\n' "\${DOCKER_HEALTH:-healthy}"
+  fi
+fi
 `);
 
   if (options.rejectedSleep) {
@@ -118,6 +138,14 @@ trap 'printf "agent-wrapper-term\\n" >> "$MOCK_LOG/signals"; wait; exit 0' TERM 
 ) &
 printf 'agent-ready\\n' >> "$MOCK_LOG/signals"
 wait
+`);
+  }
+
+  if (options.captureNpmEnv) {
+    executable(resolve(root, 'bin/npm'), `
+role="\${*: -1}"
+role="\${role/:/_}"
+env | grep '^GARAGE_' | sort > "$MOCK_LOG/env-$role"
 `);
   }
 
@@ -325,6 +353,78 @@ describe('development launcher', () => {
     expect(result.stderr).toContain('Garage did not become healthy within 1 second.');
     expect(elapsedMs).toBeLessThan(3_000);
     expect(calls.match(/^inspect /gm)?.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('normalizes leading-zero decimal durations before arithmetic and output', () => {
+    const healthyRoot = fixture({ tmux: true });
+    const startedAt = Date.now();
+    const healthy = runDev(healthyRoot, {
+      CHEKKU_READY_TIMEOUT_SECONDS: '030',
+      CHEKKU_READY_INTERVAL_SECONDS: '099',
+      DOCKER_HEALTH_ON_SECOND: '1',
+    });
+
+    expect(healthy.status, healthy.stderr).toBe(0);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(4_000);
+    expect(Date.now() - startedAt).toBeLessThan(8_000);
+    expect(readFileSync(resolve(healthyRoot, 'mock-log/inspect-count'), 'utf8')).toBe('2');
+
+    const timeoutRoot = fixture();
+    const timedOut = runDev(timeoutRoot, {
+      CHEKKU_NO_TMUX: '1',
+      CHEKKU_READY_TIMEOUT_SECONDS: '0001',
+      CHEKKU_READY_INTERVAL_SECONDS: '099',
+      DOCKER_HEALTH: 'starting',
+    });
+
+    expect(timedOut.status).not.toBe(0);
+    expect(timedOut.stderr).toContain('Garage did not become healthy within 1 second.');
+    expect(timedOut.stderr).not.toContain('0001');
+  }, 12_000);
+
+  it.each(['ps', 'inspect'])('bounds hanging Docker %s process trees without orphans', (command) => {
+    const root = fixture();
+    const startedAt = Date.now();
+    const result = runDev(root, {
+      CHEKKU_NO_TMUX: '1',
+      CHEKKU_READY_TIMEOUT_SECONDS: '2',
+      HANG_DOCKER_COMMAND: command,
+    });
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('Docker health command timed out');
+    expect(elapsedMs).toBeLessThan(3_500);
+    expect(existsSync(resolve(root, 'mock-log/orphan-finished'))).toBe(false);
+    const orphanPid = readFileSync(resolve(root, 'mock-log/orphan-pid'), 'utf8').trim();
+    const orphanCheck = run(root, ['-c', `! kill -0 ${orphanPid} 2>/dev/null`]);
+    expect(orphanCheck.status).toBe(0);
+  });
+
+  it('launches application processes with exactly five Garage variables', () => {
+    const root = fixture({ captureNpmEnv: true });
+    const result = runDev(root, {
+      CHEKKU_NO_TMUX: '1',
+      GARAGE_UNRELATED: 'must-not-reach-apps',
+    });
+    const expectedNames = [
+      'GARAGE_ACCESS_KEY_ID',
+      'GARAGE_BUCKET',
+      'GARAGE_ENDPOINT',
+      'GARAGE_REGION',
+      'GARAGE_SECRET_ACCESS_KEY',
+    ];
+    const storageValues = parse(readFileSync(resolve(root, 'storage/.env.local')));
+
+    expect(result.status, result.stderr).toBe(0);
+    for (const role of ['dev_agent', 'dev_client']) {
+      const lines = readFileSync(resolve(root, `mock-log/env-${role}`), 'utf8').trim().split('\n');
+      expect(lines.map((line) => line.slice(0, line.indexOf('=')))).toEqual(expectedNames);
+      for (const line of lines) {
+        const separator = line.indexOf('=');
+        expect(line.slice(separator + 1)).toBe(storageValues[line.slice(0, separator)]);
+      }
+    }
   });
 
   it('force-recreates Garage only after generated config changes', () => {

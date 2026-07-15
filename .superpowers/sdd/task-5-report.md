@@ -33,6 +33,32 @@ Implemented generic local Garage runtime and environment handling for bucket
 - `npm run build`: agent and client builds passed.
 - Git Bash syntax check passed for both shell scripts.
 - `git diff --check` passed.
+
+## Remaining Review Fixes
+
+- Added application-process Garage allowlisting. Fallback and tmux launches
+  remove every `GARAGE_*` variable except the five documented application
+  values, including admin, RPC, metrics, bootstrap, config-change, and
+  caller-injected variables.
+- Added decimal normalization before arithmetic. Values such as `030`, `099`,
+  and `0001` use base-10 semantics; timeout output uses canonical values.
+- Added remaining-time watchdogs around Garage `docker compose ps` and
+  `docker inspect` calls. Timed-out process groups receive TERM then KILL,
+  temporary output is private, and errors expose no command output or secrets.
+
+## Remaining Review TDD Evidence
+
+- RED: focused suite failed 4 tests for leading-zero rejection, unbounded
+  Docker `ps`/`inspect`, and leaked Garage runtime secrets in actual npm child
+  environments.
+- RED: caller-injected `GARAGE_UNRELATED` reached both application processes
+  until cleanup changed from a known-secret list to a five-variable allowlist.
+- GREEN: `npx vitest run scripts/dev.test.ts agent/src/config/env.test.ts`
+  passed 22 tests across 2 files.
+- Git Bash syntax validation passed for both shell scripts.
+- `npm run check` passed typecheck, lint, 30 test files, and 172 tests.
+- `npm run build` passed agent and client production builds.
+- `git diff --check` passed.
 - Docker exists, but `storage/.env.local` does not. Compose config validation
   was skipped without generating or reading local credentials.
 
