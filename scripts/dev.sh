@@ -31,6 +31,11 @@ fi
 # shellcheck disable=SC1091
 source "$ROOT/scripts/storage-env.sh"
 
+if ! docker compose --env-file storage/.env.local config --quiet >/dev/null 2>&1; then
+  echo "Garage Compose configuration is invalid. Check compose.yaml and generated Garage configuration." >&2
+  exit 1
+fi
+
 garage_port_conflicts() {
   node - ${CHEKKU_GARAGE_PORTS:-3900 3901 3902 3903} <<'NODE'
 const net = require('node:net');
@@ -83,18 +88,40 @@ if ! docker compose --env-file storage/.env.local "${start_args[@]}"; then
   exit 1
 fi
 
+ready_timeout_seconds="${CHEKKU_READY_TIMEOUT_SECONDS:-30}"
+ready_interval_seconds="${CHEKKU_READY_INTERVAL_SECONDS:-1}"
+if [[ ! "$ready_timeout_seconds" =~ ^[1-9][0-9]{0,2}$ ]] || ((10#$ready_timeout_seconds > 300)); then
+  echo "CHEKKU_READY_TIMEOUT_SECONDS must be an integer from 1 to 300." >&2
+  exit 1
+fi
+if [[ ! "$ready_interval_seconds" =~ ^[1-9][0-9]*$ ]]; then
+  echo "CHEKKU_READY_INTERVAL_SECONDS must be a positive integer." >&2
+  exit 1
+fi
+if ((${#ready_interval_seconds} > 1)) || ((10#$ready_interval_seconds > 5)); then
+  ready_interval_seconds=5
+fi
+
 ready=false
-for ((attempt = 1; attempt <= 30; attempt++)); do
+ready_deadline=$((SECONDS + ready_timeout_seconds))
+while ((SECONDS < ready_deadline)); do
   service_id="$(docker compose --env-file storage/.env.local ps -q garage)"
   if [[ -n "$service_id" ]] && [[ "$(docker inspect --format '{{.State.Health.Status}}' "$service_id" 2>/dev/null || true)" == healthy ]]; then
     ready=true
     break
   fi
-  sleep "${CHEKKU_READY_INTERVAL_SECONDS:-1}"
+
+  remaining_seconds=$((ready_deadline - SECONDS))
+  if ((remaining_seconds <= 0)); then break; fi
+  sleep_seconds="$ready_interval_seconds"
+  if ((sleep_seconds > remaining_seconds)); then sleep_seconds="$remaining_seconds"; fi
+  sleep "$sleep_seconds"
 done
 
 if [[ "$ready" != true ]]; then
-  echo "Garage did not become healthy within 30 seconds." >&2
+  duration_unit=seconds
+  if [[ "$ready_timeout_seconds" == 1 ]]; then duration_unit=second; fi
+  echo "Garage did not become healthy within $ready_timeout_seconds $duration_unit." >&2
   exit 1
 fi
 

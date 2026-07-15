@@ -53,7 +53,12 @@ function storageEnv(values: Record<string, string>): string {
   ].join('\n');
 }
 
-function fixture(options: { tmux?: boolean; npm?: boolean; agentEnv?: string | null } = {}): string {
+function fixture(options: {
+  tmux?: boolean;
+  npm?: boolean;
+  agentEnv?: string | null;
+  rejectedSleep?: string;
+} = {}): string {
   const root = mkdtempSync(resolve(tmpdir(), 'chekku-dev-'));
   fixtures.push(root);
   for (const directory of ['scripts', 'storage', 'agent', 'bin']) mkdirSync(resolve(root, directory));
@@ -72,6 +77,7 @@ function fixture(options: { tmux?: boolean; npm?: boolean; agentEnv?: string | n
 echo "$*" >> "$MOCK_LOG/docker"
 if [[ "$1" == compose ]]; then
   if [[ "$*" == *" version" ]]; then [[ "\${COMPOSE_AVAILABLE:-1}" == 1 ]]; exit; fi
+  if [[ "$*" == *" config --quiet" ]]; then [[ "\${COMPOSE_CONFIG_FAIL:-0}" != 1 ]]; exit; fi
   if [[ "$*" == *" ps -q garage" ]]; then
     if [[ "\${GARAGE_RUNNING:-1}" == 1 ]]; then printf 'garage-id\\n'; fi
     exit 0
@@ -80,6 +86,13 @@ if [[ "$1" == compose ]]; then
 fi
 if [[ "$1" == inspect ]]; then printf '%s\\n' "\${DOCKER_HEALTH:-healthy}"; fi
 `);
+
+  if (options.rejectedSleep) {
+    executable(resolve(root, 'bin/sleep'), `
+if [[ "$1" == "${options.rejectedSleep}" ]]; then exit 42; fi
+/usr/bin/sleep "$@"
+`);
+  }
 
   if (options.tmux) {
     executable(resolve(root, 'bin/tmux'), `
@@ -142,11 +155,12 @@ describe('storage environment generation', () => {
       agentEnv: [
         'NODE_ENV=development',
         String.raw`LLM_API_KEY='key with spaces "quotes" C:\models literal\n # $token 雪'`,
-        'GARAGE_ENDPOINT=stale-endpoint',
-        'GARAGE_REGION="stale region"',
-        'GARAGE_BUCKET=stale-bucket',
-        'GARAGE_ACCESS_KEY_ID=stale-access-key',
-        'GARAGE_SECRET_ACCESS_KEY=stale-secret-key',
+        ' export GARAGE_ENDPOINT = stale-endpoint',
+        '  GARAGE_REGION="stale region"',
+        '\tGARAGE_BUCKET \t= stale-bucket',
+        'export GARAGE_ACCESS_KEY_ID=stale-access-key',
+        'GARAGE_SECRET_ACCESS_KEY = stale-secret-key',
+        'UNRELATED = preserve-this-line',
         'WEB_URL=http://localhost:3000',
       ].join('\r\n'),
     });
@@ -165,6 +179,7 @@ describe('storage environment generation', () => {
 
     expect(result.status, result.stderr).toBe(0);
     expect(values.LLM_API_KEY).toBe(parse(readFileSync(resolve(root, 'agent/.env'))).LLM_API_KEY);
+    expect(generated).toContain('UNRELATED = preserve-this-line');
     expect(values.WEB_URL).toBe('http://localhost:3000');
     for (const [name, value] of Object.entries(garageValues)) {
       expect(values[name]).toBe(value);
@@ -172,6 +187,7 @@ describe('storage environment generation', () => {
       expect(result.stdout).not.toContain(value);
       expect(result.stderr).not.toContain(value);
     }
+    expect(generated).not.toContain('stale-');
     expect(generated).not.toMatch(/^GARAGE_(?:RPC_SECRET|ADMIN_TOKEN|METRICS_TOKEN)=/m);
   });
 
@@ -235,6 +251,41 @@ describe('development launcher', () => {
     expect(existsSync(resolve(root, 'storage/.env.local'))).toBe(false);
   });
 
+  it('validates generated Compose config before inspecting or starting Garage', () => {
+    const root = fixture({ tmux: true });
+    const success = runDev(root);
+    const successCalls = readFileSync(resolve(root, 'mock-log/docker'), 'utf8').split('\n');
+    const configIndex = successCalls.findIndex((call) => call.includes('config --quiet'));
+    const psIndex = successCalls.findIndex((call) => call.includes('ps -q garage'));
+    const upIndex = successCalls.findIndex((call) => call.includes(' up '));
+
+    expect(success.status, success.stderr).toBe(0);
+    expect(configIndex).toBeGreaterThan(-1);
+    expect(configIndex).toBeLessThan(psIndex);
+    expect(configIndex).toBeLessThan(upIndex);
+
+    const failingRoot = fixture();
+    const secret = 'must-not-appear-in-output';
+    expect(run(failingRoot, ['scripts/storage-env.sh']).status).toBe(0);
+    const storageEnvPath = resolve(failingRoot, 'storage/.env.local');
+    const generatedStorageEnv = readFileSync(storageEnvPath, 'utf8').replace(
+      /^GARAGE_SECRET_ACCESS_KEY=.*$/m,
+      `GARAGE_SECRET_ACCESS_KEY=${secret}`,
+    );
+    writeFileSync(storageEnvPath, generatedStorageEnv);
+    const failed = runDev(failingRoot, { COMPOSE_CONFIG_FAIL: '1' });
+    const failedCalls = readFileSync(resolve(failingRoot, 'mock-log/docker'), 'utf8');
+
+    expect(failed.status).not.toBe(0);
+    expect(failed.stderr).toContain('Garage Compose configuration is invalid');
+    expect(existsSync(resolve(failingRoot, 'storage/.env.local'))).toBe(true);
+    expect(existsSync(resolve(failingRoot, 'storage/.garage/garage.toml'))).toBe(true);
+    expect(failedCalls).toContain('config --quiet');
+    expect(failedCalls).not.toContain('ps -q garage');
+    expect(failedCalls).not.toContain(' up ');
+    expect(`${failed.stdout}${failed.stderr}`).not.toContain(secret);
+  });
+
   it('reports occupied Garage ports before Compose startup', async () => {
     const root = fixture();
     const holder = spawn(process.execPath, [
@@ -257,18 +308,23 @@ describe('development launcher', () => {
     }
   });
 
-  it('bounds Garage readiness polling', () => {
-    const root = fixture();
+  it('bounds readiness by elapsed time and reports the configured duration', () => {
+    const hugeInterval = '18446744073709551615';
+    const root = fixture({ rejectedSleep: hugeInterval });
+    const startedAt = Date.now();
     const result = runDev(root, {
       CHEKKU_NO_TMUX: '1',
-      CHEKKU_READY_INTERVAL_SECONDS: '0',
+      CHEKKU_READY_INTERVAL_SECONDS: hugeInterval,
+      CHEKKU_READY_TIMEOUT_SECONDS: '1',
       DOCKER_HEALTH: 'starting',
     });
+    const elapsedMs = Date.now() - startedAt;
     const calls = readFileSync(resolve(root, 'mock-log/docker'), 'utf8');
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain('Garage did not become healthy within 30 seconds');
-    expect(calls.match(/^inspect /gm)).toHaveLength(30);
+    expect(result.stderr).toContain('Garage did not become healthy within 1 second.');
+    expect(elapsedMs).toBeLessThan(3_000);
+    expect(calls.match(/^inspect /gm)?.length).toBeGreaterThanOrEqual(1);
   });
 
   it('force-recreates Garage only after generated config changes', () => {

@@ -63,7 +63,10 @@ const garageKeys = [
   'GARAGE_ACCESS_KEY_ID',
   'GARAGE_SECRET_ACCESS_KEY',
 ];
-const keyPattern = new RegExp(`^(?:${garageKeys.join('|')})=.*(?:\\r?\\n|$)`, 'gm');
+const keyPattern = new RegExp(
+  `^[ \\t]*(?:export[ \\t]+)?(?:${garageKeys.join('|')})[ \\t]*=.*(?:\\r?\\n|$)`,
+  'gm',
+);
 const source = readFileSync(sourcePath, 'utf8').replace(keyPattern, '');
 
 const serialize = (name, value) => {

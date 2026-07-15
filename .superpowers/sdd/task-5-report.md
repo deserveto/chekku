@@ -44,3 +44,30 @@ Generated credentials, configuration, and local data remain ignored.
 ## Commit
 
 `feat(dev): add local Garage runtime`
+
+## Review Fixes
+
+- Replaced attempt-count readiness polling with elapsed-time deadline polling.
+  Readiness timeout is validated from 1 to 300 seconds, polling interval is
+  clamped before arithmetic, and timeout output reports configured duration.
+- Added silent `docker compose --env-file storage/.env.local config --quiet`
+  validation after env/config generation and before any service inspection or
+  startup. Failure returns actionable output without printing environment
+  values.
+- Expanded stale Garage assignment removal to accept dotenv-valid `export`,
+  leading whitespace, and whitespace before `=` while preserving unrelated
+  lines and safe value serialization.
+
+## Review TDD Evidence
+
+- RED: focused suite failed 3 regression tests for stale assignment variants,
+  missing Compose validation, and unbounded readiness sleep.
+- RED: overflow-scale interval regression independently failed by hanging until
+  the test timeout before pre-arithmetic clamping was added.
+- GREEN: `npx vitest run scripts/dev.test.ts agent/src/config/env.test.ts`
+  passed 18 tests across 2 files.
+- Git Bash syntax validation passed for `scripts/dev.sh` and
+  `scripts/storage-env.sh`.
+- `npm run check` passed typecheck, lint, 30 test files, and 168 tests.
+- `npm run build` passed agent and client production builds.
+- `git diff --check` passed.
