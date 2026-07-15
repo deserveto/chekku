@@ -1,12 +1,13 @@
 import type { ObjectStorage } from '@chekku/storage';
 import { Mastra } from '@mastra/core/mastra';
 import { InMemoryStore } from '@mastra/core/storage';
-import { createTool } from '@mastra/core/tools';
+import { MASTRA_TOOL_MARKER, Tool, createTool } from '@mastra/core/tools';
 import { MastraEditor } from '@mastra/editor';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { OpenAICompatibleGateway } from '../gateways/openai-compatible.js';
+import { createCreateTextObjectTool } from '../tools/garage-object-tools.js';
 import { createGarageMcpServer, garageMcpServer } from './garage-mcp-server.js';
 
 const toolIds = [
@@ -164,6 +165,56 @@ describe('Garage MCP server', () => {
     )).resolves.toEqual({ key: 'notes/a.txt', sizeBytes: 5 });
     expect(objects).toEqual(new Map([
       [`agents/${Buffer.from('garage-agent').toString('base64url')}/notes/a.txt`, 'hello'],
+    ]));
+  });
+
+  it('preserves context for marker-bearing tools from another core instance', async () => {
+    const { storage: objectStorage, objects } = createMemoryStore();
+    const localTool = createCreateTextObjectTool(objectStorage);
+    const markerTool = {
+      [MASTRA_TOOL_MARKER]: true,
+      id: localTool.id,
+      description: localTool.description,
+      inputSchema: localTool.inputSchema,
+      outputSchema: localTool.outputSchema,
+      requireApproval: localTool.requireApproval,
+      mcp: localTool.mcp,
+      execute: localTool.execute,
+    };
+    expect(markerTool).not.toBeInstanceOf(Tool);
+
+    const server = createGarageMcpServer(objectStorage);
+    const editor = new MastraEditor({ source: 'db' });
+    const runtime = new Mastra({
+      storage: new InMemoryStore(),
+      editor,
+      mcpServers: { garage: server },
+      gateways: { openAICompatible: new OpenAICompatibleGateway() },
+    });
+    void runtime;
+    const converted = server.convertTools({ create_text_object: markerTool });
+    server.convertedTools = {
+      ...server.convertedTools,
+      create_text_object: converted.create_text_object!,
+    };
+
+    await editor.agent.create({
+      id: 'foreign-tool-agent',
+      name: 'Foreign Tool Agent',
+      instructions: 'Use generic Garage object tools.',
+      model: { provider: 'openai-compatible', name: 'gateway/test-model' },
+      mcpClients: { garage: { tools: {} } },
+    });
+    const hydrated = await editor.agent.getById('foreign-tool-agent', { status: 'draft' });
+    const tool = (await hydrated!.listTools()).create_text_object;
+    const context = {
+      agent: { agentId: 'foreign-tool-agent', toolCallId: 'call-1', messages: [], suspend: async () => undefined },
+    } as never;
+
+    await expect(tool?.execute?.({ key: 'notes/a.txt', text: 'hello' }, context))
+      .resolves.toEqual({ key: 'notes/a.txt', sizeBytes: 5 });
+    expect(objects).toEqual(new Map([
+      [`agents/${Buffer.from('foreign-tool-agent').toString('base64url')}/notes/a.txt`, 'hello'],
     ]));
   });
 });

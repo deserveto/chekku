@@ -2,10 +2,10 @@ import { createLazyGarageObjectStorage, type ObjectStorage } from '@chekku/stora
 import type { ToolsInput } from '@mastra/core/agent';
 import {
   MASTRA_TOOL_MARKER,
-  Tool,
   noopObserve,
   type InternalCoreTool,
   type MastraToolInvocationOptions,
+  type ToolAction,
   type ToolExecutionContext,
 } from '@mastra/core/tools';
 import { MCPServer } from '@mastra/mcp';
@@ -21,6 +21,22 @@ import {
 type AgentExecutionContext = ToolExecutionContext & {
   agent: NonNullable<ToolExecutionContext['agent']>;
 };
+
+type MarkerBearingTool = ToolAction<unknown, unknown> & {
+  execute: NonNullable<ToolAction<unknown, unknown>['execute']>;
+};
+
+function isMarkerBearingTool(tool: unknown): tool is MarkerBearingTool {
+  return typeof tool === 'object'
+    && tool !== null
+    && MASTRA_TOOL_MARKER in tool
+    && 'id' in tool
+    && typeof tool.id === 'string'
+    && 'description' in tool
+    && typeof tool.description === 'string'
+    && 'execute' in tool
+    && typeof tool.execute === 'function';
+}
 
 function hasAgentContext(
   context: ToolExecutionContext | MastraToolInvocationOptions,
@@ -42,11 +58,11 @@ function normalizeToolContext(
   };
 }
 
-function preserveAgentContext(tool: Tool, converted: InternalCoreTool): InternalCoreTool {
+function preserveAgentContext(tool: MarkerBearingTool, converted: InternalCoreTool): InternalCoreTool {
   const execute = async (
     input: unknown,
     context: ToolExecutionContext | MastraToolInvocationOptions,
-  ): Promise<unknown> => tool.execute?.(input, normalizeToolContext(context));
+  ): Promise<unknown> => tool.execute(input, normalizeToolContext(context));
 
   const contextPreservingTool = {
     ...converted,
@@ -56,7 +72,6 @@ function preserveAgentContext(tool: Tool, converted: InternalCoreTool): Internal
     inputSchema: tool.inputSchema,
     requestContextSchema: tool.requestContextSchema,
     requireApproval: tool.requireApproval,
-    needsApprovalFn: tool.needsApprovalFn,
     execute,
   };
 
@@ -86,7 +101,7 @@ class GarageMcpServer extends MCPServer {
 
     return Object.fromEntries(Object.entries(converted).map(([key, convertedTool]) => {
       const original = tools[key];
-      return [key, original instanceof Tool
+      return [key, isMarkerBearingTool(original)
         ? preserveAgentContext(original, convertedTool)
         : convertedTool];
     }));
