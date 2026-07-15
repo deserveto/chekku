@@ -5,6 +5,7 @@ import {
   createLazyGarageObjectStorage,
   readGarageConfig,
 } from './garage.ts';
+import { ObjectStorageError } from './objects.ts';
 
 const config = {
   endpoint: 'https://garage.example.test',
@@ -187,5 +188,35 @@ describe('Garage object storage', () => {
       code: 'unavailable',
       message: 'Object storage is unavailable.',
     });
+  });
+
+  it('sanitizes unknown SDK failures', async () => {
+    const unsafeFailure = Object.assign(
+      new Error('https://garage.internal secret-key authorization=secret provider failure'),
+      {
+        endpoint: 'https://garage.internal',
+        credential: 'secret-key',
+        headers: { authorization: 'secret' },
+        providerBody: '<Error>provider failure</Error>',
+        $metadata: { requestId: 'request-secret' },
+      },
+    );
+    const store = createGarageObjectStorage(config, {
+      async send() {
+        throw unsafeFailure;
+      },
+    });
+
+    const failure = await store.getText('notes/a.txt').catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ObjectStorageError);
+    expect(failure).toMatchObject({
+      code: 'unavailable',
+      message: 'Object storage is unavailable.',
+    });
+    expect(failure).not.toBe(unsafeFailure);
+    expect(JSON.stringify(failure)).not.toMatch(
+      /garage\.internal|secret-key|authorization|provider failure|request-secret/,
+    );
   });
 });

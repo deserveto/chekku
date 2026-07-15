@@ -112,7 +112,7 @@ function translateError(error: unknown, collision = false): never {
     throw new ObjectStorageError('unavailable', SAFE_MESSAGES.unavailable);
   }
 
-  throw error;
+  throw new ObjectStorageError('unavailable', SAFE_MESSAGES.unavailable);
 }
 
 async function bodyToString(body: unknown): Promise<string> {
