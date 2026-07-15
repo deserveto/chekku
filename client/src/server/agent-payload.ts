@@ -1,5 +1,6 @@
 export const STUDIO_TOOL_IDS = ['calculator', 'get-current-time'] as const;
 export const STUDIO_DELEGATE_IDS = ['qa-web-agent'] as const;
+export const STUDIO_MCP_CLIENT_IDS = ['garage'] as const;
 
 export interface AgentPayloadInput {
   id: string;
@@ -9,6 +10,7 @@ export interface AgentPayloadInput {
   model: string;
   tools: string[];
   agents: string[];
+  mcpClients: string[];
   memoryEnabled: boolean;
 }
 
@@ -16,6 +18,31 @@ function optionRecord(
   values: readonly string[],
 ): Record<string, Record<string, never>> {
   return Object.fromEntries(values.map((value) => [value, {}]));
+}
+
+function readOptionIds(field: unknown): string[] {
+  if (!field) return [];
+
+  if (Array.isArray(field)) {
+    const ids = field.flatMap((entry) => {
+      if (!entry || typeof entry !== 'object') return [];
+      const record = entry as Record<string, unknown>;
+      if ('value' in record) return readOptionIds(record.value);
+      if (typeof record.id === 'string') return [record.id];
+      return Object.keys(record);
+    });
+    return [...new Set(ids)];
+  }
+
+  return typeof field === 'object'
+    ? Object.keys(field as Record<string, unknown>)
+    : [];
+}
+
+export function readMcpClientIds(field: unknown): string[] {
+  return readOptionIds(field).filter((value) =>
+    (STUDIO_MCP_CLIENT_IDS as readonly string[]).includes(value),
+  );
 }
 
 function endpointModelId(model: string): string {
@@ -65,6 +92,9 @@ export function toStoredAgentPayload(input: AgentPayloadInput) {
   const agents = input.agents.filter((value) =>
     (STUDIO_DELEGATE_IDS as readonly string[]).includes(value),
   );
+  const mcpClients = input.mcpClients.filter((value) =>
+    (STUDIO_MCP_CLIENT_IDS as readonly string[]).includes(value),
+  );
 
   return {
     id: input.id,
@@ -79,5 +109,8 @@ export function toStoredAgentPayload(input: AgentPayloadInput) {
     },
     tools: optionRecord(tools),
     agents: optionRecord(agents),
+    mcpClients: Object.fromEntries(
+      mcpClients.map((value) => [value, { tools: {} }]),
+    ),
   };
 }
