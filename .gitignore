@@ -45,6 +45,7 @@ test-results/
 .playwright-mcp/
 .agents/
 .codex/
+.superpowers/sdd/
 
 # OS metadata
 .DS_Store
