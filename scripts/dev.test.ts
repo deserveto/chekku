@@ -78,11 +78,14 @@ function fixture(options: {
 echo "$*" >> "$MOCK_LOG/docker"
 if [[ "\${HANG_DOCKER_COMMAND:-}" == "$1" ]] ||
   { [[ "\${HANG_DOCKER_COMMAND:-}" == ps ]] && [[ "$*" == *" ps -q garage" ]]; }; then
+  printf '%s\\n' "$BASHPID" > "$MOCK_LOG/orphan-group"
   (
-    sleep 3
+    if [[ "\${TERM_RESISTANT_DOCKER_DESCENDANT:-0}" == 1 ]]; then trap '' TERM; fi
+    sleep "\${HANG_DOCKER_SECONDS:-3}"
     touch "$MOCK_LOG/orphan-finished"
   ) &
   printf '%s\\n' "$!" > "$MOCK_LOG/orphan-pid"
+  if [[ "\${TERM_RESISTANT_DOCKER_DESCENDANT:-0}" == 1 ]]; then trap 'exit 0' TERM; fi
   wait
 fi
 if [[ "$1" == compose ]]; then
@@ -146,6 +149,12 @@ wait
 role="\${*: -1}"
 role="\${role/:/_}"
 env | grep '^GARAGE_' | sort > "$MOCK_LOG/env-$role"
+touch "$MOCK_LOG/ready-$role"
+for _ in {1..100}; do
+  if [[ -f "$MOCK_LOG/ready-dev_agent" && -f "$MOCK_LOG/ready-dev_client" ]]; then exit 0; fi
+  sleep 0.01
+done
+exit 1
 `);
   }
 
@@ -399,6 +408,29 @@ describe('development launcher', () => {
     const orphanPid = readFileSync(resolve(root, 'mock-log/orphan-pid'), 'utf8').trim();
     const orphanCheck = run(root, ['-c', `! kill -0 ${orphanPid} 2>/dev/null`]);
     expect(orphanCheck.status).toBe(0);
+  });
+
+  it('waits for KILL cleanup when a Docker descendant ignores TERM', () => {
+    const root = fixture();
+    const result = runDev(root, {
+      CHEKKU_NO_TMUX: '1',
+      CHEKKU_READY_TIMEOUT_SECONDS: '2',
+      HANG_DOCKER_COMMAND: 'inspect',
+      HANG_DOCKER_SECONDS: '30',
+      TERM_RESISTANT_DOCKER_DESCENDANT: '1',
+    });
+    const orphanPid = readFileSync(resolve(root, 'mock-log/orphan-pid'), 'utf8').trim();
+    const orphanGroup = readFileSync(resolve(root, 'mock-log/orphan-group'), 'utf8').trim();
+
+    try {
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('Docker health command timed out');
+      expect(existsSync(resolve(root, 'mock-log/orphan-finished'))).toBe(false);
+      const orphanCheck = run(root, ['-c', `! kill -0 ${orphanPid} 2>/dev/null`]);
+      expect(orphanCheck.status).toBe(0);
+    } finally {
+      spawnSync(bash, ['-c', `kill -KILL -- -${orphanGroup} 2>/dev/null || true`]);
+    }
   });
 
   it('launches application processes with exactly five Garage variables', () => {

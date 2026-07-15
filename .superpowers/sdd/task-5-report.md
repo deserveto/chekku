@@ -34,6 +34,19 @@ Implemented generic local Garage runtime and environment handling for bucket
 - Git Bash syntax check passed for both shell scripts.
 - `git diff --check` passed.
 
+## Final Watchdog Fix
+
+- Timeout-marker handling now distinguishes normal command completion from
+  timeout cleanup. Normal completion cancels the watchdog; timeout completion
+  waits for its full TERM grace period and process-group KILL before returning.
+- Regression uses a Docker leader that exits on TERM and a descendant that
+  ignores TERM. RED left descendant alive; GREEN confirms no process remains.
+- Focused launcher/env suite passed 23 tests across 2 files.
+- Git Bash syntax validation passed for both shell scripts.
+- `npm run check` passed typecheck, lint, 30 test files, and 173 tests.
+- `npm run build` passed agent and client production builds.
+- `git diff --check` passed.
+
 ## Remaining Review Fixes
 
 - Added application-process Garage allowlisting. Fallback and tmux launches

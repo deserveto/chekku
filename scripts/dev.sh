@@ -92,7 +92,9 @@ run_with_timeout() {
   wait "$command_pid" 2>/dev/null
   command_status=$?
   set -e
-  kill -TERM -- "-$watchdog_pid" 2>/dev/null || true
+  if [[ ! -f "$timed_out_file" ]]; then
+    kill -TERM -- "-$watchdog_pid" 2>/dev/null || true
+  fi
   wait "$watchdog_pid" 2>/dev/null || true
   set +m
 
