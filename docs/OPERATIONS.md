@@ -14,6 +14,14 @@ The root development command starts:
 - Mastra on `http://localhost:4111`;
 - Next.js on `http://localhost:3000`.
 
+`npm run dev` does not provision Garage. To run all three local services, install Docker Compose and use a Bash environment:
+
+```bash
+npm run dev:sh
+```
+
+The launcher validates required model values, creates private Garage state when absent, validates Compose, checks ports 3900-3903, starts or recreates Garage, waits up to 30 seconds for health, then starts agent and client. It uses a worktree-specific tmux session when tmux is available; set `CHEKKU_NO_TMUX=1` for direct child processes. `CHEKKU_READY_TIMEOUT_SECONDS` accepts 1-300 and `CHEKKU_READY_INTERVAL_SECONDS` accepts a positive integer capped at five seconds.
+
 ## Environment files
 
 ### `agent/.env`
@@ -48,6 +56,20 @@ AGENT_SERVICE_TOKEN=
 ```
 
 `AGENT_SERVICE_TOKEN` is optional and remains server-side.
+
+### Garage environment
+
+Garage tools consume exactly five application values:
+
+```dotenv
+GARAGE_ENDPOINT=http://127.0.0.1:3900
+GARAGE_REGION=garage
+GARAGE_BUCKET=chekku-objects
+GARAGE_ACCESS_KEY_ID=replace-with-server-only-key
+GARAGE_SECRET_ACCESS_KEY=replace-with-server-only-secret
+```
+
+`npm run dev:sh` generates stable local values in ignored `storage/.env.local`, renders ignored `storage/.garage/garage.toml`, and writes an ignored `agent/.env.development` that preserves `agent/.env` while replacing stale Garage application values. Generated files use private permissions. Administrative Garage values configure the container only and are removed from agent and client process environments; application processes receive only the five values above. Launcher output prints endpoint, region, and bucket, never credentials.
 
 ## Health and model checks
 
@@ -108,6 +130,18 @@ rm -f mastra.db mastra.db-wal mastra.db-shm
 
 This removes stored agents and conversation history.
 
+### Garage object storage
+
+Local Garage runs image `dxflrs/garage:v2.3.0` with persistent Docker volumes and generic bucket `chekku-objects`. Stop application processes before changing credentials. To stop Garage without deleting its volumes:
+
+```bash
+docker compose --env-file storage/.env.local down
+```
+
+Do not commit or paste contents from `storage/.env.local`, `storage/.garage/`, or generated `agent/.env.development`. Removing Garage volumes destroys local agent objects and is intentionally not part of normal reset instructions.
+
+Garage MCP validates relative keys before access, limits keys to 512 UTF-8 bytes, limits text to 262,144 UTF-8 bytes, and returns at most 100 list entries. Physical objects are isolated under `agents/<base64url-agent-id>/`; tool callers see relative keys only. Create is conditional. Replace and delete require user approval.
+
 ## Browser operation
 
 ```dotenv
@@ -126,6 +160,25 @@ Browser automation can fail when a site:
 Report the blocker rather than bypassing access controls.
 
 ## Common failures
+
+### Garage MCP reports missing identity
+
+`Agent identity is required.` means execution did not include trusted `context.agent.agentId`. Do not add an agent ID to tool input. Ensure the tool runs through a hydrated Mastra agent with the built-in `garage` MCP server.
+
+### Garage object storage is not configured
+
+Confirm all five `GARAGE_*` application values are available to the agent process. For local development, rerun `npm run dev:sh`; do not hand-copy generated credentials into tracked files.
+
+### Garage is unavailable
+
+Check Docker and local health without exposing environment values:
+
+```bash
+docker compose --env-file storage/.env.local ps garage
+docker inspect --format '{{.State.Health.Status}}' "$(docker compose --env-file storage/.env.local ps -q garage)"
+```
+
+Port conflicts on 3900-3903, invalid generated configuration, startup failure, and bounded health timeouts produce actionable launcher errors. Storage errors intentionally omit raw Garage/S3 responses and secrets.
 
 ### Model access denied
 
@@ -216,7 +269,7 @@ npm run build
 git diff --check
 ```
 
-The test suite covers model routing, model discovery, prompt normalization, agent configuration, tools, stored-agent payloads, stored-model migration, thread ownership, proxy paths, and UI structure.
+The test suite covers model routing, model discovery, prompt normalization, agent configuration, tools, stored-agent payloads and Garage hydration, stored-model migration, thread ownership, proxy paths, UI structure, namespaced storage, Garage adapter safety, and launcher behavior.
 
 ## Production notes
 
@@ -228,4 +281,5 @@ Before deploying beyond local development:
 - restrict `WEB_URL` to the deployed client origin;
 - configure an authenticated server-to-server hop if the Mastra service is exposed separately;
 - review browser approval and network policies;
+- keep Garage credentials server-side and prevent browser access to Garage or `@chekku/storage`;
 - add rate limits, audit logging, and backup procedures appropriate to the environment.

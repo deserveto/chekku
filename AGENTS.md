@@ -4,10 +4,11 @@ This file defines the operating rules for coding agents and contributors working
 
 ## Mission
 
-Chekku is a local-first agent studio built from two npm workspaces:
+Chekku is a local-first agent studio built from three npm workspaces:
 
 - `agent/`: Mastra server, code-defined agents, stored-agent runtime, Memory, LibSQL, browser automation, tools, and model gateway.
 - `client/`: Next.js interface, same-origin proxy, agent catalog and builder, chat UI, thread history, and server-side identity seam.
+- `storage/`: shared generic object-storage contract, agent namespace helpers, and Garage/S3 adapter.
 
 The repository intentionally contains only the current working architecture. Do not restore retired parallel runtimes from old reconstruction archives.
 
@@ -19,9 +20,11 @@ Read these first:
 2. `client/src/app/api/agent/[...path]/route.ts` — browser-to-Mastra proxy boundary.
 3. `client/src/lib/stored-agents.ts` — stored-agent client operations.
 4. `client/src/lib/memory-threads.ts` — thread listing, reading, renaming, deletion, and ownership checks.
-5. `agent/src/mastra/gateways/openai-compatible.ts` — final model transport.
-6. `docs/ARCHITECTURE.md` — runtime structure and data flow.
-7. `docs/OPERATIONS.md` — environment and troubleshooting.
+5. `storage/src/index.ts` — shared generic object-storage API.
+6. `agent/src/mastra/mcp/garage-mcp-server.ts` — built-in Garage MCP capability.
+7. `agent/src/mastra/gateways/openai-compatible.ts` — final model transport.
+8. `docs/ARCHITECTURE.md` — runtime structure and data flow.
+9. `docs/OPERATIONS.md` — environment and troubleshooting.
 
 ## Required commands
 
@@ -38,6 +41,7 @@ During iteration, use narrower commands when helpful:
 ```bash
 npm run typecheck --workspace agent
 npm run typecheck --workspace client
+npm run typecheck --workspace @chekku/storage
 npm run lint --workspace client
 npx vitest run path/to/file.test.ts
 ```
@@ -63,6 +67,10 @@ A task is not complete until affected tests pass. Before finalizing any reposito
 ### Storage and conversations
 
 - `LibSQLStore` is the sole Mastra storage implementation.
+- Generic Garage object access belongs in `storage/`, not agent-private or browser modules.
+- Garage MCP and server-side code share `@chekku/storage`; browser components must never import it or access Garage directly.
+- Garage application configuration uses only `GARAGE_ENDPOINT`, `GARAGE_REGION`, `GARAGE_BUCKET`, `GARAGE_ACCESS_KEY_ID`, and `GARAGE_SECRET_ACCESS_KEY`.
+- Generated `storage/.env.local`, `storage/.garage/`, and `agent/.env.development` stay ignored. Never expose their secrets in logs, docs, errors, or commits.
 - Conversation history uses Mastra Memory, not custom conversation tables.
 - A thread ID must use this format:
 
@@ -113,6 +121,17 @@ LLM_MODELS
 - `CHEKKU_LOCAL_USER_ID` is a temporary local identity seam. Replace it with OIDC later without changing thread-ownership semantics.
 - `AGENT_SERVICE_TOKEN`, when used, is server-only.
 
+### Garage MCP
+
+- Register the built-in server as `mcpServers: { garage: garageMcpServer }` in the single Mastra composition root.
+- Stored-agent Garage selection persists `mcpClients: { garage: { tools: {} } }`.
+- Keep the MCP registry fixed to `create_text_object`, `get_text_object`, `list_text_objects`, `replace_text_object`, and `delete_object`. Do not accept arbitrary MCP URLs, commands, packages, or credentials.
+- Derive identity only from trusted `context.agent.agentId`; reject missing context before storage access and never accept agent IDs in tool input.
+- Physical keys use `agents/<base64url-agent-id>/<validated-relative-key>`. Expose relative keys only.
+- Enforce 512 UTF-8-byte relative keys, 262,144 UTF-8-byte text, and 100-key public lists with a `truncated` flag.
+- Keep create conditional. Require approval for replace and delete. Preserve accurate MCP annotations.
+- Return fixed actionable storage errors without credentials, endpoints, headers, raw provider responses, or request IDs.
+
 ## Coding conventions
 
 - Use TypeScript strict mode and explicit types at external boundaries.
@@ -135,6 +154,7 @@ Add regression tests for behavior changes, especially:
 - thread ID creation and ownership;
 - proxy URL validation and method support;
 - sidebar and route structure;
+- shared Garage storage, namespace isolation, MCP hydration, and launcher structure;
 - QA agent Memory and browser integration.
 
 Tests use Vitest. Keep tests alongside the relevant module or in the existing `__tests__` folder. Do not add a second test runner for new tests.
@@ -156,6 +176,7 @@ The root `README.md` is the public onboarding document. `docs/ARCHITECTURE.md` d
 ## Files that must not be committed
 
 - `.env` and `.env.local` files containing secrets;
+- generated Garage configuration, credentials, and local Garage data;
 - `node_modules/`, `.next/`, `.mastra/`, `dist/`, coverage, and TypeScript build info;
 - `mastra.db`, WAL, SHM, SQLite, or other local database files;
 - browser recordings, Playwright output, screenshots used only for local debugging;
