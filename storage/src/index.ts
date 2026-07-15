@@ -7,3 +7,9 @@ export {
   createGarageObjectStorage,
   createLazyGarageObjectStorage,
 } from './garage.ts';
+export {
+  createNamespacedObjectStorage,
+  encodeAgentNamespace,
+  validateRelativeObjectKey,
+  validateRelativeObjectPrefix,
+} from './namespaced-objects.ts';
