@@ -74,7 +74,9 @@ function errorDetails(error: unknown): ErrorDetails {
 
 function isNotFound(error: unknown): boolean {
   const { name, $metadata } = errorDetails(error);
-  return name === 'NoSuchKey' || name === 'NotFound' || $metadata?.httpStatusCode === 404;
+  return name === 'NoSuchKey'
+    || name === 'NotFound'
+    || (name !== 'NoSuchBucket' && $metadata?.httpStatusCode === 404);
 }
 
 function translateError(error: unknown, collision = false): never {
@@ -85,9 +87,6 @@ function translateError(error: unknown, collision = false): never {
   if (collision && (name === 'PreconditionFailed' || name === 'ConditionalRequestConflict' || status === 412)) {
     throw new ObjectStorageError('already-exists', SAFE_MESSAGES.alreadyExists);
   }
-  if (isNotFound(error)) {
-    throw new ObjectStorageError('not-found', SAFE_MESSAGES.notFound);
-  }
   if (
     name === 'NoSuchBucket' ||
     name === 'InvalidAccessKeyId' ||
@@ -97,6 +96,9 @@ function translateError(error: unknown, collision = false): never {
     status === 403
   ) {
     throw new ObjectStorageError('configuration', SAFE_MESSAGES.configuration);
+  }
+  if (isNotFound(error)) {
+    throw new ObjectStorageError('not-found', SAFE_MESSAGES.notFound);
   }
   if (
     name === 'TimeoutError' ||
@@ -150,6 +152,20 @@ export function createGarageObjectStorage(
   config: GarageConfig = readGarageConfig(),
   client: GarageClient = createClient(config),
 ): ObjectStorage {
+  const mutationTails = new Map<string, Promise<void>>();
+  const mutate = async <T>(key: string, operation: () => Promise<T>): Promise<T> => {
+    const previous = mutationTails.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => { release = resolve; });
+    mutationTails.set(key, current);
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (mutationTails.get(key) === current) mutationTails.delete(key);
+    }
+  };
   const head = async (key: string): Promise<boolean> => {
     try {
       await client.send(new HeadObjectCommand({ Bucket: config.bucket, Key: key }));
@@ -163,32 +179,39 @@ export function createGarageObjectStorage(
   return {
     ensureReady: async () => undefined,
     async createText(key, value, contentType) {
-      try {
-        await client.send(new PutObjectCommand({
-          Bucket: config.bucket,
-          Key: key,
-          Body: value,
-          ContentType: contentType,
-          IfNoneMatch: '*',
-        }));
-      } catch (error) {
-        translateError(error, true);
-      }
+      await mutate(key, async () => {
+        if (await head(key)) {
+          throw new ObjectStorageError('already-exists', SAFE_MESSAGES.alreadyExists);
+        }
+        try {
+          await client.send(new PutObjectCommand({
+            Bucket: config.bucket,
+            Key: key,
+            Body: value,
+            ContentType: contentType,
+            IfNoneMatch: '*',
+          }));
+        } catch (error) {
+          translateError(error, true);
+        }
+      });
     },
     async replaceText(key, value, contentType) {
-      if (!await head(key)) {
-        throw new ObjectStorageError('not-found', SAFE_MESSAGES.notFound);
-      }
-      try {
-        await client.send(new PutObjectCommand({
-          Bucket: config.bucket,
-          Key: key,
-          Body: value,
-          ContentType: contentType,
-        }));
-      } catch (error) {
-        translateError(error);
-      }
+      await mutate(key, async () => {
+        if (!await head(key)) {
+          throw new ObjectStorageError('not-found', SAFE_MESSAGES.notFound);
+        }
+        try {
+          await client.send(new PutObjectCommand({
+            Bucket: config.bucket,
+            Key: key,
+            Body: value,
+            ContentType: contentType,
+          }));
+        } catch (error) {
+          translateError(error);
+        }
+      });
     },
     async getText(key) {
       try {
@@ -203,14 +226,16 @@ export function createGarageObjectStorage(
     },
     exists: head,
     async delete(key) {
-      if (!await head(key)) {
-        throw new ObjectStorageError('not-found', SAFE_MESSAGES.notFound);
-      }
-      try {
-        await client.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: key }));
-      } catch (error) {
-        translateError(error);
-      }
+      await mutate(key, async () => {
+        if (!await head(key)) {
+          throw new ObjectStorageError('not-found', SAFE_MESSAGES.notFound);
+        }
+        try {
+          await client.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: key }));
+        } catch (error) {
+          translateError(error);
+        }
+      });
     },
     async listKeys(prefix, options): Promise<ObjectListResult> {
       try {

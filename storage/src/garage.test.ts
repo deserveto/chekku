@@ -54,6 +54,9 @@ describe('Garage object storage', () => {
     const store = createGarageObjectStorage(config, {
       async send(command) {
         sentCommand = command as { input: unknown };
+        if ((command as { constructor: { name: string } }).constructor.name === 'HeadObjectCommand') {
+          throw sdkError('NotFound', 404);
+        }
         return {};
       },
     });
@@ -70,7 +73,10 @@ describe('Garage object storage', () => {
 
   it('translates create collisions to a safe error', async () => {
     const store = createGarageObjectStorage(config, {
-      async send() {
+      async send(command) {
+        if ((command as { constructor: { name: string } }).constructor.name === 'HeadObjectCommand') {
+          throw sdkError('NotFound', 404);
+        }
         throw sdkError('PreconditionFailed', 412);
       },
     });
@@ -79,6 +85,22 @@ describe('Garage object storage', () => {
       code: 'already-exists',
       message: 'Object already exists.',
     });
+  });
+
+  it('uses the serialized existence fallback when Garage ignores conditional PUT headers', async () => {
+    const commandNames: string[] = [];
+    const store = createGarageObjectStorage(config, {
+      async send(command) {
+        commandNames.push((command as { constructor: { name: string } }).constructor.name);
+        return {};
+      },
+    });
+
+    await expect(store.createText('notes/a.txt', 'again')).rejects.toMatchObject({
+      code: 'already-exists',
+      message: 'Object already exists.',
+    });
+    expect(commandNames).toEqual(['HeadObjectCommand']);
   });
 
   it('checks existence before replacing text', async () => {
@@ -104,6 +126,46 @@ describe('Garage object storage', () => {
         },
       },
     ]);
+  });
+
+  it('serializes same-key replace and delete to prevent stale local mutation races', async () => {
+    let present = true;
+    let releasePut!: () => void;
+    let putStarted!: () => void;
+    const putGate = new Promise<void>((resolve) => { releasePut = resolve; });
+    const putObserved = new Promise<void>((resolve) => { putStarted = resolve; });
+    const store = createGarageObjectStorage(config, {
+      async send(command) {
+        const name = (command as { constructor: { name: string } }).constructor.name;
+        if (name === 'HeadObjectCommand') {
+          if (!present) throw sdkError('NotFound', 404);
+          return { ETag: '"current"' };
+        }
+        if (name === 'PutObjectCommand') {
+          putStarted();
+          await putGate;
+          present = true;
+          return {};
+        }
+        if (name === 'DeleteObjectCommand') {
+          present = false;
+          return {};
+        }
+        return {};
+      },
+    });
+
+    const replacing = store.replaceText('notes/a.txt', 'new value');
+    await putObserved;
+    let deleteFinished = false;
+    const deleting = store.delete('notes/a.txt').then(() => { deleteFinished = true; });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(deleteFinished).toBe(false);
+    releasePut();
+    await Promise.all([replacing, deleting]);
+    expect(present).toBe(false);
   });
 
   it('returns UTF-8 text and translates missing reads', async () => {
@@ -135,6 +197,19 @@ describe('Garage object storage', () => {
 
     await expect(existing.exists('notes/a.txt')).resolves.toBe(true);
     await expect(missing.exists('missing')).resolves.toBe(false);
+  });
+
+  it('classifies a missing bucket before generic HTTP 404 handling', async () => {
+    const store = createGarageObjectStorage(config, {
+      async send() {
+        throw sdkError('NoSuchBucket', 404);
+      },
+    });
+
+    await expect(store.exists('notes/a.txt')).rejects.toMatchObject({
+      code: 'configuration',
+      message: 'Garage object storage is not configured.',
+    });
   });
 
   it('returns a bounded key list and truncation state', async () => {

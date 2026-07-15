@@ -49,6 +49,30 @@ function createMemoryStore(): { storage: ObjectStorage; objects: Map<string, str
   return { storage, objects };
 }
 
+function toolCallingModel(toolName: string, input: Record<string, unknown>) {
+  let calls = 0;
+  return {
+    specificationVersion: 'v2' as const,
+    provider: 'test',
+    modelId: `test-${toolName}`,
+    supportedUrls: {},
+    async doGenerate() {
+      calls += 1;
+      return {
+        content: calls === 1
+          ? [{ type: 'tool-call' as const, toolCallId: `call-${toolName}`, toolName, input: JSON.stringify(input) }]
+          : [{ type: 'text' as const, text: 'finished' }],
+        finishReason: calls === 1 ? 'tool-calls' as const : 'stop' as const,
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        warnings: [],
+      };
+    },
+    async doStream() {
+      throw new Error('Streaming is not used by this test.');
+    },
+  };
+}
+
 describe('Garage MCP server', () => {
   it('registers exactly five generic tools and no PM behavior', () => {
     expect(garageMcpServer.id).toBe('garage');
@@ -166,6 +190,68 @@ describe('Garage MCP server', () => {
     expect(objects).toEqual(new Map([
       [`agents/${Buffer.from('garage-agent').toString('base64url')}/notes/a.txt`, 'hello'],
     ]));
+  });
+
+  it('declines a hydrated replace approval without mutating storage', async () => {
+    const { storage: objectStorage, objects } = createMemoryStore();
+    const server = createGarageMcpServer(objectStorage);
+    const editor = new MastraEditor({ source: 'db' });
+    new Mastra({
+      storage: new InMemoryStore(),
+      editor,
+      mcpServers: { garage: server },
+      gateways: { openAICompatible: new OpenAICompatibleGateway() },
+    });
+    await editor.agent.create({
+      id: 'approval-agent',
+      name: 'Approval Agent',
+      instructions: 'Use Garage tools.',
+      model: { provider: 'openai-compatible', name: 'gateway/test-model' },
+      mcpClients: { garage: { tools: {} } },
+    });
+    const physicalKey = `agents/${Buffer.from('approval-agent').toString('base64url')}/notes/a.txt`;
+    objects.set(physicalKey, 'before');
+    const hydrated = await editor.agent.getById('approval-agent', { status: 'draft' });
+    const model = toolCallingModel('replace_text_object', { key: 'notes/a.txt', text: 'after' });
+    hydrated!.__updateModel({ model });
+
+    const pending = await hydrated!.generate('Replace the note.');
+
+    expect(pending.finishReason).toBe('suspended');
+    expect(objects.get(physicalKey)).toBe('before');
+    await hydrated!.declineToolCallGenerate({ runId: pending.runId! });
+    expect(objects.get(physicalKey)).toBe('before');
+  });
+
+  it('executes a hydrated delete only after approval', async () => {
+    const { storage: objectStorage, objects } = createMemoryStore();
+    const server = createGarageMcpServer(objectStorage);
+    const editor = new MastraEditor({ source: 'db' });
+    new Mastra({
+      storage: new InMemoryStore(),
+      editor,
+      mcpServers: { garage: server },
+      gateways: { openAICompatible: new OpenAICompatibleGateway() },
+    });
+    await editor.agent.create({
+      id: 'delete-approval-agent',
+      name: 'Delete Approval Agent',
+      instructions: 'Use Garage tools.',
+      model: { provider: 'openai-compatible', name: 'gateway/test-model' },
+      mcpClients: { garage: { tools: {} } },
+    });
+    const physicalKey = `agents/${Buffer.from('delete-approval-agent').toString('base64url')}/notes/a.txt`;
+    objects.set(physicalKey, 'before');
+    const hydrated = await editor.agent.getById('delete-approval-agent', { status: 'draft' });
+    const model = toolCallingModel('delete_object', { key: 'notes/a.txt' });
+    hydrated!.__updateModel({ model });
+
+    const pending = await hydrated!.generate('Delete the note.');
+
+    expect(pending.finishReason).toBe('suspended');
+    expect(objects.has(physicalKey)).toBe(true);
+    await hydrated!.approveToolCallGenerate({ runId: pending.runId! });
+    expect(objects.has(physicalKey)).toBe(false);
   });
 
   it('preserves context for marker-bearing tools from another core instance', async () => {

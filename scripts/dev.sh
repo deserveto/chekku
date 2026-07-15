@@ -62,6 +62,7 @@ if [[ "$ready_interval_seconds" == 0 ]]; then
   echo "CHEKKU_READY_INTERVAL_SECONDS must be a positive integer." >&2
   exit 1
 fi
+
 if ((${#ready_interval_seconds} > 1)); then
   ready_interval_seconds=5
 else
@@ -113,7 +114,7 @@ docker_health_timeout() {
 }
 
 garage_port_conflicts() {
-  node - ${CHEKKU_GARAGE_PORTS:-3900 3901 3902 3903} <<'NODE'
+  node - ${CHEKKU_GARAGE_PORTS:-3900} <<'NODE'
 const net = require('node:net');
 
 const ports = process.argv.slice(2).map(Number);
@@ -151,7 +152,7 @@ fi
 if [[ -z "$service_id" ]]; then
   conflicts="$(garage_port_conflicts)"
   if [[ -n "$conflicts" ]]; then
-    echo "Garage port conflict: ${conflicts// /, } (required: 3900-3903). Stop conflicting service or change its ports." >&2
+    echo "Garage port conflict: ${conflicts// /, } (required: 3900). Stop conflicting service or change its port." >&2
     exit 1
   fi
 fi
@@ -165,7 +166,7 @@ fi
 if ! docker compose --env-file storage/.env.local "${start_args[@]}"; then
   conflicts="$(garage_port_conflicts)"
   if [[ -n "$conflicts" ]]; then
-    echo "Garage Compose failed because required port(s) ${conflicts// /, } are occupied (required: 3900-3903)." >&2
+    echo "Garage Compose failed because required port ${conflicts// /, } is occupied (required: 3900)." >&2
   else
     echo "Garage Compose startup failed. Review Docker output above for service details." >&2
   fi
@@ -247,6 +248,17 @@ NODE
   exit 0
 fi
 
+term_grace_seconds="$(normalize_decimal "${CHEKKU_TERM_GRACE_SECONDS:-2}")" || {
+  echo "CHEKKU_TERM_GRACE_SECONDS must be an integer from 1 to 30." >&2
+  exit 1
+}
+if [[ "$term_grace_seconds" == 0 ]] || ((${#term_grace_seconds} > 2)) ||
+  ((10#$term_grace_seconds > 30)); then
+  echo "CHEKKU_TERM_GRACE_SECONDS must be an integer from 1 to 30." >&2
+  exit 1
+fi
+term_grace_seconds=$((10#$term_grace_seconds))
+
 AGENT_PID=''
 CLIENT_PID=''
 
@@ -254,6 +266,16 @@ cleanup() {
   trap - INT TERM EXIT
   if [[ -n "$AGENT_PID" ]]; then kill -TERM -- "-$AGENT_PID" 2>/dev/null || true; fi
   if [[ -n "$CLIENT_PID" ]]; then kill -TERM -- "-$CLIENT_PID" 2>/dev/null || true; fi
+  local deadline=$((SECONDS + term_grace_seconds))
+  while ((SECONDS < deadline)); do
+    local running=false
+    if [[ -n "$AGENT_PID" ]] && kill -0 -- "-$AGENT_PID" 2>/dev/null; then running=true; fi
+    if [[ -n "$CLIENT_PID" ]] && kill -0 -- "-$CLIENT_PID" 2>/dev/null; then running=true; fi
+    if [[ "$running" == false ]]; then break; fi
+    sleep 0.1
+  done
+  if [[ -n "$AGENT_PID" ]]; then kill -KILL -- "-$AGENT_PID" 2>/dev/null || true; fi
+  if [[ -n "$CLIENT_PID" ]]; then kill -KILL -- "-$CLIENT_PID" 2>/dev/null || true; fi
   if [[ -n "$AGENT_PID" ]]; then wait "$AGENT_PID" 2>/dev/null || true; fi
   if [[ -n "$CLIENT_PID" ]]; then wait "$CLIENT_PID" 2>/dev/null || true; fi
 }

@@ -109,8 +109,10 @@ export function toStoredAgentPayload(input: AgentPayloadInput) {
     },
     tools: optionRecord(tools),
     agents: optionRecord(agents),
-    mcpClients: Object.fromEntries(
-      mcpClients.map((value) => [value, { tools: {} }]),
-    ),
+    ...(mcpClients.length > 0 ? {
+      mcpClients: Object.fromEntries(
+        mcpClients.map((value) => [value, { tools: {} }]),
+      ),
+    } : {}),
   };
 }

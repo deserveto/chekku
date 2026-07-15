@@ -134,9 +134,15 @@ esac
     executable(resolve(root, 'bin/npm'), `
 role="\${*: -1}"
 if [[ "$role" == dev:client ]]; then sleep 0.5; exit 7; fi
+printf '%s\n' "$BASHPID" > "$MOCK_LOG/app-group"
 trap 'printf "agent-wrapper-term\\n" >> "$MOCK_LOG/signals"; wait; exit 0' TERM INT
 (
-  trap 'printf "agent-child-term\\n" >> "$MOCK_LOG/signals"; exit 0' TERM INT
+  if [[ "\${TERM_RESISTANT_NPM_DESCENDANT:-0}" == 1 ]]; then
+    trap '' TERM
+  else
+    trap 'printf "agent-child-term\\n" >> "$MOCK_LOG/signals"; exit 0' TERM INT
+  fi
+  printf '%s\n' "$BASHPID" > "$MOCK_LOG/app-child"
   while true; do sleep 1; done
 ) &
 printf 'agent-ready\\n' >> "$MOCK_LOG/signals"
@@ -494,16 +500,39 @@ describe('development launcher', () => {
     expect(signals).toContain('agent-wrapper-term');
     expect(signals).toContain('agent-child-term');
   });
+
+  it('kills a TERM-resistant fallback descendant after bounded grace', () => {
+    const root = fixture({ npm: true });
+    const startedAt = Date.now();
+    const result = runDev(root, {
+      CHEKKU_NO_TMUX: '1',
+      CHEKKU_TERM_GRACE_SECONDS: '1',
+      TERM_RESISTANT_NPM_DESCENDANT: '1',
+    });
+    const group = readFileSync(resolve(root, 'mock-log/app-group'), 'utf8').trim();
+    const child = readFileSync(resolve(root, 'mock-log/app-child'), 'utf8').trim();
+
+    try {
+      expect(result.status, result.stderr).toBe(7);
+      expect(Date.now() - startedAt).toBeLessThan(4_000);
+      expect(run(root, ['-c', `! kill -0 ${child} 2>/dev/null`]).status).toBe(0);
+    } finally {
+      spawnSync(bash, ['-c', `kill -KILL -- -${group} 2>/dev/null || true`]);
+    }
+  }, 20_000);
 });
 
 describe('committed Garage runtime', () => {
-  it('pins Garage, bucket, ports, health bounds, generated config, and persistent volumes', () => {
+  it('publishes only the loopback S3 port and keeps Garage internals private', () => {
     const compose = readFileSync(resolve(sourceRoot, 'compose.yaml'), 'utf8');
     const scripts = readFileSync(resolve(sourceRoot, 'scripts/storage-env.sh'), 'utf8');
+    const launcher = readFileSync(resolve(sourceRoot, 'scripts/dev.sh'), 'utf8');
 
     expect(compose).toContain('dxflrs/garage:v2.3.0');
     expect(scripts).toContain('GARAGE_BUCKET=chekku-objects');
-    for (const port of [3900, 3901, 3902, 3903]) expect(compose).toContain(`"${port}:${port}"`);
+    expect(compose).toContain('"127.0.0.1:3900:3900"');
+    for (const port of [3901, 3902, 3903]) expect(compose).not.toMatch(new RegExp(`^[^#]*${port}:${port}`, 'm'));
+    expect(launcher).toContain('CHEKKU_GARAGE_PORTS:-3900}');
     expect(compose).toMatch(/\.\/storage\/\.garage\/garage\.toml:\/etc\/garage\.toml:ro/);
     expect(compose).toMatch(/garage-metadata:\/var\/lib\/garage\/meta/);
     expect(compose).toMatch(/garage-data:\/var\/lib\/garage\/data/);

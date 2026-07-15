@@ -8,10 +8,7 @@ services:
       GARAGE_DEFAULT_SECRET_KEY: ${GARAGE_SECRET_ACCESS_KEY:?Set GARAGE_SECRET_ACCESS_KEY}
       GARAGE_DEFAULT_BUCKET: ${GARAGE_BUCKET:?Set GARAGE_BUCKET}
     ports:
-      - "3900:3900"
-      - "3901:3901"
-      - "3902:3902"
-      - "3903:3903"
+      - "127.0.0.1:3900:3900"
     volumes:
       - ./storage/.garage/garage.toml:/etc/garage.toml:ro
       - garage-metadata:/var/lib/garage/meta

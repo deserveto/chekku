@@ -72,7 +72,7 @@ Interactive browser tools require approval unless the request context explicitly
 
 Stored agents are created through the client and persisted by `@mastra/editor`. A stored record contains behavior, model selection, Memory configuration, tools, and delegate-agent references. It does not contain endpoint credentials.
 
-The builder offers one whitelisted MCP capability, `garage`. Selection persists as `mcpClients: { garage: { tools: {} } }`, and hydration resolves that ID against the built-in server. Client input cannot supply arbitrary MCP URLs, commands, packages, or credentials.
+The builder offers one whitelisted MCP capability, `garage`. Selection persists as `mcpClients: { garage: { tools: {} } }`, and hydration resolves that ID against the built-in server. The trusted proxy accepts stored-agent MCP configuration only when absent or exactly that shape, so direct browser requests cannot supply arbitrary MCP URLs, commands, packages, or credentials.
 
 When an older stored model no longer matches the current registry, the client migrates it to the configured gateway and canonical default before chat begins.
 
@@ -154,7 +154,7 @@ agents/<base64url(agentId)>/<key>
 
 Tools accept and return relative keys only. Relative keys must be non-empty, use forward slashes, contain no absolute path, backslash, traversal segment, control character, or empty segment, and fit within 512 UTF-8 bytes. List prefixes follow the same path rules but may be empty or end in one slash. Text payloads fit within 262,144 UTF-8 bytes. Lists fetch at most 101 objects and expose at most 100 keys with `truncated` set when more exist.
 
-`create_text_object` uses one conditional S3 write and fails if the object exists. `replace_text_object` and `delete_object` require approval and fail for missing targets. Get and list are read-only. MCP annotations describe read-only, destructive, idempotent, and closed-world behavior.
+`create_text_object` fails if the object exists. `replace_text_object` and `delete_object` require approval and fail for missing targets. Garage v2.3.0 does not implement destination conditional PUT/DELETE headers, so the adapter serializes same-key mutations and checks existence immediately within one adapter instance; external Garage writers remain outside that guarantee. Get and list are read-only. MCP annotations describe read-only, destructive, idempotent, and closed-world behavior.
 
 ## Conversation ownership
 
@@ -172,6 +172,7 @@ The browser uses `@mastra/client-js` with the Next.js origin and `/api/agent` pr
 
 - resolves the server-controlled local identity;
 - validates the requested path;
+- rejects stored-agent create/update payloads whose MCP configuration is not absent or exactly `garage: { tools: {} }`;
 - forwards requests to `AGENT_URL`;
 - attaches an optional service credential;
 - supports GET, POST, PUT, PATCH, DELETE, and HEAD;

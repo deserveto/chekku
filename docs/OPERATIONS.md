@@ -20,7 +20,7 @@ The root development command starts:
 npm run dev:sh
 ```
 
-The launcher validates required model values, creates private Garage state when absent, validates Compose, checks ports 3900-3903, starts or recreates Garage, waits up to 30 seconds for health, then starts agent and client. It uses a worktree-specific tmux session when tmux is available; set `CHEKKU_NO_TMUX=1` for direct child processes. `CHEKKU_READY_TIMEOUT_SECONDS` accepts 1-300 and `CHEKKU_READY_INTERVAL_SECONDS` accepts a positive integer capped at five seconds.
+The launcher validates required model values, creates private Garage state when absent, validates Compose, checks port 3900, starts or recreates Garage, waits up to 30 seconds for health, then starts agent and client. It uses a worktree-specific tmux session when tmux is available; set `CHEKKU_NO_TMUX=1` for direct child processes. `CHEKKU_READY_TIMEOUT_SECONDS` accepts 1-300, `CHEKKU_READY_INTERVAL_SECONDS` accepts a positive integer capped at five seconds, and fallback cleanup uses `CHEKKU_TERM_GRACE_SECONDS` from 1-30 (default 2) before process-group KILL.
 
 ## Environment files
 
@@ -132,7 +132,7 @@ This removes stored agents and conversation history.
 
 ### Garage object storage
 
-Local Garage runs image `dxflrs/garage:v2.3.0` with persistent Docker volumes and generic bucket `chekku-objects`. Stop application processes before changing credentials. To stop Garage without deleting its volumes:
+Local Garage runs image `dxflrs/garage:v2.3.0` with persistent Docker volumes and generic bucket `chekku-objects`. Compose publishes only the S3 API at `127.0.0.1:3900`; RPC, admin, and metrics ports stay inside the Docker network. Stop application processes before changing credentials. To stop Garage without deleting its volumes:
 
 ```bash
 docker compose --env-file storage/.env.local down
@@ -140,7 +140,9 @@ docker compose --env-file storage/.env.local down
 
 Do not commit or paste contents from `storage/.env.local`, `storage/.garage/`, or generated `agent/.env.development`. Removing Garage volumes destroys local agent objects and is intentionally not part of normal reset instructions.
 
-Garage MCP validates relative keys before access, limits keys to 512 UTF-8 bytes, limits text to 262,144 UTF-8 bytes, and returns at most 100 list entries. Physical objects are isolated under `agents/<base64url-agent-id>/`; tool callers see relative keys only. Create is conditional. Replace and delete require user approval.
+Garage MCP validates relative keys before access, limits keys to 512 UTF-8 bytes, limits text to 262,144 UTF-8 bytes, and returns at most 100 list entries. Physical objects are isolated under `agents/<base64url-agent-id>/`; tool callers see relative keys only. Replace and delete require user approval.
+
+Garage v2.3.0 does not process destination `If-Match`/`If-None-Match` headers for PUT or DELETE. The adapter serializes same-key mutations in one process and performs an immediate existence check; it also sends `If-None-Match` on create for S3 providers that support it. This prevents stale races among calls through one adapter instance, but an external writer can still race a Garage mutation. Do not claim cross-process compare-and-swap semantics until the pinned Garage release supports those conditions.
 
 ## Browser operation
 
@@ -178,7 +180,7 @@ docker compose --env-file storage/.env.local ps garage
 docker inspect --format '{{.State.Health.Status}}' "$(docker compose --env-file storage/.env.local ps -q garage)"
 ```
 
-Port conflicts on 3900-3903, invalid generated configuration, startup failure, and bounded health timeouts produce actionable launcher errors. Storage errors intentionally omit raw Garage/S3 responses and secrets.
+Port conflicts on 3900, invalid generated configuration, startup failure, and bounded health timeouts produce actionable launcher errors. `NoSuchBucket` is reported as a configuration failure rather than an object miss. Storage errors intentionally omit raw Garage/S3 responses and secrets.
 
 ### Model access denied
 

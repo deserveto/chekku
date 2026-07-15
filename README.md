@@ -113,7 +113,7 @@ For client, agent, and local Garage together, use Git Bash, WSL, or another Bash
 npm run dev:sh
 ```
 
-`dev:sh` creates private ignored Garage credentials and configuration, starts the `chekku-objects` bucket on ports 3900-3903, waits for health, writes the five application Garage values to ignored `agent/.env.development`, then starts client and agent processes. It uses tmux when available and otherwise manages both process groups directly.
+`dev:sh` creates private ignored Garage credentials and configuration, exposes the `chekku-objects` S3 API only at `127.0.0.1:3900`, waits for health, writes the five application Garage values to ignored `agent/.env.development`, then starts client and agent processes. It uses tmux when available and otherwise gives process groups a bounded TERM grace period before KILL.
 
 Open:
 
@@ -219,7 +219,7 @@ These rules keep the repository from drifting back into parallel implementations
 
 ## Garage MCP
 
-Stored agents may select the whitelisted `garage` capability in the builder. Selection persists as `mcpClients: { garage: { tools: {} } }`; arbitrary MCP URLs, commands, packages, and credentials are not accepted.
+Stored agents may select the whitelisted `garage` capability in the builder. Selection persists as `mcpClients: { garage: { tools: {} } }`; arbitrary MCP URLs, commands, packages, and credentials are rejected by the same-origin proxy before stored-agent create or update requests reach Mastra.
 
 Garage MCP exposes exactly five generic tools:
 

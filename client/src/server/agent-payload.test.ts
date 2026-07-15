@@ -60,6 +60,20 @@ describe('stored-agent payload', () => {
     })).toEqual(['garage']);
   });
 
+  it('omits MCP configuration when no capability is selected', () => {
+    expect(toStoredAgentPayload({
+      id: 'demo',
+      name: 'Demo',
+      description: '',
+      instructions: 'Help',
+      model: 'model-a',
+      tools: [],
+      agents: [],
+      mcpClients: [],
+      memoryEnabled: true,
+    })).not.toHaveProperty('mcpClients');
+  });
+
   it('disables memory without sending null', () => {
     expect(toStoredAgentPayload({
       id: 'demo',

@@ -4,6 +4,35 @@ import { buildAgentProxyUrl } from '@/server/proxy-url';
 
 export const runtime = 'nodejs';
 
+function isStoredAgentMutation(method: string, path: string[]): boolean {
+  if (path[0] !== 'stored' || path[1] !== 'agents') return false;
+  return (method === 'POST' && path.length === 2)
+    || ((method === 'PATCH' || method === 'PUT') && path.length === 3);
+}
+
+function hasAllowedMcpConfig(body: string): boolean {
+  try {
+    const payload = JSON.parse(body) as unknown;
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return false;
+    const record = payload as Record<string, unknown>;
+    if (!Object.hasOwn(record, 'mcpClients')) return true;
+
+    const mcpClients = record.mcpClients;
+    if (!mcpClients || typeof mcpClients !== 'object' || Array.isArray(mcpClients)) return false;
+    if (Object.keys(mcpClients).length !== 1) return false;
+    const garage = (mcpClients as Record<string, unknown>).garage;
+    if (!garage || typeof garage !== 'object' || Array.isArray(garage)) return false;
+    if (Object.keys(garage).length !== 1) return false;
+    const tools = (garage as Record<string, unknown>).tools;
+    return tools !== null
+      && typeof tools === 'object'
+      && !Array.isArray(tools)
+      && Object.keys(tools).length === 0;
+  } catch {
+    return false;
+  }
+}
+
 async function handler(request: NextRequest, context: { params: Promise<{ path: string[] }> }): Promise<Response> {
   const userId = await getUserId();
   if (!userId) return new Response('Forbidden', { status: 403 });
@@ -11,6 +40,10 @@ async function handler(request: NextRequest, context: { params: Promise<{ path: 
   let url: string;
   try { url = buildAgentProxyUrl(process.env.AGENT_URL ?? 'http://localhost:4111', path, request.nextUrl.search); }
   catch (error) { return new Response(error instanceof Error ? error.message : 'Invalid path', { status: 400 }); }
+  const body = request.method === 'GET' || request.method === 'HEAD' ? undefined : await request.text();
+  if (isStoredAgentMutation(request.method, path) && !hasAllowedMcpConfig(body ?? '')) {
+    return new Response('Invalid stored-agent MCP configuration.', { status: 400 });
+  }
   const token = await getDownstreamToken(userId);
   const upstream = await fetch(url, {
     method: request.method,
@@ -19,7 +52,7 @@ async function handler(request: NextRequest, context: { params: Promise<{ path: 
       'Content-Type': request.headers.get('content-type') ?? 'application/json',
       Accept: request.headers.get('accept') ?? '*/*',
     },
-    body: request.method === 'GET' || request.method === 'HEAD' ? undefined : await request.text(),
+    body,
     // @ts-expect-error Node fetch requires duplex for streaming request bodies.
     duplex: 'half',
   });
