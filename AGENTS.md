@@ -117,7 +117,7 @@ LLM_MODELS
 
 ### Client proxy and identity
 
-- Browser HTTP requests target the Next.js origin and pass through `/api/agent/*`.
+- Browser-to-Mastra agent-service requests target the Next.js origin and pass through `/api/agent/*`. PM report pages stay under `/reports/*`, and PM report storage APIs stay under `/api/storage/pm-reports/*` in the Next.js server.
 - The proxy must continue supporting `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, and `HEAD`.
 - Validate upstream paths with `client/src/server/proxy-url.ts`.
 - `CHEKKU_LOCAL_USER_ID` is a temporary local identity seam. Replace it with OIDC later without changing thread-ownership semantics.

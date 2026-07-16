@@ -50,7 +50,7 @@ Next.js client/server :3000
 - structured logging and request middleware;
 - `/healthz` and `/models` custom routes.
 
-All other agent, Memory, editor, and storage APIs are provided by Mastra. Chekku does not maintain a parallel custom conversation or agent database.
+Mastra provides the native agent, Memory, and editor APIs. Next.js separately provides `/reports/*` pages and `/api/storage/pm-reports/*` APIs through `client/src/server/pm-reports.ts`; those PM report storage interfaces are not Mastra APIs. Chekku does not maintain a parallel custom conversation or agent database.
 
 ## Agents
 

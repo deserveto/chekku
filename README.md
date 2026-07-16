@@ -220,7 +220,7 @@ These rules keep the repository from drifting back into parallel implementations
 4. Models use only `LLM_*` configuration through the OpenAI-compatible gateway.
 5. Thread IDs must include the agent and resource prefix.
 6. QA Web Agent must keep active Memory and final system-message normalization.
-7. Client HTTP traffic must use `/api/agent/*` unless a protocol cannot be proxied by Next.js.
+7. Browser-to-Mastra agent-service traffic must use `/api/agent/*` unless a protocol cannot be proxied by Next.js. PM report pages remain under `/reports/*`, and PM report storage APIs remain under `/api/storage/pm-reports/*` in the Next.js server.
 8. Garage MCP exposes only `create_text_object`, `get_text_object`, `list_text_objects`, `replace_text_object`, and `delete_object`.
 9. Garage identity comes from trusted Mastra execution context, never tool input; browser code never accesses Garage directly.
 10. PM report semantics stay outside Garage MCP in code-defined `pm-agent` tools and the shared report repository.
