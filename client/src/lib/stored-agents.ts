@@ -3,7 +3,6 @@ import type {
   StoredAgentResponse,
 } from '@mastra/client-js';
 import {
-  readMcpClientIds,
   toStoredAgentPayload,
 } from '@/server/agent-payload';
 import { mastraClient } from './mastra-client';
@@ -23,7 +22,6 @@ export interface AgentFormInput {
   model: string;
   tools?: string[];
   agents?: string[];
-  mcpClients: string[];
   memoryEnabled: boolean;
 }
 
@@ -207,7 +205,6 @@ export async function createStoredAgent(
     model,
     tools: input.tools ?? [],
     agents: input.agents ?? [],
-    mcpClients: input.mcpClients,
   });
 
   const created = await wrap(() =>
@@ -239,7 +236,6 @@ export async function getStoredAgent(
     memoryEnabled: readMemoryEnabled(detail.memory),
     tools: readOptionIds(record.tools),
     agents: readOptionIds(record.agents),
-    mcpClients: readMcpClientIds(record.mcpClients),
   };
 }
 
@@ -255,7 +251,6 @@ export async function updateStoredAgent(
     model,
     tools: input.tools ?? [],
     agents: input.agents ?? [],
-    mcpClients: input.mcpClients,
   });
   const { id: payloadId, ...payload } = fullPayload;
   void payloadId;
@@ -283,7 +278,6 @@ export async function ensureStoredAgentUsesServerGateway(
     model,
     tools: detail.tools,
     agents: detail.agents,
-    mcpClients: detail.mcpClients,
     memoryEnabled: detail.memoryEnabled,
   });
 }

@@ -23,7 +23,6 @@ export interface ChekkuAgentDetail extends ChekkuAgentSummary {
   memoryEnabled: boolean;
   tools: string[];
   agents: string[];
-  mcpClients: string[];
 }
 
 export type ToolEventStatus =

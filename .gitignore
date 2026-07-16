@@ -6,10 +6,6 @@ node_modules/
 .env.*
 !.env.example
 !**/.env.example
-storage/.env.local
-storage/.garage/
-storage/.garage-data/
-storage/.garage-meta/
 
 # Build output and caches
 .next/
@@ -45,7 +41,6 @@ test-results/
 .playwright-mcp/
 .agents/
 .codex/
-.superpowers/sdd/
 
 # OS metadata
 .DS_Store

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   migrateStoredModelId,
-  readMcpClientIds,
   splitModelId,
   toStoredAgentPayload,
 } from './agent-payload';
@@ -23,55 +22,32 @@ describe('stored-agent payload', () => {
       model: 'model-a',
       tools: ['calculator', 'calcualtor'],
       agents: ['qa-web-agent', 'unknown'],
-      mcpClients: [
-        'garage',
-        'unknown',
-        'https://example.test/mcp',
-        'npx arbitrary-package',
-        'API_KEY=secret',
-      ],
       memoryEnabled: true,
     })).toMatchObject({
       model: { provider: 'openai-compatible', name: 'gateway/model-a' },
       tools: { calculator: {} },
       agents: { 'qa-web-agent': {} },
-      mcpClients: { garage: { tools: {} } },
       memory: { options: { lastMessages: 20 } },
     });
   });
 
-  it('round-trips selected MCP client ids in the stored shape', () => {
-    const payload = toStoredAgentPayload({
-      id: 'demo',
-      name: 'Demo',
-      description: '',
-      instructions: 'Help',
-      model: 'model-a',
-      tools: [],
-      agents: [],
-      mcpClients: ['garage'],
-      memoryEnabled: true,
-    });
-
-    expect(payload.mcpClients).toEqual({ garage: { tools: {} } });
-    expect(readMcpClientIds({
-      ...payload.mcpClients,
-      unknown: { url: 'https://example.test/mcp' },
-    })).toEqual(['garage']);
-  });
-
-  it('omits MCP configuration when no capability is selected', () => {
+  it('preserves all three registered studio tools and drops unknowns', () => {
     expect(toStoredAgentPayload({
       id: 'demo',
       name: 'Demo',
       description: '',
       instructions: 'Help',
       model: 'model-a',
-      tools: [],
+      tools: ['calculator', 'get-current-time', 'send-email', 'mars-rover'],
       agents: [],
-      mcpClients: [],
       memoryEnabled: true,
-    })).not.toHaveProperty('mcpClients');
+    })).toMatchObject({
+      tools: {
+        calculator: {},
+        'get-current-time': {},
+        'send-email': {},
+      },
+    });
   });
 
   it('disables memory without sending null', () => {
@@ -83,7 +59,6 @@ describe('stored-agent payload', () => {
       model: 'model-a',
       tools: [],
       agents: [],
-      mcpClients: [],
       memoryEnabled: false,
     }).memory).toEqual({
       options: { lastMessages: false },

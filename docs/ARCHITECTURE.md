@@ -2,7 +2,7 @@
 
 ## Overview
 
-Chekku contains three npm workspaces: a Next.js client, a Mastra agent server, and the shared `@chekku/storage` package. The system is local-first, uses LibSQL for agent and conversation persistence, offers Garage-backed generic agent object storage, and connects to one server-owned OpenAI-compatible model endpoint.
+Chekku is an npm workspace containing a Next.js client and a Mastra agent server. The system is local-first, uses LibSQL for persistence, and connects to one server-owned OpenAI-compatible model endpoint.
 
 ```text
 ┌───────────────────────────────┐
@@ -26,7 +26,6 @@ Chekku contains three npm workspaces: a Next.js client, a Mastra agent server, a
 │                                          │
 │  Memory + LibSQLStore                    │
 │  Calculator + current-time tools         │
-│  Garage MCP                              │
 │  Agent Browser                           │
 │  OpenAI-compatible custom gateway        │
 └───────────────────┬──────────────────────┘
@@ -37,22 +36,21 @@ Chekku contains three npm workspaces: a Next.js client, a Mastra agent server, a
 │ Rafiqspace LLM, LiteLLM, vLLM, or other │
 │ OpenAI-compatible endpoint               │
 └──────────────────────────────────────────┘
-
-Mastra server ──► @chekku/storage ──► Garage/S3 `chekku-objects`
 ```
 
 ## Backend composition
 
 `agent/src/mastra/index.ts` creates the single `Mastra` instance and registers:
 
-- `mainAgent` and `qaWebAgent`;
+- `mainAgent`, `qaWebAgent`, and `socialMediaAgent`;
 - `storedAgentTools`;
 - `LibSQLStore`;
 - `MastraEditor` with database storage;
 - `OpenAICompatibleGateway`;
-- built-in `garageMcpServer` under MCP server ID `garage`;
 - structured logging and request middleware;
 - `/healthz` and `/models` custom routes.
+
+`socialMediaAgent` also wires a Telegram channel adapter. Once Mastra initializes the agent's `AgentChannels`, `index.ts` registers the agent's slash-command handlers (`/help`, `/roles`, `/role`, `/switch`) on the Chat SDK so Telegram-intercepted bot commands reach the role logic.
 
 All other agent, Memory, editor, and storage APIs are provided by Mastra. Chekku does not maintain a parallel custom conversation or agent database.
 
@@ -66,13 +64,23 @@ All other agent, Memory, editor, and storage APIs are provided by Mastra. Chekku
 
 `qa-web-agent` adds Mastra Agent Browser to the common model and Memory stack. Memory is mandatory because browser context processors need a live Memory context during tool loops.
 
-Interactive browser tools require approval unless the request context explicitly enables full browser access. Consequential actions still require user confirmation through the agent instructions.
+Interactive browser tools require approval unless the request context explicitly enables full browser access, and the QA Web Agent's instructions ask it to describe consequential browser actions before taking them. Outbound email currently runs without an automated approval gate; a dedicated human-in-the-loop layer is planned.
+
+### Social Media Agent
+
+`social-media-agent` is a role-switchable content assistant reachable over a Mastra channel (Telegram today, other platforms later). It shares the common server model and Memory stack with the other code agents and adds a Telegram adapter through the Chat SDK.
+
+Users drive it from the chat platform with slash commands:
+
+- `/help` — show available commands;
+- `/roles` — list roles; `/role` — show the active role;
+- `/switch <role>` — switch between `general`, `x-writer`, `instagram-writer`, `linkedin-writer`, and `tiktok-writer`.
+
+The active role is held in-memory keyed by `${platform}:${userId}`. The agent reads the role from the channel context on `requestContext` and rebuilds its instructions on each turn. Phase scope is drafting and planning only; destination-platform publishing is a later phase.
 
 ### Stored agents
 
 Stored agents are created through the client and persisted by `@mastra/editor`. A stored record contains behavior, model selection, Memory configuration, tools, and delegate-agent references. It does not contain endpoint credentials.
-
-The builder offers one whitelisted MCP capability, `garage`. Selection persists as `mcpClients: { garage: { tools: {} } }`, and hydration resolves that ID against the built-in server. The trusted proxy accepts stored-agent MCP configuration only when absent or exactly that shape, so direct browser requests cannot supply arbitrary MCP URLs, commands, packages, or credentials.
 
 When an older stored model no longer matches the current registry, the client migrates it to the configured gateway and canonical default before chat begins.
 
@@ -114,47 +122,13 @@ This normalization applies to both `doGenerate` and `doStream`.
 
 ## Storage
 
-`LibSQLStore` is the only persistence layer for Mastra-managed state. It stores:
+`LibSQLStore` is the only persistence layer. It stores:
 
 - stored-agent definitions and versions;
 - Mastra Memory threads and messages;
 - other Mastra-managed state.
 
 The default URL is `file:./mastra.db`. The actual file location depends on the working directory used to launch the agent workspace.
-
-`@chekku/storage` is a separate generic object-storage boundary, not a replacement for LibSQL. It defines create, replace, get, existence, delete, and bounded-list operations and implements them through Garage's S3-compatible API. Application configuration uses only:
-
-```text
-GARAGE_ENDPOINT
-GARAGE_REGION
-GARAGE_BUCKET
-GARAGE_ACCESS_KEY_ID
-GARAGE_SECRET_ACCESS_KEY
-```
-
-The local launcher uses generic bucket `chekku-objects`. Adapter errors use fixed safe messages for collision, not-found, configuration, and availability failures; credentials, endpoints, provider bodies, headers, and request IDs are not exposed.
-
-## Garage MCP
-
-`garageMcpServer` has a fixed registry containing exactly:
-
-- `create_text_object`;
-- `get_text_object`;
-- `list_text_objects`;
-- `replace_text_object`;
-- `delete_object`.
-
-Tools expose generic UTF-8 text-object behavior only. They derive identity from trusted Mastra execution context at `context.agent.agentId`; agent identity is never accepted in model-generated input. Missing context fails before storage access.
-
-For agent ID `agentId` and validated relative key `key`, the physical object key is:
-
-```text
-agents/<base64url(agentId)>/<key>
-```
-
-Tools accept and return relative keys only. Relative keys must be non-empty, use forward slashes, contain no absolute path, backslash, traversal segment, control character, or empty segment, and fit within 512 UTF-8 bytes. List prefixes follow the same path rules but may be empty or end in one slash. Text payloads fit within 262,144 UTF-8 bytes. Lists fetch at most 101 objects and expose at most 100 keys with `truncated` set when more exist.
-
-`create_text_object` fails if the object exists. `replace_text_object` and `delete_object` require approval and fail for missing targets. Garage v2.3.0 does not implement destination conditional PUT/DELETE headers, so the adapter serializes same-key mutations and checks existence immediately within one adapter instance; external Garage writers remain outside that guarantee. Get and list are read-only. MCP annotations describe read-only, destructive, idempotent, and closed-world behavior.
 
 ## Conversation ownership
 
@@ -172,15 +146,12 @@ The browser uses `@mastra/client-js` with the Next.js origin and `/api/agent` pr
 
 - resolves the server-controlled local identity;
 - validates the requested path;
-- rejects stored-agent create/update payloads whose MCP configuration is not absent or exactly `garage: { tools: {} }`;
 - forwards requests to `AGENT_URL`;
 - attaches an optional service credential;
 - supports GET, POST, PUT, PATCH, DELETE, and HEAD;
 - streams the upstream response back to the browser.
 
 The current identity implementation is intentionally replaceable. Future OIDC must preserve the same resource and thread-ownership checks.
-
-Garage access remains server-side through hydrated agent tools. Browser components neither import `@chekku/storage` nor make direct S3/Garage requests.
 
 ## Public routes
 
@@ -205,7 +176,6 @@ Add future functionality through these boundaries:
 
 - code-defined agents in `agent/src/agents/`;
 - registered stored-agent tools in `agent/src/mastra/tools/`;
-- generic object-storage implementations in `storage/`;
 - provider-neutral gateway behavior in `agent/src/mastra/gateways/`;
 - server request context and future authentication seam;
 - routed client components and Mastra client helpers.

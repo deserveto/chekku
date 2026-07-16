@@ -5,9 +5,11 @@ const ROOT_CUSTOM_ROUTES = new Set([
   'models',
 ]);
 
-export function normalizeAgentProxyPath(
+export function buildAgentProxyUrl(
+  baseUrl: string,
   path: readonly string[],
-): string[] {
+  search: string,
+): string {
   if (path.length === 0) {
     throw new Error('Agent proxy path is required');
   }
@@ -24,17 +26,10 @@ export function normalizeAgentProxyPath(
     path.length === 1 &&
     ROOT_CUSTOM_ROUTES.has(path[0]);
 
-  return path[0] === 'api' || isRootCustomRoute
-    ? [...path]
-    : ['api', ...path];
-}
-
-export function buildAgentProxyUrl(
-  baseUrl: string,
-  path: readonly string[],
-  search: string,
-): string {
-  const normalizedPath = normalizeAgentProxyPath(path);
+  const normalizedPath =
+    path[0] === 'api' || isRootCustomRoute
+      ? path
+      : ['api', ...path];
 
   const base = baseUrl.replace(/\/+$/, '');
   const suffix = normalizedPath
