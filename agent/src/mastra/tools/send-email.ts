@@ -58,8 +58,10 @@ function toArray(value: string | string[] | undefined): string[] | undefined {
 }
 
 /**
- * Build the JSON body that Resend's `/emails` endpoint expects. Pure function
- * so tests can verify shape without going to the network.
+ * Build the JSON body that Resend's `/emails` endpoint expects. Performs no
+ * network I/O, but is not pure: when `from` is omitted it falls back to the
+ * `RESEND_FROM_EMAIL` env var via `defaultFrom()`. Pass `from` explicitly for
+ * deterministic output.
  */
 export function buildResendEmailBody(input: SendEmailInput): Record<string, unknown> {
   const { to, subject, html, text, cc, bcc, replyTo, from } = input;

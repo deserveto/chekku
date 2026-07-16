@@ -1,7 +1,7 @@
 import { Agent, type AgentConfig, type ToolsInput } from '@mastra/core/agent';
 import type { ChannelHandler } from '@mastra/core/channels';
 import { createTelegramAdapter } from '@chat-adapter/telegram';
-import type { Chat, Message, Thread } from 'chat';
+import type { Channel, Chat, Message, Thread } from 'chat';
 import { Memory } from '@mastra/memory';
 
 import { gatewayCompatibilityProcessor } from '../mastra/processors/gateway-compatibility.js';
@@ -109,8 +109,18 @@ export function setActiveRole(resourceId: string | undefined, roleId: string): S
 // 'auto' / 'webhook' for production (see docs/OPERATIONS.md). The bot token is
 // read from TELEGRAM_BOT_TOKEN by the adapter; nothing secrets-shaped lives in
 // source.
+//
+// Telegram is optional (see README): when TELEGRAM_BOT_TOKEN is unset the
+// adapter is not constructed and the agent registers without a channel, so the
+// server still boots. Building the adapter eagerly at module load would
+// otherwise throw "botToken is required" and take down the whole runtime.
 // ---------------------------------------------------------------------------
 const telegramMode = (process.env.TELEGRAM_MODE as 'polling' | 'webhook' | 'auto' | undefined) ?? 'polling';
+const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN?.trim();
+export const isTelegramConfigured = Boolean(telegramBotToken);
+const telegramAdapter = telegramBotToken
+  ? createTelegramAdapter({ mode: telegramMode })
+  : undefined;
 
 // ---------------------------------------------------------------------------
 // Slash command handling (shared by DM + mention)
@@ -138,10 +148,11 @@ export function normalizeCommandWord(word: string): string {
 }
 
 /**
- * Resolve a slash command to a response string, or `null` to fall through to
- * the agent. Shared by the onDirectMessage handler (platforms that pass
- * commands through) and the Chat SDK's onSlashCommand handler (Telegram, which
- * intercepts `/command` messages as bot_command entities before onDirectMessage).
+ * Resolve a known slash command to a response string, or `null` for unknown
+ * commands. Returns `null` for unknown commands; the caller decides the
+ * fallback (both wired callers below post a canned "Unknown command" reply via
+ * {@link unknownCommandReply}, so the behavior is consistent across the
+ * onDirectMessage path and the Chat SDK's onSlashCommand path).
  */
 export function resolveCommandResponse(
   command: string,
@@ -177,6 +188,16 @@ export function resolveCommandResponse(
 }
 
 /**
+ * Canned reply for an unrecognized slash command. Single source of truth so the
+ * onDirectMessage and onSlashCommand paths stay consistent — unknown commands
+ * never fall through silently or fire an LLM turn; they tell the user what went
+ * wrong and point them at /help.
+ */
+export function unknownCommandReply(command: string): string {
+  return `Unknown command "${command}". Type /help for available commands.`;
+}
+
+/**
  * Handler for platforms that pass `/command` messages through to onDirectMessage
  * (i.e. platforms that do NOT intercept them as native slash commands). On
  * Telegram this only sees non-command messages, because the adapter routes
@@ -204,8 +225,9 @@ export const handleSocialSlashCommands: ChannelHandler = async (
     return;
   }
 
-  // Unknown slash command — fall through to the agent so it can respond.
-  await defaultHandler(thread, message);
+  // Unknown slash command — post the canned reply so the user is told it is
+  // unrecognized and pointed at /help. Matches the onSlashCommand path.
+  await thread.post(unknownCommandReply(cmd));
 };
 
 /**
@@ -213,6 +235,11 @@ export const handleSocialSlashCommands: ChannelHandler = async (
  * any platform whose adapter intercepts `/command` messages as native slash
  * commands): without this, those messages are silently dropped because they
  * never reach the onDirectMessage handler above.
+ *
+ * Known commands are answered inline; unknown commands get the canned
+ * {@link unknownCommandReply} so the user is told the command is unrecognized
+ * and pointed at /help. This matches the onDirectMessage path, so behavior is
+ * consistent across both entry points.
  *
  * Called from `agent/src/mastra/index.ts` once `socialMediaAgent.getChannels().sdk`
  * is available.
@@ -223,26 +250,32 @@ export function registerSocialSlashCommands(sdk: Chat): void {
     const arg = (event.text ?? '').trim();
     const command = normalizeCommandWord(event.command);
 
-    const response = resolveCommandResponse(command, arg, resourceId)
-      ?? `Unknown command "${event.command}". Type /help for available commands.`;
-
-    // Telegram's polling loop fires processSlashCommand without await, then
-    // immediately opens a new getUpdates long-poll — so our sendMessage can
-    // race with that connection on flaky networks. Retry to ride out transient
-    // ConnectTimeoutError / fetch-failed failures.
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        await event.channel.post(response);
-        return;
-      } catch (err) {
-        if (attempt < 2) {
-          await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
-          continue;
-        }
-        throw err;
-      }
-    }
+    const response = resolveCommandResponse(command, arg, resourceId) ?? unknownCommandReply(command);
+    await postWithRetry(event.channel, response);
   });
+}
+
+/**
+ * Post a message to a channel with a short retry loop.
+ *
+ * Telegram's polling loop fires processSlashCommand without await, then
+ * immediately opens a new getUpdates long-poll — so our sendMessage can race
+ * with that connection on flaky networks. Retry to ride out transient
+ * ConnectTimeoutError / fetch-failed failures.
+ */
+async function postWithRetry(channel: Channel, text: string): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await channel.post(text);
+      return;
+    } catch (err) {
+      if (attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -282,26 +315,50 @@ How you work:
 // ---------------------------------------------------------------------------
 // Agent
 // ---------------------------------------------------------------------------
+
+/**
+ * Whether a Social Media Agent tool call must be approved before it runs.
+ *
+ * Sending email is a consequential, irreversible external action, so it always
+ * requires approval — on the web studio that surfaces as the Approve/Decline
+ * buttons; over Telegram it surfaces as an inline-keyboard approval card (the
+ * Mastra channel integration posts the card and resumes the run on tap).
+ *
+ * `toolName` is the tool's registration key in the agent's `tools` map
+ * (`sendEmailTool`), not the tool's `id` field (`send-email`).
+ */
+export function shouldApproveSocialTool(toolName: string): boolean {
+  return toolName === 'sendEmailTool';
+}
+
 const socialMediaAgentConfig: AgentConfig<string, ToolsInput, undefined, ProviderContext> = {
   id: 'social-media-agent',
   name: 'Chekku Social',
   description:
-    'Generic, role-switchable social media assistant. Drafts, repurposes, and plans posts for X, Instagram, LinkedIn, and TikTok. Reachable over Telegram.',
+    'Generic, role-switchable social media assistant. Drafts, repurposes, and plans posts for X, Instagram, LinkedIn, and TikTok. Reachable over Telegram when TELEGRAM_BOT_TOKEN is configured.',
   model: () => getServerModel(),
   requestContextSchema: providerContextSchema,
   memory: new Memory(),
   tools: { calculatorTool, getCurrentTimeTool, sendEmailTool },
-  channels: {
-    userName: 'Chekku Social',
-    adapters: {
-      telegram: createTelegramAdapter({ mode: telegramMode }),
-    },
-    handlers: {
-      onDirectMessage: handleSocialSlashCommands,
-      onMention: handleSocialSlashCommands,
-    },
-  },
+  // Channels are only wired when Telegram is configured, so the agent (and the
+  // server) boot fine without TELEGRAM_BOT_TOKEN. With no adapter there is no
+  // Chat SDK to register slash-command handlers on either (see index.ts).
+  ...(telegramAdapter
+    ? {
+        channels: {
+          userName: 'Chekku Social',
+          adapters: { telegram: telegramAdapter },
+          handlers: {
+            onDirectMessage: handleSocialSlashCommands,
+            onMention: handleSocialSlashCommands,
+          },
+        },
+      }
+    : {}),
   inputProcessors: [gatewayCompatibilityProcessor],
+  defaultOptions: () => ({
+    requireToolApproval: ({ toolName }) => shouldApproveSocialTool(toolName),
+  }),
   instructions: ({ requestContext }) =>
     buildInstructions(getActiveRole(extractResourceId(requestContext))),
 };

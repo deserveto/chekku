@@ -9,6 +9,38 @@ import { sendEmailTool } from '../mastra/tools/send-email.js';
 import { getServerModel } from '../providers/model.js';
 import { providerContextSchema, type ProviderContext } from './context.js';
 
+// Browser interaction tools gated by the per-session access mode. The access
+// mode is browser-specific (the studio toggle says "Browser actions"); it does
+// not cover other consequential tools such as email.
+const QA_WEB_APPROVAL_BROWSER_TOOLS = [
+  'browser_click',
+  'browser_type',
+  'browser_select',
+  'browser_press',
+  'browser_dialog',
+  'browser_drag',
+] as const;
+
+/**
+ * Decide whether a QA Web Agent tool call must be approved before it runs.
+ *
+ * Sending email is always a consequential, irreversible external action, so it
+ * requires approval regardless of the per-session browser access mode — the
+ * agent's own instructions require approval for "any consequential external
+ * action". Browser interaction tools follow the access mode selected in the
+ * studio ('approval' asks first; 'full' runs without approval). Everything
+ * else (e.g. calculator, current-time) runs freely.
+ *
+ * Note: `toolName` is the tool's registration key in the agent's `tools` map
+ * (e.g. `sendEmailTool`), not the tool's `id` field (`send-email`). Mastra
+ * looks tools up by that key, so the approval gate must match the key.
+ */
+export function shouldApproveQaWebTool(browserAccess: unknown, toolName: string): boolean {
+  if (toolName === 'sendEmailTool') return true;
+  if (browserAccess === 'full') return false;
+  return (QA_WEB_APPROVAL_BROWSER_TOOLS as readonly string[]).includes(toolName);
+}
+
 const qaWebAgentConfig: AgentConfig<string, ToolsInput, undefined, ProviderContext> = {
   id: 'qa-web-agent',
   name: 'QA Web Agent',
@@ -22,18 +54,8 @@ const qaWebAgentConfig: AgentConfig<string, ToolsInput, undefined, ProviderConte
   memory: new Memory(),
   defaultOptions: ({ requestContext }) => ({
     maxSteps: 80,
-    requireToolApproval:
-      requestContext.get('browserAccess') === 'full'
-        ? false
-        : ({ toolName }) =>
-            [
-              'browser_click',
-              'browser_type',
-              'browser_select',
-              'browser_press',
-              'browser_dialog',
-              'browser_drag',
-            ].includes(toolName),
+    requireToolApproval: ({ toolName }) =>
+      shouldApproveQaWebTool(requestContext.get('browserAccess'), toolName),
   }),
   instructions: `You are QA Web Agent, a careful browser QA delegate.
 

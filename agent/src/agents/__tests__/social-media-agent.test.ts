@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 import {
   SOCIAL_ROLES,
@@ -11,8 +11,13 @@ import {
   listRolesText,
   buildInstructions,
   HELP_TEXT,
+  unknownCommandReply,
+  isTelegramConfigured,
+  registerSocialSlashCommands,
+  shouldApproveSocialTool,
 } from '../social-media-agent.js';
 import { socialMediaAgent } from '../social-media-agent.js';
+import type { Chat, SlashCommandEvent } from 'chat';
 
 describe('social-media-agent (Telegram-backed social assistant)', () => {
   it('has id social-media-agent', () => {
@@ -155,8 +160,16 @@ describe('resolveCommandResponse', () => {
     expect(getActiveRole(resourceId).id).toBe('general');
   });
 
-  it('returns null for unknown commands so they fall through to the agent', () => {
+  it('returns null for unknown commands (caller posts the canned reply)', () => {
     expect(resolveCommandResponse('/make-coffee', '', resourceId)).toBeNull();
+  });
+});
+
+describe('unknownCommandReply', () => {
+  it('names the unrecognized command and points at /help', () => {
+    const reply = unknownCommandReply('/make-coffee');
+    expect(reply).toContain('Unknown command "/make-coffee"');
+    expect(reply).toContain('/help');
   });
 });
 
@@ -184,5 +197,103 @@ describe('buildInstructions', () => {
       expect(instructions).toContain('draft and plan only');
       expect(instructions).toContain('Chekku Social');
     }
+  });
+});
+
+describe('shouldApproveSocialTool (email approval gate)', () => {
+  it('requires approval for sendEmailTool', () => {
+    // toolName is the registration key, not the tool id.
+    expect(shouldApproveSocialTool('sendEmailTool')).toBe(true);
+  });
+
+  it('does not gate drafting/planning tools', () => {
+    expect(shouldApproveSocialTool('calculatorTool')).toBe(false);
+    expect(shouldApproveSocialTool('getCurrentTimeTool')).toBe(false);
+  });
+
+  it('does not gate unknown tools', () => {
+    expect(shouldApproveSocialTool('somethingElse')).toBe(false);
+  });
+});
+
+describe('Telegram optional boot (issue #1 regression)', () => {
+  beforeEach(async () => {
+    vi.resetModules();
+  });
+
+  it('imports without throwing and omits channels when TELEGRAM_BOT_TOKEN is unset', async () => {
+    vi.stubEnv('TELEGRAM_BOT_TOKEN', '');
+    const mod = await import('../social-media-agent.js');
+    expect(mod.socialMediaAgent.id).toBe('social-media-agent');
+    expect(mod.isTelegramConfigured).toBe(false);
+    expect(mod.socialMediaAgent.getChannels()).toBeNull();
+    vi.unstubAllEnvs();
+  });
+
+  it('wires the Telegram channel when TELEGRAM_BOT_TOKEN is set', async () => {
+    vi.stubEnv('TELEGRAM_BOT_TOKEN', 'test-token');
+    const mod = await import('../social-media-agent.js');
+    expect(mod.isTelegramConfigured).toBe(true);
+    expect(mod.socialMediaAgent.getChannels()).not.toBeNull();
+    vi.unstubAllEnvs();
+  });
+
+  it('exposes isTelegramConfigured as a boolean', () => {
+    expect(typeof isTelegramConfigured).toBe('boolean');
+  });
+});
+
+describe('registerSocialSlashCommands routing (issue #3 regression)', () => {
+  type Handler = (event: SlashCommandEvent) => Promise<void>;
+
+  function createMockSdk() {
+    let handler: Handler | undefined;
+    const sdk = {
+      onSlashCommand(h: Handler) {
+        handler = h;
+      },
+    };
+    return {
+      sdk: sdk as unknown as Chat,
+      dispatch(event: SlashCommandEvent) {
+        if (!handler) throw new Error('no handler registered');
+        return handler(event);
+      },
+    };
+  }
+
+  function mockEvent(command: string, text = '') {
+    const post = vi.fn().mockResolvedValue(undefined);
+    const event = {
+      adapter: { name: 'telegram' },
+      user: { userId: '42' },
+      channel: { id: 'tg-chat-1', post },
+      command,
+      text,
+    } as unknown as SlashCommandEvent;
+    return { event, post };
+  }
+
+  it('posts the known-command reply', async () => {
+    const { sdk, dispatch } = createMockSdk();
+    registerSocialSlashCommands(sdk);
+
+    const { event, post } = mockEvent('/help');
+    await dispatch(event);
+
+    expect(post).toHaveBeenCalledWith(HELP_TEXT);
+  });
+
+  it('posts the canned "Unknown command" reply for an unknown command', async () => {
+    // Issue #3: unknown slash commands must not be silently dropped nor fire an
+    // LLM turn. Both wired paths (onDirectMessage + onSlashCommand) post the
+    // canned reply so the user is told it is unrecognized and pointed at /help.
+    const { sdk, dispatch } = createMockSdk();
+    registerSocialSlashCommands(sdk);
+
+    const { event, post } = mockEvent('/make-coffee', 'beans');
+    await dispatch(event);
+
+    expect(post).toHaveBeenCalledWith(unknownCommandReply('/make-coffee'));
   });
 });

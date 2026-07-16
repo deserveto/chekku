@@ -73,6 +73,52 @@ function messageFromMemory(
   return { ...value };
 }
 
+type ChekkuAgentClient = ReturnType<typeof mastraClient.getAgent>;
+
+interface ApprovalResumeResult {
+  text: string;
+  toolResult?: { result?: unknown; output?: unknown };
+}
+
+/**
+ * Resume a suspended tool-approval run with the non-streaming generate
+ * variants and return the completed run's final text + matching tool result.
+ *
+ * The streaming resume (`approveToolCall`/`declineToolCall`) emits a
+ * tool-result chunk without a preceding tool-call chunk, which makes
+ * `@mastra/client-js`'s stream pipeline throw "tool_result must be preceded by
+ * a tool_call". The generate variants sidestep that by returning the whole
+ * completed run in a single response. Kept at module scope so it stays out of
+ * the component's render purity analysis.
+ */
+async function resumeApprovalGenerate(
+  agent: ChekkuAgentClient,
+  runId: string,
+  toolCallId: string,
+  approved: boolean,
+  requestContext: RequestContext,
+): Promise<ApprovalResumeResult> {
+  const result = approved
+    ? await agent.approveToolCallGenerate({ runId, toolCallId, requestContext })
+    : await agent.declineToolCallGenerate({ runId, toolCallId, requestContext });
+
+  const output = (result ?? {}) as {
+    text?: string;
+    toolResults?: Array<{
+      toolCallId?: string;
+      result?: unknown;
+      output?: unknown;
+    }>;
+  };
+
+  return {
+    text: (output.text ?? '').trim(),
+    toolResult: output.toolResults?.find(
+      (item) => item?.toolCallId === toolCallId,
+    ),
+  };
+}
+
 export function ChatStudio({
   resourceId,
   initialAgentId,
@@ -270,11 +316,20 @@ export function ChatStudio({
     assistantId: string,
   ) => {
     let finished = false;
+    // A run that suspends to request tool approval ends without a `finish`
+    // chunk. Treat seeing a `tool-call-approval` chunk as a valid end state so
+    // the assistant bubble isn't mislabelled "Generation ended before a final
+    // response was produced." while the Approve/Decline buttons are shown.
+    let awaitingApproval = false;
     const seen = new Set<string>();
 
     await stream.processDataStream({
       onChunk: (chunk) => {
         const payload = readChunkPayload(chunk);
+
+        if (chunk.type === 'tool-call-approval') {
+          awaitingApproval = true;
+        }
 
         if (
           chunk.type === 'text-delta' &&
@@ -348,7 +403,7 @@ export function ChatStudio({
       },
     });
 
-    if (!finished) {
+    if (!finished && !awaitingApproval) {
       setMessages((current) =>
         current.map((message) =>
           message.id === assistantId && !message.content
@@ -379,7 +434,10 @@ export function ChatStudio({
     }
 
     const firstTurn = messages.length === 0;
-    // Timestamp is intentionally captured at the user-action boundary.
+    // Timestamp + id are intentionally captured at the user-action boundary
+    // (this runs in the submit handler, not during render), so the
+    // react-hooks/purity rule does not apply here.
+    // eslint-disable-next-line react-hooks/purity
     const now = Date.now();
     const assistantId = crypto.randomUUID();
 
@@ -468,19 +526,45 @@ export function ChatStudio({
     setIsStreaming(true);
 
     try {
-      const stream = approved
-        ? await agent.approveToolCall({
-            runId: event.runId,
-            toolCallId: event.toolCallId,
-            requestContext: requestContext(),
-          })
-        : await agent.declineToolCall({
-            runId: event.runId,
-            toolCallId: event.toolCallId,
-            requestContext: requestContext(),
-          });
+      const { text, toolResult } = await resumeApprovalGenerate(
+        agent,
+        event.runId,
+        event.toolCallId,
+        approved,
+        requestContext(),
+      );
 
-      await consumeStream(stream, event.messageId);
+      upsertTool({
+        ...event,
+        status: approved ? 'complete' : 'declined',
+        ...(toolResult
+          ? { result: toolResult.result ?? toolResult.output }
+          : {}),
+      });
+
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === event.messageId
+            ? {
+                ...message,
+                error: undefined,
+                content: text || message.content,
+              }
+            : message,
+        ),
+      );
+    } catch (reason) {
+      const detail =
+        reason instanceof Error
+          ? reason.message
+          : 'Could not resume the agent after approval.';
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === event.messageId
+            ? { ...message, error: true, content: detail }
+            : message,
+        ),
+      );
     } finally {
       setIsStreaming(false);
     }
