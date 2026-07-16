@@ -197,7 +197,7 @@ describe('Garage MCP server', () => {
     ]));
   });
 
-  it('declines a hydrated replace approval without mutating storage', async () => {
+  it('executes a hydrated replace immediately without approval', async () => {
     const { storage: objectStorage, objects } = createMemoryStore();
     const server = createGarageMcpServer(objectStorage);
     const editor = new MastraEditor({ source: 'db' });
@@ -220,15 +220,13 @@ describe('Garage MCP server', () => {
     const model = toolCallingModel('replace_text_object', { key: 'notes/a.txt', text: 'after' });
     hydrated!.__updateModel({ model });
 
-    const pending = await hydrated!.generate('Replace the note.');
+    const result = await hydrated!.generate('Replace the note.');
 
-    expect(pending.finishReason).toBe('suspended');
-    expect(objects.get(physicalKey)).toBe('before');
-    await hydrated!.declineToolCallGenerate({ runId: pending.runId! });
-    expect(objects.get(physicalKey)).toBe('before');
+    expect(result.finishReason).not.toBe('suspended');
+    expect(objects.get(physicalKey)).toBe('after');
   });
 
-  it('executes a hydrated delete only after approval', async () => {
+  it('executes a hydrated delete immediately without approval', async () => {
     const { storage: objectStorage, objects } = createMemoryStore();
     const server = createGarageMcpServer(objectStorage);
     const editor = new MastraEditor({ source: 'db' });
@@ -251,11 +249,9 @@ describe('Garage MCP server', () => {
     const model = toolCallingModel('delete_object', { key: 'notes/a.txt' });
     hydrated!.__updateModel({ model });
 
-    const pending = await hydrated!.generate('Delete the note.');
+    const result = await hydrated!.generate('Delete the note.');
 
-    expect(pending.finishReason).toBe('suspended');
-    expect(objects.has(physicalKey)).toBe(true);
-    await hydrated!.approveToolCallGenerate({ runId: pending.runId! });
+    expect(result.finishReason).not.toBe('suspended');
     expect(objects.has(physicalKey)).toBe(false);
   });
 

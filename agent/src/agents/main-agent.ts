@@ -1,6 +1,6 @@
 import { Agent, type AgentConfig, type ToolsInput } from '@mastra/core/agent';
-import { Memory } from '@mastra/memory';
 import { providerContextSchema, type ProviderContext } from './context.js';
+import { createAgentContextLimiter, createAgentMemory, createCharBudgetGuard } from '../mastra/processors/context-limit.js';
 import { getServerModel } from '../providers/model.js';
 
 const mainAgentConfig: AgentConfig<string, ToolsInput, undefined, ProviderContext> = {
@@ -9,7 +9,8 @@ const mainAgentConfig: AgentConfig<string, ToolsInput, undefined, ProviderContex
   description: 'A general-purpose AI assistant for everyday tasks.',
   model: () => getServerModel(),
   requestContextSchema: providerContextSchema,
-  memory: new Memory(),
+  memory: createAgentMemory(),
+  inputProcessors: [createAgentContextLimiter(), createCharBudgetGuard()],
   instructions: `You are Chekku Assistant, a general-purpose AI assistant inside Chekku.
 Help users understand information, answer questions, draft content, reason through problems, and assist with everyday tasks.
 Be clear, accurate, and practical. Ask for clarification only when the request cannot be completed safely or correctly without it.

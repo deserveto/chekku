@@ -1,6 +1,6 @@
 import { Agent, type AgentConfig, type ToolsInput } from '@mastra/core/agent';
-import { Memory } from '@mastra/memory';
 
+import { createAgentContextLimiter, createAgentMemory, createCharBudgetGuard } from '../mastra/processors/context-limit.js';
 import { getServerModel } from '../providers/model.js';
 import {
   listPmReportsFromGarageTool,
@@ -71,7 +71,8 @@ const pmAgentConfig: AgentConfig<string, ToolsInput, undefined, ProviderContext>
     list_pm_reports_from_garage: listPmReportsFromGarageTool,
     view_pm_report_from_garage: viewPmReportFromGarageTool,
   },
-  memory: new Memory(),
+  memory: createAgentMemory(),
+  inputProcessors: [createAgentContextLimiter(), createCharBudgetGuard()],
   defaultOptions: { maxSteps: 12 },
   instructions,
 };

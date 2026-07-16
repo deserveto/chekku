@@ -73,6 +73,7 @@ A task is not complete until affected tests pass. Before finalizing any reposito
 - Garage application configuration uses only `GARAGE_ENDPOINT`, `GARAGE_REGION`, `GARAGE_BUCKET`, `GARAGE_ACCESS_KEY_ID`, and `GARAGE_SECRET_ACCESS_KEY`.
 - Generated `storage/.env.local`, `storage/.garage/`, and `agent/.env.development` stay ignored. Never expose their secrets in logs, docs, errors, or commits.
 - Conversation history uses Mastra Memory, not custom conversation tables.
+- Every agent must bound its context to prevent overflow: use `createAgentMemory()` (sets `lastMessages`) and add `createAgentContextLimiter()` (a `TokenLimiterProcessor`) to `inputProcessors`, both from `agent/src/mastra/processors/context-limit.ts`. Never use bare `new Memory()` — large tool outputs (screen/HTML dumps) can exceed the model window across turns or within a single multi-step turn; the token limiter prunes both.
 - A thread ID must use this format:
 
 ```text
@@ -111,8 +112,21 @@ LLM_MODELS
 
 - `qa-web-agent` must keep `memory: new Memory()` because browser context processing requires active Memory context.
 - Keep the gateway compatibility processor unless tests prove it is no longer needed.
-- Browser actions that submit forms, purchase, publish, delete, or cause external consequences require approval.
+- No tool requires approval; browser actions (form submit, purchase, publish, delete) run directly.
 - Do not add endpoint-specific discovery tools to the QA agent. Model discovery belongs in the gateway and `/models` route.
+
+### QA Android Agent
+
+- Keep `qa-android-agent` code-defined with Mastra Memory and the gateway compatibility processor.
+- Bind a trusted, env-gated `MCPClient` to `maestro mcp` privately on this agent only; do not add it to the global `mcpServers` (which stays fixed to `garage`).
+- Expose only the explicit Maestro tool allowlist (`list_devices`, `inspect_screen`, `take_screenshot`, `cheat_sheet`, `run`); never expose `run_flow_files`, cloud tools, or `open_maestro_viewer`. Never auto-attach every tool from `listTools()`.
+- No tool requires approval; `maestro_run` (flow execution, incl. inline/generated YAML) and the curated `run_maestro_flow` run directly. There are no granular single-action tools.
+- A read-only `current_app` tool (adb-backed via `ADB_PATH`) returns the foreground app's package so the agent can self-serve the `appId` instead of asking; it never mutates the device.
+- On Windows, route the Maestro `.bat`/`.cmd` command through `cmd.exe /c` (Node blocks direct `.bat` spawn since CVE-2024-27980).
+- The curated flow runner accepts logical `{ suite, flow }` names only; reject absolute paths, `..`, backslashes, caller-supplied extensions, and non-regular files; resolve real-path containment after symlinks.
+- Run flows via `execFile` with an argv array (never a shell string), `--format junit --output` and `--test-output-dir` into `artifacts/maestro/<runId>/`, with `MAESTRO_TIMEOUT_MS`, bounded output, and child cleanup.
+- Never report a test Passed unless Maestro exited 0.
+- `MAESTRO_ENABLED` defaults to `false`; the server boots normally without Maestro.
 
 ### Social Media Agent
 
@@ -120,7 +134,7 @@ LLM_MODELS
 - Preserve `/help`, `/roles`, `/role`, and `/switch` registration after `AgentChannels` initialization.
 - Telegram uses `TELEGRAM_BOT_TOKEN`, `TELEGRAM_MODE`, optional `TELEGRAM_BOT_USERNAME`, and optional `TELEGRAM_WEBHOOK_SECRET_TOKEN` only.
 - Email uses server-only `RESEND_API_KEY` and `RESEND_FROM_EMAIL`; never expose either to browser code.
-- Preserve approval flow for outbound email and consequential channel actions.
+- Outbound email and channel actions run directly (no approval gate).
 
 ### Client proxy and identity
 
@@ -140,7 +154,7 @@ LLM_MODELS
 - Derive identity only from trusted `context.agent.agentId`; reject missing context before storage access and never accept agent IDs in tool input.
 - Physical keys use `agents/<base64url-agent-id>/<validated-relative-key>`. Expose relative keys only.
 - Enforce 512 UTF-8-byte relative keys, 262,144 UTF-8-byte text, and 100-key public lists with a `truncated` flag.
-- Keep create conditional. Require approval for replace and delete. Preserve accurate MCP annotations.
+- Keep create conditional. Replace and delete run directly (no approval gate). Preserve accurate MCP annotations.
 - Return fixed actionable storage errors without credentials, endpoints, headers, raw provider responses, or request IDs.
 
 ### PM reports
@@ -179,7 +193,7 @@ Add regression tests for behavior changes, especially:
 - sidebar and route structure;
 - shared Garage storage, namespace isolation, PM reports/APIs/pages/tables, MCP hydration, and launcher structure;
 - QA agent Memory and browser integration.
-- Social agent roles, Telegram slash registration, and email approval behavior.
+- Social agent roles, Telegram slash registration, and email delivery behavior.
 
 Tests use Vitest. Keep tests alongside the relevant module or in the existing `__tests__` folder. Do not add a second test runner for new tests.
 

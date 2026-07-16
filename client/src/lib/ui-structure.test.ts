@@ -14,6 +14,10 @@ const chatStudio = readFileSync(
   new URL('../components/chat/chat-studio.tsx', import.meta.url),
   'utf8',
 );
+const agentCatalogSource = readFileSync(
+  new URL('../components/agents/agent-catalog-page.tsx', import.meta.url),
+  'utf8',
+);
 const agentBuilder = readFileSync(
   new URL('../components/agents/agent-builder-page.tsx', import.meta.url),
   'utf8',
@@ -102,5 +106,9 @@ describe('requested UI structure', () => {
   it('reserves the PM built-in id in the shared identity set', () => {
     expect(types).toContain("export const PM_AGENT_ID = 'pm-agent'");
     expect(types).toMatch(/RESERVED_AGENT_IDS[\s\S]*PM_AGENT_ID/);
+  });
+
+  it('renders an Android glyph for qa-android-agent in the catalog', () => {
+    expect(agentCatalogSource).toContain("agent.id === 'qa-android-agent' ? '▷'");
   });
 });

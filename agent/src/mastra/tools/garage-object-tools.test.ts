@@ -172,8 +172,8 @@ describe('Garage object tools', () => {
     expect(list.mcp?.annotations).toEqual(annotations.read);
     expect(replace.mcp?.annotations).toEqual(annotations.destructive);
     expect(remove.mcp?.annotations).toEqual(annotations.destructive);
-    expect(replace.requireApproval).toBe(true);
-    expect(remove.requireApproval).toBe(true);
+    expect(replace.requireApproval).not.toBe(true);
+    expect(remove.requireApproval).not.toBe(true);
     expect(create.requireApproval).not.toBe(true);
     expect(get.requireApproval).not.toBe(true);
     expect(list.requireApproval).not.toBe(true);

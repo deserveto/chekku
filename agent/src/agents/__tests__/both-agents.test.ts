@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mainAgent } from '../main-agent.js';
 import { pmAgent } from '../pm-agent.js';
 import { qaWebAgent } from '../qa-web-agent.js';
+import { qaAndroidAgent } from '../qa-android-agent.js';
 
 describe('main-agent (general Chekku Assistant)', () => {
   it('has id main-agent', () => {
@@ -120,4 +121,29 @@ it('qa-web-agent has Mastra memory for browser context', async () => {
   const memory = await qaWebAgent.getMemory();
 
   expect(memory).toBeDefined();
+});
+
+describe('qa-android-agent (Maestro Android QA)', () => {
+  it('has id qa-android-agent and name QA Android Agent', () => {
+    expect(qaAndroidAgent.id).toBe('qa-android-agent');
+    expect(qaAndroidAgent.name).toBe('QA Android Agent');
+  });
+
+  it('has Mastra memory', async () => {
+    expect(await qaAndroidAgent.getMemory()).toBeDefined();
+  });
+
+  it('binds run_maestro_flow, calculator, and current-time tools', async () => {
+    const tools = await qaAndroidAgent.listTools();
+    expect(Object.keys(tools).sort()).toEqual(
+      expect.arrayContaining(['calculatorTool', 'getCurrentTimeTool', 'run_maestro_flow']),
+    );
+  });
+});
+
+describe('agent differentiation (all five agents)', () => {
+  it('has mutually distinct ids', () => {
+    const ids = [mainAgent.id, pmAgent.id, qaWebAgent.id, qaAndroidAgent.id];
+    expect(new Set(ids).size).toBe(ids.length);
+  });
 });

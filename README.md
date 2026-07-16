@@ -21,6 +21,7 @@ Chekku provides a focused interface for managing agents, creating agent-specific
 - **Agent-isolated history** — each agent owns its own Memory threads and conversation list.
 - **OpenAI-compatible models** — connect Rafiqspace LLM, LiteLLM, vLLM, or another compatible endpoint with server-only credentials.
 - **Browser QA agent** — navigate and inspect live websites using Mastra Agent Browser.
+- **Android QA agent** — drive Android apps through Maestro on a local emulator or device with allowlisted tools (flows run directly, no approval gate).
 - **PM Agent reports** — analyze weekly reports, save risk reviews in Garage, and browse linked report details.
 - **Social media agent** — role-switchable content assistant reachable over Telegram (X, Instagram, LinkedIn, TikTok roles).
 - **Hosted-vLLM compatibility** — final prompt normalization keeps system messages at the beginning.
@@ -42,6 +43,7 @@ Next.js client :3000
   │     ├── main-agent
   │     ├── pm-agent ──► PM-Agent-only report tools ──┐
   │     ├── qa-web-agent                              │
+  │     ├── qa-android-agent (Maestro, optional)      │
   │     ├── social-media-agent (Telegram channel)     │
   │     ├── @mastra/editor stored agents              │
   │     ├── Mastra Memory                             │
@@ -107,9 +109,10 @@ Never expose `LLM_API_KEY` through a `NEXT_PUBLIC_*` variable or commit `agent/.
 #### Optional integrations
 
 - **Telegram (social-media-agent)** — create a bot with [@BotFather](https://t.me/BotFather), then set `TELEGRAM_BOT_TOKEN`. Keep `TELEGRAM_MODE=polling` for local dev; switch to `webhook` with `TELEGRAM_WEBHOOK_SECRET_TOKEN` for production.
-- **Email outbound (send-email tool)** — sign up at [resend.com](https://resend.com), set `RESEND_API_KEY`, and (for production) a Resend-verified sender in `RESEND_FROM_EMAIL`. The default `onboarding@resend.dev` sender only delivers to the account owner. Every delivery requires approval.
+- **Email outbound (send-email tool)** — sign up at [resend.com](https://resend.com), set `RESEND_API_KEY`, and (for production) a Resend-verified sender in `RESEND_FROM_EMAIL`. The default `onboarding@resend.dev` sender only delivers to the account owner. Deliveries run directly (no approval gate).
+- **Android QA (qa-android-agent)** — install the [Maestro CLI](https://maestro.mobile.dev/) and ADB, start an emulator or connect a device, then set `MAESTRO_ENABLED=true`. Chekku, Maestro, ADB, and the device must run on the same machine.
 
-Both are optional; Chekku boots fine without them. The `social-media-agent` binds the send-email tool and (when configured) the Telegram channel; stored agents can opt in from the builder's **Capabilities** section.
+All three are optional; Chekku boots fine without them. The `social-media-agent` binds the send-email tool and (when configured) the Telegram channel; stored agents can opt in from the builder's **Capabilities** section.
 
 ### 3. Configure the client
 
@@ -161,6 +164,12 @@ Local file: `agent/.env`
 | `TELEGRAM_BOT_USERNAME` | No | empty | Override the bot username. Optional. |
 | `RESEND_API_KEY` | Conditional | empty | Resend API key. Required when an agent uses the `send-email` tool. |
 | `RESEND_FROM_EMAIL` | No | `Chekku <onboarding@resend.dev>` | Default sender. Use a Resend-verified domain to deliver beyond the account owner. |
+| `MAESTRO_ENABLED` | No | `false` | Enable the QA Android Agent's Maestro integration. |
+| `MAESTRO_COMMAND` | No | `maestro` | Maestro CLI binary. |
+| `MAESTRO_WORKSPACE` | No | `../maestro` | Directory holding `smoke/`, `regression/`, `shared/` flows (relative to the agent cwd). |
+| `MAESTRO_ARTIFACT_DIR` | No | `../artifacts/maestro` | Where run reports/screenshots are written. |
+| `MAESTRO_TIMEOUT_MS` | No | `120000` | Per-flow timeout in milliseconds. |
+| `ADB_PATH` | No | `adb` | adb binary used by the read-only `current_app` tool (foreground-app detection). |
 
 ### Client
 
@@ -230,7 +239,7 @@ These rules keep the repository from drifting back into parallel implementations
 9. Garage identity comes from trusted Mastra execution context, never tool input; browser code never accesses Garage directly.
 10. PM report semantics stay outside Garage MCP in code-defined `pm-agent` tools and the shared report repository.
 11. PM storage always binds to fixed `pm-agent`; persisted metadata contains relative `pm-reports/...` keys only.
-12. Social Media Agent keeps Telegram slash registration and approval-gated email delivery in the single Mastra runtime.
+12. Social Media Agent keeps Telegram slash registration and direct email delivery in the single Mastra runtime.
 
 ## Garage MCP
 
@@ -241,8 +250,8 @@ Garage MCP exposes exactly five generic tools:
 - `create_text_object` rejects a key that already exists.
 - `get_text_object` reads an existing UTF-8 text object.
 - `list_text_objects` returns at most 100 relative keys plus a `truncated` flag.
-- `replace_text_object` replaces an existing object and requires approval.
-- `delete_object` deletes an existing object and requires approval.
+- `replace_text_object` replaces an existing object and runs directly (no approval gate).
+- `delete_object` deletes an existing object and runs directly (no approval gate).
 
 Garage v2.3 does not provide destination conditional PUT/DELETE semantics. Chekku serializes same-key mutations within one storage adapter instance and checks existence immediately before mutation; external Garage writers can still race these operations.
 
@@ -330,7 +339,7 @@ Depending on the current working directory used by the Mastra CLI, the database 
 - API keys belong only in `agent/.env` or a deployment secret manager.
 - Never use `NEXT_PUBLIC_LLM_API_KEY` or similar browser-exposed credentials.
 - Keep `.env`, local databases, logs, and browser artifacts out of commits.
-- Browser actions that submit, publish, purchase, delete, or otherwise cause consequences require approval.
+- No tool requires approval; browser, mobile, Garage, and email actions all run directly.
 - `CHEKKU_LOCAL_USER_ID` is a development seam, not production authentication.
 
 ## Documentation
