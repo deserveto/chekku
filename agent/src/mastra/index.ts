@@ -15,6 +15,7 @@ import { OpenAICompatibleGateway } from './gateways/openai-compatible.js';
 import { healthRoute } from './routes/health.js';
 import { modelsRoute } from './routes/models.js';
 import { storedAgentTools } from './tools/registry.js';
+import { dailyTask } from './workflows/daily-task.js';
 
 const storage = new LibSQLStore({
   id: 'chekku-storage',
@@ -26,6 +27,7 @@ const storage = new LibSQLStore({
 
 export const mastra = new Mastra({
   agents: { mainAgent, qaWebAgent, socialMediaAgent },
+  workflows: { dailyTask },
   tools: storedAgentTools,
   storage,
   editor: new MastraEditor({ source: 'db' }),

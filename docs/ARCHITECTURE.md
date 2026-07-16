@@ -84,6 +84,14 @@ Stored agents are created through the client and persisted by `@mastra/editor`. 
 
 When an older stored model no longer matches the current registry, the client migrates it to the configured gateway and canonical default before chat begins.
 
+## Workflows
+
+Workflows are registered on the `Mastra` instance through its `workflows` field and live in `agent/src/mastra/workflows/`. Declaring a `schedule` on a workflow auto-promotes it to the evented execution engine; the built-in scheduler reads the `schedule` field on boot and fires the run on the configured cron — no separate registration call.
+
+The scheduler runs on the long-lived `mastra` host process (`mastra dev` / `mastra start`), so scheduled fires work without extra setup. Evented runs require a storage adapter that supports concurrent updates; Chekku uses `LibSQLStore`, which satisfies this.
+
+`daily-task` is a daily 09:00 Asia/Jakarta placeholder: a single heartbeat step that proves the scheduler fires. The step body is intentionally trivial and is swapped for a real task when one is wired in.
+
 ## Model gateway
 
 The model contract is provider-neutral:
