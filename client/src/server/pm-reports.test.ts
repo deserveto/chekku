@@ -200,6 +200,32 @@ describe('PM report API routes', () => {
     expect(listKeys).toHaveBeenCalledWith('agents/cG0tYWdlbnQ/pm-reports/', undefined);
   });
 
+  it('does not expose hostile stored metadata fields through list or detail APIs', async () => {
+    const hostileMetadata = {
+      ...metadata,
+      reportUrl: 'https://attacker.example/report',
+      reportsMarkdown: 'stolen',
+      physicalObjectKey: 'agents/cG0tYWdlbnQ/private',
+      nested: { arbitrary: ['secret'] },
+    };
+    const listKeys = vi.fn(async () => ({
+      keys: [`agents/cG0tYWdlbnQ/${metadata.metadataObjectKey}`],
+      truncated: false,
+    }));
+    const getText = vi.fn(async (key: string) => key.endsWith('metadata.json')
+      ? JSON.stringify(hostileMetadata)
+      : key.endsWith('input.md') ? report.inputMarkdown : report.analysisMarkdown);
+    mocks.rootStoreFactory.mockReturnValue(createRootStore({ listKeys, getText }));
+
+    const listResponse = await listReportsRoute();
+    const detailResponse = await getReportRoute(new Request('http://localhost'), {
+      params: Promise.resolve({ reportId }),
+    });
+
+    await expect(listResponse.json()).resolves.toEqual({ reports: [metadata] });
+    await expect(detailResponse.json()).resolves.toEqual(report);
+  });
+
   it('returns report detail', async () => {
     const getText = vi.fn(async (key: string) => key.endsWith('metadata.json')
       ? JSON.stringify(metadata)

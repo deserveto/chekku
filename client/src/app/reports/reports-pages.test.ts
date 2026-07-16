@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   }),
 }));
 
+vi.mock('server-only', () => ({}));
 vi.mock('next/navigation', () => ({ notFound: mocks.notFound }));
 vi.mock('@/components/markdown-message', () => ({
   MarkdownMessage: ({ content }: { content: string }) => content,
@@ -32,6 +33,7 @@ vi.mock('@/server/pm-reports', () => {
     PmReportServiceError,
   };
 });
+vi.mock('@/server/pm-report-format', async () => import('../../server/pm-report-format'));
 
 import { PmReportServiceError } from '@/server/pm-reports';
 
@@ -79,6 +81,19 @@ describe('reports list page', () => {
 
     expect(focusRule).toContain('outline: 1px solid var(--studio-ink)');
     expect(focusRule).toContain('outline-offset: 2px');
+  });
+
+  it.each([
+    ['2026-07-14T14:30:00+02:30', '2026-07-14 12:00 UTC'],
+    ['2026-02-30T12:00:00.000Z', '2026-02-30T12:00:00.000Z'],
+    ['not a date', 'not a date'],
+  ])('strictly formats or preserves createdAt %s', async (createdAt, expected) => {
+    mocks.listReports.mockResolvedValue([{ ...metadata, createdAt }]);
+
+    const markup = renderToStaticMarkup(await ReportsPage());
+
+    expect(markup).toContain(`<td>${expected}</td>`);
+    expect(markup).not.toContain('Invalid Date');
   });
 });
 

@@ -1,6 +1,7 @@
 import Link from 'next/link';
 
 import { StudioNav } from '@/components/studio/studio-nav';
+import { formatPmReportCreatedAt } from '@/server/pm-report-format';
 import {
   listPmReportsForUser,
   PmReportServiceError,
@@ -67,7 +68,7 @@ export default async function ReportsPage() {
                           {report.reportId}
                         </Link>
                       </td>
-                      <td>{new Date(report.createdAt).toLocaleString()}</td>
+                      <td>{formatPmReportCreatedAt(report.createdAt)}</td>
                       <td>{report.rating}/10</td>
                       <td>{report.status}</td>
                     </tr>

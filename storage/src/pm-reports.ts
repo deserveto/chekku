@@ -111,18 +111,29 @@ export function parsePmReportTimestamp(value: string): number | undefined {
   return Number.isNaN(timestamp) ? undefined : timestamp;
 }
 
-function isPmReportMetadata(value: unknown): value is PmReportMetadata {
-  if (!value || typeof value !== 'object') return false;
+function parsePmReportMetadata(value: unknown): PmReportMetadata | undefined {
+  if (!value || typeof value !== 'object') return undefined;
   const metadata = value as Record<string, unknown>;
-  if (typeof metadata.reportId !== 'string' || !REPORT_ID_RE.test(metadata.reportId)) return false;
-  if (typeof metadata.createdAt !== 'string') return false;
-  if (typeof metadata.rating !== 'number' || !Number.isInteger(metadata.rating) || metadata.rating < 1 || metadata.rating > 10) return false;
-  if (metadata.status !== statusForRating(metadata.rating)) return false;
+  if (typeof metadata.reportId !== 'string' || !REPORT_ID_RE.test(metadata.reportId)) return undefined;
+  if (typeof metadata.createdAt !== 'string') return undefined;
+  if (typeof metadata.rating !== 'number' || !Number.isInteger(metadata.rating) || metadata.rating < 1 || metadata.rating > 10) return undefined;
+  const status = statusForRating(metadata.rating);
+  if (metadata.status !== status) return undefined;
 
   const expectedKeys = keysFor(metadata.reportId);
-  return metadata.inputObjectKey === expectedKeys.inputObjectKey
-    && metadata.analysisObjectKey === expectedKeys.analysisObjectKey
-    && metadata.metadataObjectKey === expectedKeys.metadataObjectKey;
+  if (metadata.inputObjectKey !== expectedKeys.inputObjectKey
+    || metadata.analysisObjectKey !== expectedKeys.analysisObjectKey
+    || metadata.metadataObjectKey !== expectedKeys.metadataObjectKey) {
+    return undefined;
+  }
+
+  return {
+    reportId: metadata.reportId,
+    createdAt: metadata.createdAt,
+    rating: metadata.rating,
+    status,
+    ...expectedKeys,
+  };
 }
 
 export async function savePmReport(input: SavePmReportInput): Promise<PmReportMetadata> {
@@ -158,7 +169,8 @@ export async function listPmReports(store: ObjectStorage): Promise<PmReportMetad
     } catch {
       return undefined;
     }
-    return isPmReportMetadata(metadata) && metadata.metadataObjectKey === key ? metadata : undefined;
+    const parsed = parsePmReportMetadata(metadata);
+    return parsed?.metadataObjectKey === key ? parsed : undefined;
   }));
   const reports = entries.filter((entry): entry is PmReportMetadata => entry !== undefined);
 
@@ -187,8 +199,9 @@ export async function getPmReport(store: ObjectStorage, reportId: string): Promi
   } catch {
     throw new Error(`Invalid PM report metadata for ${reportId}`);
   }
-  if (!isPmReportMetadata(metadata) || metadata.reportId !== reportId) {
+  const parsed = parsePmReportMetadata(metadata);
+  if (!parsed || parsed.reportId !== reportId) {
     throw new Error(`Invalid PM report metadata for ${reportId}`);
   }
-  return { reportId, inputMarkdown, analysisMarkdown, metadata };
+  return { reportId, inputMarkdown, analysisMarkdown, metadata: parsed };
 }

@@ -233,6 +233,36 @@ describe('PM report storage', () => {
     await expect(listPmReports(storage)).resolves.toEqual([valid]);
   });
 
+  it('projects untrusted metadata to approved fields for lists and reads', async () => {
+    const { objects, storage } = createMemoryStorage();
+    const reportId = 'pmr_20260715112644_00000010';
+    const approved = {
+      reportId,
+      createdAt: '2026-07-15T11:26:44.000Z',
+      rating: 4,
+      status: 'WARNING' as const,
+      ...keysFor(reportId),
+    };
+    const hostile = {
+      ...approved,
+      reportUrl: 'https://attacker.example/report',
+      reportsMarkdown: 'stolen',
+      physicalObjectKey: 'agents/cG0tYWdlbnQ/private',
+      nested: { arbitrary: ['secret'] },
+    };
+    objects.set(approved.inputObjectKey, 'Report input');
+    objects.set(approved.analysisObjectKey, analysisMarkdown);
+    objects.set(approved.metadataObjectKey, JSON.stringify(hostile));
+
+    await expect(listPmReports(storage)).resolves.toEqual([approved]);
+    await expect(getPmReport(storage, reportId)).resolves.toEqual({
+      reportId,
+      inputMarkdown: 'Report input',
+      analysisMarkdown,
+      metadata: approved,
+    });
+  });
+
   it('skips internally consistent metadata with a noncanonical report id', async () => {
     const { objects, storage } = createMemoryStorage();
     const reportId = 'pmr_20260715112642_deadbeef';
