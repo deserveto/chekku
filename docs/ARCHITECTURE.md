@@ -5,36 +5,49 @@
 Chekku contains three npm workspaces: a Next.js client, a Mastra agent server, and the shared `@chekku/storage` package. The system is local-first, uses LibSQL for agent and conversation persistence, offers Garage-backed generic agent object storage plus PM report persistence, and connects to one server-owned OpenAI-compatible model endpoint.
 
 ```text
-Browser
-  │
-  ▼
-Next.js client/server :3000
-  ├── Chat: /api/agent/* proxy
-  │       │
-  │       ▼
-  │   Mastra server :4111
-  │     ├── main-agent
-  │     ├── pm-agent ──► code-defined PM tools ──┐
-  │     ├── qa-web-agent                         │
-  │     ├── Garage MCP ──────────────────────────┤
-  │     ├── Memory + LibSQLStore                 │
-  │     ├── @mastra/editor stored agents         │
-  │     ├── Agent Browser                        │
-  │     └── OpenAI-compatible gateway            │
-  │             │                                │
-  │             ▼                                │
-  │     OpenAI-compatible endpoint               │
-  │                                              │
-  └── Reports: /reports/* and                    │
-               /api/storage/pm-reports/*         │
-          │                                      │
-          ▼                                      │
-      client/src/server/pm-reports.ts ───────────┤
-                                                 ▼
-                                      @chekku/storage
-                                                 │
-                                                 ▼
-                                      Garage/S3 `chekku-objects`
+┌────────────────────────────────────────────┐
+│ Browser                                    │
+│ Agent catalog, builder, chat, PM reports   │
+└───────────────────┬────────────────────────┘
+                    │ HTTP /api/agent/*
+                    ▼
+┌────────────────────────────────────────────┐
+│ Next.js client/server :3000                │
+│ Same-origin proxy + auth seam              │
+│ /reports/* + /api/storage/pm-reports/* ────────────┐
+└───────────────────┬────────────────────────┘        │
+                    │ Mastra HTTP API                 │
+                    ▼                                 │
+┌────────────────────────────────────────────┐        │
+│ Mastra server :4111                        │        │
+│                                            │        │
+│ Code agents          Stored agents         │        │
+│ - main-agent         - @mastra/editor      │        │
+│ - pm-agent           - database versions   │        │
+│ - qa-web-agent                             │        │
+│                                            │        │
+│ Memory + LibSQLStore                       │        │
+│ Calculator + current-time tools            │        │
+│ Garage MCP                                 │        │
+│ Agent Browser                              │        │
+│ OpenAI-compatible custom gateway           │        │
+└──────────────┬────────────────────┬────────┘        │
+               │                    │                 │
+               │                    │ PM-Agent-only   │
+               │                    │ report tools    │
+               │                    └─────────────────┤
+               │ /v1/models                           │
+               │ /v1/chat/completions                 │
+               ▼                                      │
+┌────────────────────────────────────────────┐         │
+│ Rafiqspace LLM, LiteLLM, vLLM, or other   │         │
+│ OpenAI-compatible endpoint                 │         │
+└────────────────────────────────────────────┘         │
+                                                       ▼
+Next.js report service / Garage MCP ──► @chekku/storage
+                                            │
+                                            ▼
+                                 Garage/S3 `chekku-objects`
 ```
 
 ## Backend composition
@@ -42,7 +55,7 @@ Next.js client/server :3000
 `agent/src/mastra/index.ts` creates the single `Mastra` instance and registers:
 
 - `mainAgent`, `pmAgent`, and `qaWebAgent`;
-- `storedAgentTools`;
+- `storedAgentTools` (`calculatorTool` and `getCurrentTimeTool`) for stored-agent hydration;
 - `LibSQLStore`;
 - `MastraEditor` with database storage;
 - `OpenAICompatibleGateway`;
@@ -51,6 +64,8 @@ Next.js client/server :3000
 - `/healthz` and `/models` custom routes.
 
 Mastra provides the native agent, Memory, and editor APIs. Next.js separately provides `/reports/*` pages and `/api/storage/pm-reports/*` APIs through `client/src/server/pm-reports.ts`; those PM report storage interfaces are not Mastra APIs. Chekku does not maintain a parallel custom conversation or agent database.
+
+`storedAgentTools` is the instance-level registry that makes calculator and current-time tools available during stored-agent hydration. PM report tools are attached directly to `pmAgent`; they are not members of `storedAgentTools` or `garageMcpServer`.
 
 ## Agents
 

@@ -39,23 +39,27 @@ Next.js client :3000
   │       ▼
   │   Mastra server :4111
   │     ├── main-agent
-  │     ├── pm-agent ──► code-defined PM tools ──┐
-  │     ├── qa-web-agent                         │
-  │     ├── Garage MCP ──────────────────────────┤
-  │     ├── @mastra/editor + Memory              │
-  │     └── OpenAI-compatible gateway            │
-  │             │                                │
-  │             ▼                                │
-  │     Compatible model endpoint                │
-  └── /reports/* + /api/storage/pm-reports/*     │
-          │                                      │
-          ▼                                      │
-      client/src/server/pm-reports.ts ───────────┤
-                                                 ▼
-                                      @chekku/storage
-                                                 │
-                                                 ▼
-                                      Garage/S3 bucket
+  │     ├── pm-agent ──► PM-Agent-only report tools ──┐
+  │     ├── qa-web-agent                              │
+  │     ├── @mastra/editor stored agents              │
+  │     ├── Mastra Memory                             │
+  │     ├── calculator + current-time tools           │
+  │     ├── Garage MCP (optional stored-agent          │
+  │     │   capability) ───────────────────────────────┤
+  │     └── OpenAI-compatible gateway                 │
+  │             │                                     │
+  │             ▼                                     │
+  │     Rafiqspace LLM / LiteLLM / vLLM /             │
+  │     compatible endpoint                           │
+  └── /reports/* + /api/storage/pm-reports/*          │
+          │                                           │
+          ▼                                           │
+      client/src/server/pm-reports.ts ────────────────┤
+                                                      ▼
+                                           @chekku/storage
+                                                      │
+                                                      ▼
+                                           Garage/S3 bucket
 
 LibSQL stores agent definitions, versions, memory, and threads.
 ```
