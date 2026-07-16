@@ -8,6 +8,7 @@ import { requestIdInjector, requestLogger } from '../config/middleware.js';
 import { mainAgent } from '../agents/main-agent.js';
 import { qaWebAgent } from '../agents/qa-web-agent.js';
 import { OpenAICompatibleGateway } from './gateways/openai-compatible.js';
+import { garageMcpServer } from './mcp/garage-mcp-server.js';
 import { healthRoute } from './routes/health.js';
 import { modelsRoute } from './routes/models.js';
 import { storedAgentTools } from './tools/registry.js';
@@ -22,6 +23,7 @@ const storage = new LibSQLStore({
 
 export const mastra = new Mastra({
   agents: { mainAgent, qaWebAgent },
+  mcpServers: { garage: garageMcpServer },
   tools: storedAgentTools,
   storage,
   editor: new MastraEditor({ source: 'db' }),

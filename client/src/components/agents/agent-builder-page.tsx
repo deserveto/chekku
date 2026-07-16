@@ -18,6 +18,7 @@ import {
 } from '@/lib/agents-helpers';
 import {
   STUDIO_DELEGATE_IDS,
+  STUDIO_MCP_CLIENT_IDS,
   STUDIO_TOOL_IDS,
   migrateStoredModelId,
 } from '@/server/agent-payload';
@@ -31,6 +32,7 @@ type Values = {
   memoryEnabled: boolean;
   tools: string[];
   agents: string[];
+  mcpClients: string[];
 };
 
 const EMPTY: Values = {
@@ -42,6 +44,7 @@ const EMPTY: Values = {
   memoryEnabled: true,
   tools: [],
   agents: [],
+  mcpClients: [],
 };
 
 function toggle(values: string[], id: string): string[] {
@@ -118,6 +121,7 @@ export function AgentBuilderPage({
             memoryEnabled: detail.memoryEnabled,
             tools: detail.tools,
             agents: detail.agents,
+            mcpClients: detail.mcpClients,
           });
         } else {
           setValues((current) => ({
@@ -183,6 +187,7 @@ export function AgentBuilderPage({
       model: values.model,
       tools: values.tools,
       agents: values.agents,
+      mcpClients: values.mcpClients,
       memoryEnabled: values.memoryEnabled,
     };
 
@@ -368,6 +373,37 @@ export function AgentBuilderPage({
                       <span>
                         <strong>{titleForTool(toolId)}</strong>
                         <small>{descriptionForTool(toolId)}</small>
+                      </span>
+                      <i>{checked ? '✓' : '+'}</i>
+                    </label>
+                  );
+                })}
+              </div>
+
+              <div className="studio-capability-grid">
+                {STUDIO_MCP_CLIENT_IDS.map((mcpClientId) => {
+                  const checked = values.mcpClients.includes(mcpClientId);
+                  return (
+                    <label
+                      className={`studio-capability-card ${
+                        checked ? 'selected' : ''
+                      }`}
+                      key={mcpClientId}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() =>
+                          set('mcpClients', toggle(values.mcpClients, mcpClientId))
+                        }
+                        disabled={submitting}
+                      />
+                      <span className="studio-capability-icon">G</span>
+                      <span>
+                        <strong>Garage</strong>
+                        <small>
+                          Create, read, list, replace, and delete agent-isolated text objects in Garage.
+                        </small>
                       </span>
                       <i>{checked ? '✓' : '+'}</i>
                     </label>

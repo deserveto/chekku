@@ -12,7 +12,7 @@
 
 </div>
 
-Chekku provides a focused interface for managing agents, creating agent-specific conversations, and running browser-assisted QA through a provider-neutral OpenAI-compatible model gateway. The repository contains one Next.js client and one Mastra server, with LibSQL as the local source of truth.
+Chekku provides a focused interface for managing agents, creating agent-specific conversations, and running browser-assisted QA through a provider-neutral OpenAI-compatible model gateway. Three npm workspaces provide the Next.js client, Mastra server, and shared Garage/S3 object-storage adapter. LibSQL remains the local source of truth for agents and conversations.
 
 ## Highlights
 
@@ -23,6 +23,7 @@ Chekku provides a focused interface for managing agents, creating agent-specific
 - **Browser QA agent** — navigate and inspect live websites using Mastra Agent Browser.
 - **Hosted-vLLM compatibility** — final prompt normalization keeps system messages at the beginning.
 - **Local-first storage** — agent definitions, versions, memory, and threads live in LibSQL.
+- **Agent-isolated Garage storage** — stored agents can opt into five generic UTF-8 text-object tools backed by a local Garage bucket.
 - **Same-origin client traffic** — browser requests go through the Next.js proxy instead of calling the Mastra server directly.
 
 ## Architecture
@@ -41,6 +42,10 @@ Mastra server :4111
   ├── @mastra/editor stored agents
   ├── Mastra Memory
   ├── calculator + current-time tools
+  ├── Garage MCP (optional stored-agent capability)
+  │       │
+  │       ▼
+  │   @chekku/storage ──► Garage/S3 bucket
   └── OpenAI-compatible gateway
           │
           ▼
@@ -94,11 +99,21 @@ cp client/.env.example client/.env.local
 
 The defaults target the local Mastra server and normally require no edits.
 
-### 4. Start both workspaces
+### 4. Start the application
+
+For client and agent development without local Garage orchestration:
 
 ```bash
 npm run dev
 ```
+
+For client, agent, and local Garage together, use Git Bash, WSL, or another Bash environment with Docker Compose:
+
+```bash
+npm run dev:sh
+```
+
+`dev:sh` creates private ignored Garage credentials and configuration, exposes the `chekku-objects` S3 API only at `127.0.0.1:3900`, waits for health, writes the five application Garage values to ignored `agent/.env.development`, then starts client and agent processes. It uses tmux when available and otherwise gives process groups a bounded TERM grace period before KILL.
 
 Open:
 
@@ -129,6 +144,11 @@ Local file: `agent/.env`
 | `CHEKKU_DEFAULT_AGENT_ID` | No | `main-agent` | Default agent for new sessions. |
 | `CHEKKU_LOCAL_USER_ID` | No | `local-user` | Development identity and Memory resource ID. |
 | `BROWSER_HEADLESS` | No | `true` | Run the QA browser without a visible window. |
+| `GARAGE_ENDPOINT` | For Garage tools | empty | Server-only S3-compatible endpoint. |
+| `GARAGE_REGION` | For Garage tools | empty | Garage S3 region. |
+| `GARAGE_BUCKET` | For Garage tools | empty | Generic object bucket; local launcher uses `chekku-objects`. |
+| `GARAGE_ACCESS_KEY_ID` | For Garage tools | empty | Server-only Garage access key. |
+| `GARAGE_SECRET_ACCESS_KEY` | For Garage tools | empty | Server-only Garage secret key. |
 
 ### Client
 
@@ -146,9 +166,10 @@ Local file: `client/.env.local`
 | Command | Purpose |
 | --- | --- |
 | `npm run dev` | Start agent and client workspaces together. |
+| `npm run dev:sh` | Generate local Garage state, start Garage, then start agent and client. |
 | `npm run dev:agent` | Start only the Mastra server. |
 | `npm run dev:client` | Start only the Next.js client. |
-| `npm run typecheck` | Type-check both workspaces. |
+| `npm run typecheck` | Type-check all three workspaces. |
 | `npm run lint` | Run the client ESLint configuration. |
 | `npm test` | Run all Vitest tests. |
 | `npm run check` | Run typecheck, lint, and tests. |
@@ -176,6 +197,8 @@ The client uses system font stacks, so `next build` does not download fonts from
 │       ├── components/     # agent catalog, builder, chat, shared UI
 │       ├── lib/            # Mastra client, models, agents, threads
 │       └── server/         # auth seam, proxy validation, payload helpers
+├── storage/                # shared Garage/S3 object-storage contract and adapter
+├── scripts/                # local Garage environment and development launchers
 ├── docs/                   # architecture, operations, cleanup history
 └── .github/workflows/      # CI
 ```
@@ -191,6 +214,26 @@ These rules keep the repository from drifting back into parallel implementations
 5. Thread IDs must include the agent and resource prefix.
 6. QA Web Agent must keep active Memory and final system-message normalization.
 7. Client HTTP traffic must use `/api/agent/*` unless a protocol cannot be proxied by Next.js.
+8. Garage MCP exposes only `create_text_object`, `get_text_object`, `list_text_objects`, `replace_text_object`, and `delete_object`.
+9. Garage identity comes from trusted Mastra execution context, never tool input; browser code never accesses Garage directly.
+
+## Garage MCP
+
+Stored agents may select the whitelisted `garage` capability in the builder. Selection persists as `mcpClients: { garage: { tools: {} } }`; arbitrary MCP URLs, commands, packages, and credentials are rejected by the same-origin proxy before stored-agent create or update requests reach Mastra.
+
+Garage MCP exposes exactly five generic tools:
+
+- `create_text_object` rejects a key that already exists.
+- `get_text_object` reads an existing UTF-8 text object.
+- `list_text_objects` returns at most 100 relative keys plus a `truncated` flag.
+- `replace_text_object` replaces an existing object and requires approval.
+- `delete_object` deletes an existing object and requires approval.
+
+Garage v2.3 does not provide destination conditional PUT/DELETE semantics. Chekku serializes same-key mutations within one storage adapter instance and checks existence immediately before mutation; external Garage writers can still race these operations.
+
+Every operation requires trusted `context.agent.agentId`. Physical keys use `agents/<base64url-agent-id>/<relative-key>`, while inputs and responses contain relative keys only. Relative keys are limited to 512 UTF-8 bytes and reject absolute paths, backslashes, traversal, control characters, and empty segments. Text is limited to 262,144 UTF-8 bytes.
+
+Missing identity, invalid input, collisions, missing objects, configuration failures, and connectivity failures return bounded actionable errors. Provider responses, endpoints, headers, credentials, and request IDs are never copied into errors.
 
 Detailed contributor constraints are in [AGENTS.md](AGENTS.md).
 
@@ -254,6 +297,8 @@ Depending on the current working directory used by the Mastra CLI, the database 
 - API keys belong only in `agent/.env` or a deployment secret manager.
 - Never use `NEXT_PUBLIC_LLM_API_KEY` or similar browser-exposed credentials.
 - Keep `.env`, local databases, logs, and browser artifacts out of commits.
+- Keep generated `storage/.env.local`, `storage/.garage/`, and Garage credentials/data out of commits and logs.
+- Garage is server-only. Browser components must never import `@chekku/storage` or call Garage directly.
 - Browser actions that submit, publish, purchase, delete, or otherwise cause consequences require approval.
 - `CHEKKU_LOCAL_USER_ID` is a development seam, not production authentication.
 

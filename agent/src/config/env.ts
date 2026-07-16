@@ -21,6 +21,12 @@ const envSchema = z.object({
   CHEKKU_DEFAULT_AGENT_ID: z.string().default('main-agent'),
   CHEKKU_LOCAL_USER_ID: z.string().default('local-user'),
   BROWSER_HEADLESS: z.enum(['true', 'false']).default('true'),
+
+  GARAGE_ENDPOINT: optionalUrl.default(''),
+  GARAGE_REGION: z.string().default(''),
+  GARAGE_BUCKET: z.string().default(''),
+  GARAGE_ACCESS_KEY_ID: z.string().default(''),
+  GARAGE_SECRET_ACCESS_KEY: z.string().default(''),
 });
 
 export type Env = z.infer<typeof envSchema>;
