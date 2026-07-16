@@ -5,7 +5,6 @@ import type { Channel, Chat, Message, Thread } from 'chat';
 import { Memory } from '@mastra/memory';
 
 import { gatewayCompatibilityProcessor } from '../mastra/processors/gateway-compatibility.js';
-import { calculatorTool } from '../mastra/tools/calculator.js';
 import { getCurrentTimeTool } from '../mastra/tools/get-current-time.js';
 import { sendEmailTool } from '../mastra/tools/send-email.js';
 import { getServerModel } from '../providers/model.js';
@@ -316,21 +315,6 @@ How you work:
 // Agent
 // ---------------------------------------------------------------------------
 
-/**
- * Whether a Social Media Agent tool call must be approved before it runs.
- *
- * Sending email is a consequential, irreversible external action, so it always
- * requires approval — on the web studio that surfaces as the Approve/Decline
- * buttons; over Telegram it surfaces as an inline-keyboard approval card (the
- * Mastra channel integration posts the card and resumes the run on tap).
- *
- * `toolName` is the tool's registration key in the agent's `tools` map
- * (`sendEmailTool`), not the tool's `id` field (`send-email`).
- */
-export function shouldApproveSocialTool(toolName: string): boolean {
-  return toolName === 'sendEmailTool';
-}
-
 const socialMediaAgentConfig: AgentConfig<string, ToolsInput, undefined, ProviderContext> = {
   id: 'social-media-agent',
   name: 'Chekku Social',
@@ -339,7 +323,11 @@ const socialMediaAgentConfig: AgentConfig<string, ToolsInput, undefined, Provide
   model: () => getServerModel(),
   requestContextSchema: providerContextSchema,
   memory: new Memory(),
-  tools: { calculatorTool, getCurrentTimeTool, sendEmailTool },
+  // No per-tool approval gate: sendEmailTool runs autonomously. The agent is
+  // intended to run unattended (e.g. over Telegram), so the previous
+  // Approve/Decline gate on outbound email was intentionally dropped. Broader
+  // human-in-the-loop gates will be added later as a dedicated layer.
+  tools: { getCurrentTimeTool, sendEmailTool },
   // Channels are only wired when Telegram is configured, so the agent (and the
   // server) boot fine without TELEGRAM_BOT_TOKEN. With no adapter there is no
   // Chat SDK to register slash-command handlers on either (see index.ts).
@@ -356,9 +344,6 @@ const socialMediaAgentConfig: AgentConfig<string, ToolsInput, undefined, Provide
       }
     : {}),
   inputProcessors: [gatewayCompatibilityProcessor],
-  defaultOptions: () => ({
-    requireToolApproval: ({ toolName }) => shouldApproveSocialTool(toolName),
-  }),
   instructions: ({ requestContext }) =>
     buildInstructions(getActiveRole(extractResourceId(requestContext))),
 };

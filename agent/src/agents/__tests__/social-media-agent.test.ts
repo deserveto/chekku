@@ -14,7 +14,6 @@ import {
   unknownCommandReply,
   isTelegramConfigured,
   registerSocialSlashCommands,
-  shouldApproveSocialTool,
 } from '../social-media-agent.js';
 import { socialMediaAgent } from '../social-media-agent.js';
 import type { Chat, SlashCommandEvent } from 'chat';
@@ -33,10 +32,9 @@ describe('social-media-agent (Telegram-backed social assistant)', () => {
     expect(memory).toBeDefined();
   });
 
-  it('binds calculator, get-current-time, and send-email tools', async () => {
+  it('binds get-current-time and send-email tools', async () => {
     const tools = await socialMediaAgent.listTools();
     expect(Object.keys(tools).sort()).toEqual([
-      'calculatorTool',
       'getCurrentTimeTool',
       'sendEmailTool',
     ]);
@@ -197,22 +195,6 @@ describe('buildInstructions', () => {
       expect(instructions).toContain('draft and plan only');
       expect(instructions).toContain('Chekku Social');
     }
-  });
-});
-
-describe('shouldApproveSocialTool (email approval gate)', () => {
-  it('requires approval for sendEmailTool', () => {
-    // toolName is the registration key, not the tool id.
-    expect(shouldApproveSocialTool('sendEmailTool')).toBe(true);
-  });
-
-  it('does not gate drafting/planning tools', () => {
-    expect(shouldApproveSocialTool('calculatorTool')).toBe(false);
-    expect(shouldApproveSocialTool('getCurrentTimeTool')).toBe(false);
-  });
-
-  it('does not gate unknown tools', () => {
-    expect(shouldApproveSocialTool('somethingElse')).toBe(false);
   });
 });
 

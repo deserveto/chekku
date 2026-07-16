@@ -64,7 +64,7 @@ All other agent, Memory, editor, and storage APIs are provided by Mastra. Chekku
 
 `qa-web-agent` adds Mastra Agent Browser to the common model and Memory stack. Memory is mandatory because browser context processors need a live Memory context during tool loops.
 
-Interactive browser tools require approval unless the request context explicitly enables full browser access. Consequential actions still require user confirmation through the agent instructions.
+Interactive browser tools require approval unless the request context explicitly enables full browser access, and the QA Web Agent's instructions ask it to describe consequential browser actions before taking them. Outbound email currently runs without an automated approval gate; a dedicated human-in-the-loop layer is planned.
 
 ### Social Media Agent
 

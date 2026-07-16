@@ -25,7 +25,7 @@ Chekku provides a focused interface for managing agents, creating agent-specific
 - **Hosted-vLLM compatibility** — final prompt normalization keeps system messages at the beginning.
 - **Local-first storage** — agent definitions, versions, memory, and threads live in LibSQL.
 - **Same-origin client traffic** — browser requests go through the Next.js proxy instead of calling the Mastra server directly.
-- **Email + time + calculator tools** — registered for stored agents and bound to code-defined agents; email delivery goes through Resend.
+- **Email + time + calculator tools** — registered for stored agents and selectively bound to code-defined agents; email delivery goes through Resend.
 
 ## Architecture
 
@@ -95,7 +95,7 @@ Never expose `LLM_API_KEY` through a `NEXT_PUBLIC_*` variable or commit `agent/.
 - **Telegram (social-media-agent)** — create a bot with [@BotFather](https://t.me/BotFather), then set `TELEGRAM_BOT_TOKEN`. Keep `TELEGRAM_MODE=polling` for local dev; switch to `webhook` with `TELEGRAM_WEBHOOK_SECRET_TOKEN` for production.
 - **Email outbound (send-email tool)** — sign up at [resend.com](https://resend.com), set `RESEND_API_KEY`, and (for production) a Resend-verified sender in `RESEND_FROM_EMAIL`. The default `onboarding@resend.dev` sender only delivers to the account owner.
 
-Both are optional; Chekku boots fine without them. Code-defined agents (`qa-web-agent`, `social-media-agent`) already bind these tools, and stored agents can opt in from the builder's **Capabilities** section.
+Both are optional; Chekku boots fine without them. The `social-media-agent` binds the send-email tool and (when configured) the Telegram channel; stored agents can opt in from the builder's **Capabilities** section.
 
 ### 3. Configure the client
 
