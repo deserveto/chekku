@@ -6,13 +6,24 @@
 npm ci
 cp agent/.env.example agent/.env
 cp client/.env.example client/.env.local
-npm run dev
+npm run dev:sh
 ```
 
-The root development command starts:
+The launcher provisions local Garage configuration, waits for Garage health, then starts:
 
+- Garage S3 API on `http://127.0.0.1:3900`;
 - Mastra on `http://localhost:4111`;
 - Next.js on `http://localhost:3000`.
+
+It generates and exports these application values to both server processes; do not copy generated credentials into tracked files:
+
+```text
+GARAGE_ENDPOINT
+GARAGE_REGION
+GARAGE_BUCKET
+GARAGE_ACCESS_KEY_ID
+GARAGE_SECRET_ACCESS_KEY
+```
 
 ## Environment files
 
@@ -108,6 +119,47 @@ rm -f mastra.db mastra.db-wal mastra.db-shm
 
 This removes stored agents and conversation history.
 
+### Garage object storage
+
+Local Garage runs image `dxflrs/garage:v2.3.0` with persistent Docker volumes and generic bucket `chekku-objects`. Compose publishes only the S3 API at `127.0.0.1:3900`; RPC, admin, and metrics ports stay inside the Docker network. Stop application processes before changing credentials. To stop Garage without deleting its volumes:
+
+```bash
+docker compose --env-file storage/.env.local down
+```
+
+Do not commit or paste contents from `storage/.env.local`, `storage/.garage/`, or generated `agent/.env.development`. Removing Garage volumes destroys local agent objects and is intentionally not part of normal reset instructions.
+
+Garage MCP validates relative keys before access, limits keys to 512 UTF-8 bytes, limits text to 262,144 UTF-8 bytes, and returns at most 100 list entries. Physical objects are isolated under `agents/<base64url-agent-id>/`; tool callers see relative keys only. Replace and delete require user approval.
+
+Garage v2.3.0 does not process destination `If-Match`/`If-None-Match` headers for PUT or DELETE. The adapter serializes same-key mutations in one process and performs an immediate existence check; it also sends `If-None-Match` on create for S3 providers that support it. This prevents stale races among calls through one adapter instance, but an external writer can still race a Garage mutation. Do not claim cross-process compare-and-swap semantics until the pinned Garage release supports those conditions.
+
+### PM report objects
+
+PM Agent tools and Next.js server report services share the fixed `pm-agent` namespace. Logical report objects are:
+
+```text
+pm-reports/<reportId>/input.md
+pm-reports/<reportId>/analysis.md
+pm-reports/<reportId>/metadata.json
+```
+
+Metadata contains these relative keys only. Do not expose or manually construct physical `agents/<base64url-agent-id>/...` keys. No migration reads old global development objects; reports outside the fixed namespace remain invisible.
+
+Generated IDs and all repository, PM tool, and public report boundaries use `pmr_YYYYMMDDHHMMSS_<8 lowercase hex>`, such as `pmr_20260715112642_e720cebd`. Values outside `^pmr_[0-9]{14}_[0-9a-f]{8}$` are rejected before direct reads, and noncanonical stored metadata is excluded from lists. No migration or compatibility fallback is provided.
+
+Report interfaces:
+
+- `/reports` lists report ID, created time, risk rating, and status newest first.
+- `/reports/[reportId]` renders saved analysis, metadata, then original weekly input.
+- `GET /api/storage/pm-reports` returns `{ reports }` after server identity validation.
+- `GET /api/storage/pm-reports/[reportId]` returns input, analysis, and metadata after identity and ID validation.
+
+All four report interfaces call `client/src/server/pm-reports.ts` directly in the Next.js server and use the temporary server-side `CHEKKU_LOCAL_USER_ID` seam. They do not pass through Mastra. Chat PM tool calls separately pass through `/api/agent/*` and Mastra. Browser code never contacts Garage. Missing identity returns 403; invalid IDs return 400 or page not-found; missing reports return 404; storage failures return bounded 503 responses without provider details.
+
+When PM Agent lists reports in chat, its code-defined list tool generates a deterministic GFM table and the agent returns it unchanged. Rows contain URL-encoded relative report links, compact UTC timestamps, ratings, and statuses. Links open in a new tab with `rel="noreferrer"`. Chat and `/reports` tables are labeled keyboard-focusable regions with visible focus styles and horizontal scrolling on narrow screens. Empty lists return `No saved reports found.` exactly; invalid stored timestamps remain visible rather than breaking the list.
+
+PM report tools are not exposed by Garage MCP. Generic stored-agent Garage access remains exactly `create_text_object`, `get_text_object`, `list_text_objects`, `replace_text_object`, and `delete_object`. Garage v2.3 external-writer race limitations above apply to PM writes as well.
+
 ## Browser operation
 
 ```dotenv
@@ -147,9 +199,30 @@ RESEND_API_KEY=
 RESEND_FROM_EMAIL=Chekku <onboarding@resend.dev>
 ```
 
-Get a key at [resend.com](https://resend.com). The default `onboarding@resend.dev` sender can only deliver to the account owner; production should use a Resend-verified domain in `RESEND_FROM_EMAIL`. The tool fails with a clear error when `RESEND_API_KEY` is missing.
+Get a key at [resend.com](https://resend.com). The default `onboarding@resend.dev` sender can only deliver to the account owner; production should use a Resend-verified domain in `RESEND_FROM_EMAIL`. Every delivery requires approval. The tool fails with a clear error when `RESEND_API_KEY` is missing.
 
 ## Common failures
+
+### Garage MCP reports missing identity
+
+`Agent identity is required.` means execution did not include trusted `context.agent.agentId`. Do not add an agent ID to tool input. Ensure the tool runs through a hydrated Mastra agent with the built-in `garage` MCP server.
+
+### PM report is unavailable
+
+Confirm the report ID uses canonical public format and all five `GARAGE_*` values reach both agent and Next.js server processes. PM Agent can save through the agent process while `/reports` still fails if the client server lacks Garage configuration. Do not copy generated credentials into tracked files or bypass the fixed `pm-agent` namespace.
+
+### Garage object storage is not configured
+
+Confirm all five `GARAGE_*` application values are available to the agent process. For local development, rerun `npm run dev:sh`; do not hand-copy generated credentials into tracked files.
+
+### Garage is unavailable
+
+Check Docker and local health without exposing environment values:
+
+```bash
+docker compose --env-file storage/.env.local ps garage
+docker inspect --format '{{.State.Health.Status}}' "$(docker compose --env-file storage/.env.local ps -q garage)"
+```
 
 ### Model access denied
 
@@ -240,7 +313,7 @@ npm run build
 git diff --check
 ```
 
-The test suite covers model routing, model discovery, prompt normalization, agent configuration, tools, stored-agent payloads, stored-model migration, thread ownership, proxy paths, and UI structure.
+The test suite covers model routing, model discovery, prompt normalization, all four built-in agents, Telegram roles and slash commands, email approval flow, PM tools and repositories, report APIs/pages and accessible tables, stored-agent payloads and Garage hydration, stored-model migration, thread ownership, proxy paths, UI structure, namespaced storage, Garage adapter safety, and launcher behavior.
 
 ## Production notes
 

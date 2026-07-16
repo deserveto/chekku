@@ -67,11 +67,22 @@ export function StudioNav({ resourceId }: { resourceId: string }) {
             <Link
               href="/agents"
               className={pathname.startsWith('/agents') ? 'active' : ''}
+              aria-current={pathname.startsWith('/agents') ? 'page' : undefined}
               aria-label="Agents"
               title={collapsed ? 'Agents' : undefined}
             >
               <span aria-hidden="true">◫</span>
               <span className="studio-sidebar-copy">Agents</span>
+            </Link>
+            <Link
+              href="/reports"
+              className={pathname.startsWith('/reports') ? 'active' : ''}
+              aria-current={pathname.startsWith('/reports') ? 'page' : undefined}
+              aria-label="Reports"
+              title={collapsed ? 'Reports' : undefined}
+            >
+              <span aria-hidden="true">▤</span>
+              <span className="studio-sidebar-copy">Reports</span>
             </Link>
           </nav>
 

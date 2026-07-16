@@ -4,10 +4,11 @@ This file defines the operating rules for coding agents and contributors working
 
 ## Mission
 
-Chekku is a local-first agent studio built from two npm workspaces:
+Chekku is a local-first agent studio built from three npm workspaces:
 
 - `agent/`: Mastra server, code-defined agents, stored-agent runtime, Memory, LibSQL, browser automation, tools, and model gateway.
 - `client/`: Next.js interface, same-origin proxy, agent catalog and builder, chat UI, thread history, and server-side identity seam.
+- `storage/`: shared generic object-storage contract, agent namespace helpers, Garage/S3 adapter, and PM report repository.
 
 The repository intentionally contains only the current working architecture. Do not restore retired parallel runtimes from old reconstruction archives.
 
@@ -19,9 +20,12 @@ Read these first:
 2. `client/src/app/api/agent/[...path]/route.ts` — browser-to-Mastra proxy boundary.
 3. `client/src/lib/stored-agents.ts` — stored-agent client operations.
 4. `client/src/lib/memory-threads.ts` — thread listing, reading, renaming, deletion, and ownership checks.
-5. `agent/src/mastra/gateways/openai-compatible.ts` — final model transport.
-6. `docs/ARCHITECTURE.md` — runtime structure and data flow.
-7. `docs/OPERATIONS.md` — environment and troubleshooting.
+5. `storage/src/index.ts` — shared generic object-storage and PM report APIs.
+6. `client/src/server/pm-reports.ts` — authenticated server-only PM report boundary.
+7. `agent/src/mastra/mcp/garage-mcp-server.ts` — built-in generic Garage MCP capability.
+8. `agent/src/mastra/gateways/openai-compatible.ts` — final model transport.
+9. `docs/ARCHITECTURE.md` — runtime structure and data flow.
+10. `docs/OPERATIONS.md` — environment and troubleshooting.
 
 ## Required commands
 
@@ -63,6 +67,11 @@ A task is not complete until affected tests pass. Before finalizing any reposito
 ### Storage and conversations
 
 - `LibSQLStore` is the sole Mastra storage implementation.
+- Generic Garage object access belongs in `storage/`, not agent-private or browser modules.
+- Garage MCP and server-side code share `@chekku/storage`; browser components must never import it or access Garage directly.
+- PM report persistence composes the generic contract in `storage/src/pm-reports.ts`; it must not add PM semantics to Garage MCP.
+- Garage application configuration uses only `GARAGE_ENDPOINT`, `GARAGE_REGION`, `GARAGE_BUCKET`, `GARAGE_ACCESS_KEY_ID`, and `GARAGE_SECRET_ACCESS_KEY`.
+- Generated `storage/.env.local`, `storage/.garage/`, and `agent/.env.development` stay ignored. Never expose their secrets in logs, docs, errors, or commits.
 - Conversation history uses Mastra Memory, not custom conversation tables.
 - A thread ID must use this format:
 
@@ -105,14 +114,47 @@ LLM_MODELS
 - Browser actions that submit forms, purchase, publish, delete, or cause external consequences require approval.
 - Do not add endpoint-specific discovery tools to the QA agent. Model discovery belongs in the gateway and `/models` route.
 
+### Social Media Agent
+
+- Keep `social-media-agent` code-defined with Mastra Memory, Telegram channel integration, role switching, and the `send-email` tool.
+- Preserve `/help`, `/roles`, `/role`, and `/switch` registration after `AgentChannels` initialization.
+- Telegram uses `TELEGRAM_BOT_TOKEN`, `TELEGRAM_MODE`, optional `TELEGRAM_BOT_USERNAME`, and optional `TELEGRAM_WEBHOOK_SECRET_TOKEN` only.
+- Email uses server-only `RESEND_API_KEY` and `RESEND_FROM_EMAIL`; never expose either to browser code.
+- Preserve approval flow for outbound email and consequential channel actions.
+
 ### Client proxy and identity
 
-- Browser HTTP requests target the Next.js origin and pass through `/api/agent/*`.
+- Browser-to-Mastra agent-service requests target the Next.js origin and pass through `/api/agent/*`. PM report pages stay under `/reports/*`, and PM report storage APIs stay under `/api/storage/pm-reports/*` in the Next.js server.
 - The proxy must continue supporting `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, and `HEAD`.
 - Validate upstream paths with `client/src/server/proxy-url.ts`.
 - `CHEKKU_LOCAL_USER_ID` is a temporary local identity seam. Replace it with OIDC later without changing thread-ownership semantics.
 - `AGENT_SERVICE_TOKEN`, when used, is server-only.
+- `/api/storage/pm-reports` and `/api/storage/pm-reports/[reportId]` require the server identity seam and return safe bounded errors.
+- `/reports` and `/reports/[reportId]` use `client/src/server/pm-reports.ts`; browser modules never import `@chekku/storage`.
 
+### Garage MCP
+
+- Register the built-in server as `mcpServers: { garage: garageMcpServer }` in the single Mastra composition root.
+- Stored-agent Garage selection persists `mcpClients: { garage: { tools: {} } }`.
+- Keep the MCP registry fixed to `create_text_object`, `get_text_object`, `list_text_objects`, `replace_text_object`, and `delete_object`. Do not accept arbitrary MCP URLs, commands, packages, or credentials.
+- Derive identity only from trusted `context.agent.agentId`; reject missing context before storage access and never accept agent IDs in tool input.
+- Physical keys use `agents/<base64url-agent-id>/<validated-relative-key>`. Expose relative keys only.
+- Enforce 512 UTF-8-byte relative keys, 262,144 UTF-8-byte text, and 100-key public lists with a `truncated` flag.
+- Keep create conditional. Require approval for replace and delete. Preserve accurate MCP annotations.
+- Return fixed actionable storage errors without credentials, endpoints, headers, raw provider responses, or request IDs.
+
+### PM reports
+
+- Keep `pm-agent` code-defined and protected, with `memory: new Memory()` and tools `save_pm_report_to_garage`, `list_pm_reports_from_garage`, and `view_pm_report_from_garage` registered only on that agent.
+- Bind every PM tool and server-side report operation to fixed namespace `pm-agent`; never accept namespace or agent identity from model, route, browser, or local user input.
+- Persist and expose only relative `pm-reports/<reportId>/...` metadata keys. Never leak physical `agents/<base64url-agent-id>/...` prefixes.
+- Do not migrate or fall back to old global development report objects.
+- Canonical report IDs use `pmr_YYYYMMDDHHMMSS_<8 lowercase hex>`; repository, PM tool, and public read boundaries enforce `^pmr_[0-9]{14}_[0-9a-f]{8}$`, and lists skip noncanonical metadata.
+- Keep `reportUrl` and `reportsMarkdown` presentation-only in list-tool output. They must not enter persisted metadata, save output, view output, or repository types.
+- PM Agent must return deterministic `reportsMarkdown` unchanged. Preserve newest-first rows, URL-encoded relative links, compact UTC dates, safe escaping, and exact empty text `No saved reports found.`
+- Keep chat and report-list tables horizontally scrollable, keyboard focusable, labeled as regions, and visibly outlined on focus.
+- Preserve generic Garage MCP at exactly five generic tools. PM report tools must never enter its registry.
+- Garage v2.3 external writers can race checked mutations; do not claim cross-process conditional-write guarantees.
 ## Coding conventions
 
 - Use TypeScript strict mode and explicit types at external boundaries.
@@ -135,7 +177,9 @@ Add regression tests for behavior changes, especially:
 - thread ID creation and ownership;
 - proxy URL validation and method support;
 - sidebar and route structure;
+- shared Garage storage, namespace isolation, PM reports/APIs/pages/tables, MCP hydration, and launcher structure;
 - QA agent Memory and browser integration.
+- Social agent roles, Telegram slash registration, and email approval behavior.
 
 Tests use Vitest. Keep tests alongside the relevant module or in the existing `__tests__` folder. Do not add a second test runner for new tests.
 

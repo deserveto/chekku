@@ -323,10 +323,6 @@ const socialMediaAgentConfig: AgentConfig<string, ToolsInput, undefined, Provide
   model: () => getServerModel(),
   requestContextSchema: providerContextSchema,
   memory: new Memory(),
-  // No per-tool approval gate: sendEmailTool runs autonomously. The agent is
-  // intended to run unattended (e.g. over Telegram), so the previous
-  // Approve/Decline gate on outbound email was intentionally dropped. Broader
-  // human-in-the-loop gates will be added later as a dedicated layer.
   tools: { getCurrentTimeTool, sendEmailTool },
   // Channels are only wired when Telegram is configured, so the agent (and the
   // server) boot fine without TELEGRAM_BOT_TOKEN. With no adapter there is no
