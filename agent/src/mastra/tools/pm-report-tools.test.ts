@@ -13,6 +13,7 @@ const analysisMarkdown = `**Risk Rating: 8/10 — IN-DANGER**
 
 ## Summary
 The report says "release is blocked", so launch cannot proceed.`;
+const markdownBreak = '&#8203;';
 
 function createMemoryStore(): { objects: Map<string, string>; store: ObjectStorage } {
   const objects = new Map<string, string>();
@@ -76,11 +77,23 @@ describe('PM report tools', () => {
     ['2026-07-15T11:26:42Z', '2026-07-15 11:26 UTC'],
     ['2026-07-15T11:26:42.123456789z', '2026-07-15 11:26 UTC'],
     ['2026-07-15t13:56:42+02:30', '2026-07-15 11:26 UTC'],
-    ['2026-02-30T11:26:00.000Z', '2026-02-30T11:26:00.000Z'],
+    ['2026-02-30T11:26:00.000Z', `2026\\-${markdownBreak}02\\-${markdownBreak}30T11\\:${markdownBreak}26\\:${markdownBreak}00\\.${markdownBreak}000Z`],
   ])('formats or safely preserves timestamp %s', (createdAt, expected) => {
     expect(formatPmReportsMarkdown([
       report('pmr_date', createdAt, 4, 'WARNING'),
     ])).toContain(` | ${expected} | 4/10 | WARNING |`);
+  });
+
+  it.each([
+    ['www.example.com', `w${markdownBreak}ww\\.${markdownBreak}example\\.${markdownBreak}com`],
+    ['https://example.com/path', `https\\:${markdownBreak}\\/${markdownBreak}\\/${markdownBreak}example\\.${markdownBreak}com\\/${markdownBreak}path`],
+    ['user@example.com', `user\\@${markdownBreak}example\\.${markdownBreak}com`],
+    ['![image](https://example.com/x.png)', `\\!${markdownBreak}\\[${markdownBreak}image\\]${markdownBreak}\\(${markdownBreak}https\\:${markdownBreak}\\/${markdownBreak}\\/${markdownBreak}example\\.${markdownBreak}com\\/${markdownBreak}x\\.${markdownBreak}png\\)${markdownBreak}`],
+    ['<b>unsafe</b>', `\\<${markdownBreak}b\\>${markdownBreak}unsafe\\<${markdownBreak}\\/${markdownBreak}b\\>${markdownBreak}`],
+  ])('escapes invalid timestamp %s without changing visible text', (createdAt, escaped) => {
+    const markdown = formatPmReportsMarkdown([report('pmr_escape', createdAt, 4, 'WARNING')]);
+
+    expect(markdown).toContain(` | ${escaped} | 4/10 | WARNING |`);
   });
 
   it('escapes invalid timestamps against Markdown and control-character injection', () => {
@@ -89,9 +102,9 @@ describe('PM report tools', () => {
 
     expect(markdown.split('\n')).toHaveLength(3);
     expect(markdown).toContain('bad\\r\\n\\|');
-    expect(markdown).toContain('\\[link\\]\\(https\\:\\/\\/example\\.com\\)');
-    expect(markdown).toContain('\\!\\[image\\]\\(https\\:\\/\\/example\\.com\\/x\\.png\\)');
-    expect(markdown).toContain('\\<b\\>\\t\\u0000');
+    expect(markdown).toContain(`\\[${markdownBreak}link\\]${markdownBreak}\\(${markdownBreak}https\\:${markdownBreak}`);
+    expect(markdown).toContain(`\\!${markdownBreak}\\[${markdownBreak}image\\]${markdownBreak}`);
+    expect(markdown).toContain(`\\<${markdownBreak}b\\>${markdownBreak}\\t\\u0000`);
     expect(markdown).not.toContain('[link](');
     expect(markdown).not.toContain('![image](');
     expect(markdown).not.toContain('https://example.com');
@@ -177,6 +190,48 @@ describe('PM report tools', () => {
     ]);
 
     for (const validation of validations) expect(validation.issues).toBeDefined();
+  });
+
+  it('rejects blank save inputs without trimming accepted values', async () => {
+    const saveTool = createSavePmReportToGarageTool();
+    const reportMarkdown = '  Weekly report\r\n';
+    const paddedAnalysis = `\n${analysisMarkdown}\n  `;
+
+    const accepted = await saveTool.inputSchema!['~standard'].validate({
+      reportMarkdown,
+      analysisMarkdown: paddedAnalysis,
+    });
+    const blankReport = await saveTool.inputSchema!['~standard'].validate({
+      reportMarkdown: ' \r\n\t',
+      analysisMarkdown,
+    });
+    const blankAnalysis = await saveTool.inputSchema!['~standard'].validate({
+      reportMarkdown: 'Weekly report',
+      analysisMarkdown: ' \r\n\t',
+    });
+
+    expect(accepted).toEqual({ value: { reportMarkdown, analysisMarkdown: paddedAnalysis } });
+    expect(blankReport.issues).toBeDefined();
+    expect(blankAnalysis.issues).toBeDefined();
+  });
+
+  it('persists accepted report and analysis whitespace unchanged', async () => {
+    const { objects, store } = createMemoryStore();
+    const reportMarkdown = '  Weekly report\r\n';
+    const paddedAnalysis = `\n${analysisMarkdown}\n  `;
+    const saveTool = createSavePmReportToGarageTool({
+      storeFactory: () => store,
+      now: () => new Date('2026-07-13T12:00:00.000Z'),
+    });
+
+    const saved = await saveTool.execute?.({
+      reportMarkdown,
+      analysisMarkdown: paddedAnalysis,
+    }, {} as never) as { reportId: string };
+    const namespace = `agents/${Buffer.from('pm-agent').toString('base64url')}`;
+
+    expect(objects.get(`${namespace}/pm-reports/${saved.reportId}/input.md`)).toBe(reportMarkdown);
+    expect(objects.get(`${namespace}/pm-reports/${saved.reportId}/analysis.md`)).toBe(paddedAnalysis);
   });
 
   it('rejects analysis without risk header', async () => {

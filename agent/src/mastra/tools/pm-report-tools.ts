@@ -31,7 +31,7 @@ type PmReportListItem = PmReportMetadata & { reportUrl: string };
 
 function escapeMarkdownCell(value: string): string {
   const controlCharacter = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
-  const escapeAllPunctuation = controlCharacter.test(value) || /https?:\/\//i.test(value);
+  const characters = Array.from(value);
   const visibleEscapes: Record<string, string> = {
     '\b': '\\b',
     '\t': '\\t',
@@ -41,17 +41,21 @@ function escapeMarkdownCell(value: string): string {
     '\r': '\\r',
   };
 
-  return Array.from(value, (character) => {
+  return characters.map((character, index) => {
+    const breakWww = `${character}${characters[index + 1] ?? ''}${characters[index + 2] ?? ''}${characters[index + 3] ?? ''}`
+      .toLowerCase() === 'www.';
+    const suffix = breakWww ? '&#8203;' : '';
     if (character === '\\') return '\\\\';
     if (character === '|') return '\\|';
     if (controlCharacter.test(character)) {
       return visibleEscapes[character]
         ?? `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`;
     }
-    if (/[!\[\]()<>]/.test(character) || (escapeAllPunctuation && /[!-/:-@\[-`{-~]/.test(character))) {
-      return `\\${character}`;
+    if (/[!-/:-@\[-`{-~]/.test(character)) {
+      // GFM resolves backslash escapes before autolinking; hidden break keeps visible text but stops tokenization.
+      return `\\${character}&#8203;`;
     }
-    return character;
+    return `${character}${suffix}`;
   }).join('');
 }
 
@@ -64,7 +68,7 @@ function formatCreatedAt(createdAt: string): string {
 export function formatPmReportsMarkdown(reports: readonly PmReportListItem[]): string {
   if (reports.length === 0) return 'No saved reports found.';
   const rows = reports.map((report) =>
-    `| [${escapeMarkdownCell(report.reportId)}](${report.reportUrl}) | ${formatCreatedAt(report.createdAt)} | ${report.rating}/10 | ${report.status} |`,
+    `| [${report.reportId}](${report.reportUrl}) | ${formatCreatedAt(report.createdAt)} | ${report.rating}/10 | ${report.status} |`,
   );
   return [
     '| Report | Created | Risk | Status |',
@@ -83,12 +87,13 @@ function reportStore(options: PmReportToolOptions): ObjectStorage {
 }
 
 export function createSavePmReportToGarageTool(options: PmReportToolOptions = {}) {
+  const nonBlankString = z.string().refine((value) => value.trim().length > 0, 'Value must not be blank.');
   return createTool({
     id: 'save_pm_report_to_garage',
     description: 'Save a PM Agent weekly report analysis to Garage object storage and return its metadata.',
     inputSchema: z.object({
-      reportMarkdown: z.string().trim().min(1),
-      analysisMarkdown: z.string().trim().min(1),
+      reportMarkdown: nonBlankString,
+      analysisMarkdown: nonBlankString,
     }).strict(),
     outputSchema: metadataSchema,
     execute: async ({ reportMarkdown, analysisMarkdown }) => {

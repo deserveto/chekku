@@ -39,15 +39,39 @@ describe('pm-agent (weekly report analysis)', () => {
       'save_pm_report_to_garage',
       'view_pm_report_from_garage',
     ]);
+    expect(await pmAgent.getDefaultOptions()).toMatchObject({ maxSteps: 12 });
+  });
+
+  it('preserves the exact risk template and status rules', async () => {
+    const instructions = await pmAgent.getInstructions();
+
+    expect(instructions).toContain('**Risk Rating: <integer 1-10>/10 — <STATUS>**');
+    expect(instructions).toContain('**Headline:** <one sentence capturing the single most important thing>');
+    expect(instructions).toContain('## Summary');
+    expect(instructions).toContain('## Flagged Issues');
+    expect(instructions).toContain('### [<SEVERITY>] <issue title> — <STATUS>');
+    expect(instructions).toContain('**Affected:** <teams / systems / timeline>');
+    expect(instructions).toContain('## On Track');
+    expect(instructions).toContain('## Recommended Actions');
+    expect(instructions).toContain('1-3 = ON-TRACK, 4-7 = WARNING, 8-10 = IN-DANGER');
+    expect(instructions).toContain('If any issue is CRITICAL, overall rating MUST be 9 or 10.');
   });
 
   it('returns deterministic report list Markdown unchanged', async () => {
     const instructions = await pmAgent.getInstructions();
 
-    expect(instructions).toContain('reportsMarkdown');
-    expect(instructions).toContain('return it unchanged');
-    expect(instructions).toContain('Do not reconstruct');
+    expect(instructions).toContain(
+      'use its reportsMarkdown value; return it unchanged. Do not reconstruct, summarize, reorder, or convert the rows into prose.',
+    );
     expect(instructions).toContain('[<reportId>](<reportUrl>)');
+  });
+
+  it('returns analysis with a concise fallback when saving fails', async () => {
+    const instructions = await pmAgent.getInstructions();
+
+    expect(instructions).toContain(
+      'If save_pm_report_to_garage fails, still return the Markdown analysis and add one short line explaining Garage save failed.',
+    );
   });
 });
 
