@@ -78,6 +78,11 @@ describe('Garage MCP server', () => {
     expect(garageMcpServer.id).toBe('garage');
     expect(Object.keys(garageMcpServer.tools()).sort()).toEqual(toolIds);
     expect(Object.keys(garageMcpServer.tools()).join(' ')).not.toMatch(/pm|report/i);
+    expect(Object.keys(garageMcpServer.tools())).not.toEqual(expect.arrayContaining([
+      'save_pm_report_to_garage',
+      'list_pm_reports_from_garage',
+      'view_pm_report_from_garage',
+    ]));
   });
 
   it('exposes accurate annotations through server.tools()', () => {

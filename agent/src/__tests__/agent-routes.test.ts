@@ -25,6 +25,7 @@ describe('agent server routes', () => {
   it('registers the reconstructed server routes', () => {
     expect(Object.keys(mastra.listAgents()).sort()).toEqual([
       'mainAgent',
+      'pmAgent',
       'qaWebAgent',
     ]);
     expect(mastra.listMCPServers()).toEqual({
