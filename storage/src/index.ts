@@ -13,3 +13,18 @@ export {
   validateRelativeObjectKey,
   validateRelativeObjectPrefix,
 } from './namespaced-objects.ts';
+export {
+  PM_REPORT_AGENT_ID,
+  createPmReportStorage,
+  createReportId,
+  getPmReport,
+  keysFor,
+  listPmReports,
+  parsePmReportTimestamp,
+  parseRiskHeader,
+  savePmReport,
+  type PmReportMetadata,
+  type PmReportReadResult,
+  type PmReportStatus,
+  type SavePmReportInput,
+} from './pm-reports.ts';
