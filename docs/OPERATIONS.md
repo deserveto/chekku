@@ -144,6 +144,33 @@ Garage MCP validates relative keys before access, limits keys to 512 UTF-8 bytes
 
 Garage v2.3.0 does not process destination `If-Match`/`If-None-Match` headers for PUT or DELETE. The adapter serializes same-key mutations in one process and performs an immediate existence check; it also sends `If-None-Match` on create for S3 providers that support it. This prevents stale races among calls through one adapter instance, but an external writer can still race a Garage mutation. Do not claim cross-process compare-and-swap semantics until the pinned Garage release supports those conditions.
 
+### PM report objects
+
+PM Agent tools and Next.js server report services share the fixed `pm-agent` namespace. Logical report objects are:
+
+```text
+pm-reports/<reportId>/input.md
+pm-reports/<reportId>/analysis.md
+pm-reports/<reportId>/metadata.json
+```
+
+Metadata contains these relative keys only. Do not expose or manually construct physical `agents/<base64url-agent-id>/...` keys. No migration reads old global development objects; reports outside the fixed namespace remain invisible.
+
+Generated and publicly readable IDs use `pmr_YYYYMMDDHHMMSS_<8 lowercase hex>`, such as `pmr_20260715112642_e720cebd`. Public detail requests reject IDs outside `^pmr_[0-9]{14}_[0-9a-f]{8}$` before storage access.
+
+Report interfaces:
+
+- `/reports` lists report ID, created time, risk rating, and status newest first.
+- `/reports/[reportId]` renders saved analysis, metadata, then original weekly input.
+- `GET /api/storage/pm-reports` returns `{ reports }` after server identity validation.
+- `GET /api/storage/pm-reports/[reportId]` returns input, analysis, and metadata after identity and ID validation.
+
+All four interfaces use `client/src/server/pm-reports.ts` and the temporary server-side `CHEKKU_LOCAL_USER_ID` seam. Browser code never contacts Garage. Missing identity returns 403; invalid IDs return 400 or page not-found; missing reports return 404; storage failures return bounded 503 responses without provider details.
+
+When PM Agent lists reports in chat, its code-defined list tool generates a deterministic GFM table and the agent returns it unchanged. Rows contain URL-encoded relative report links, compact UTC timestamps, ratings, and statuses. Links open in a new tab with `rel="noreferrer"`. Chat and `/reports` tables are labeled keyboard-focusable regions with visible focus styles and horizontal scrolling on narrow screens. Empty lists return `No saved reports found.` exactly; invalid stored timestamps remain visible rather than breaking the list.
+
+PM report tools are not exposed by Garage MCP. Generic stored-agent Garage access remains exactly `create_text_object`, `get_text_object`, `list_text_objects`, `replace_text_object`, and `delete_object`. Garage v2.3 external-writer race limitations above apply to PM writes as well.
+
 ## Browser operation
 
 ```dotenv
@@ -166,6 +193,10 @@ Report the blocker rather than bypassing access controls.
 ### Garage MCP reports missing identity
 
 `Agent identity is required.` means execution did not include trusted `context.agent.agentId`. Do not add an agent ID to tool input. Ensure the tool runs through a hydrated Mastra agent with the built-in `garage` MCP server.
+
+### PM report is unavailable
+
+Confirm the report ID uses canonical public format and all five `GARAGE_*` values reach both agent and Next.js server processes. PM Agent can save through the agent process while `/reports` still fails if the client server lacks Garage configuration. Do not copy generated credentials into tracked files or bypass the fixed `pm-agent` namespace.
 
 ### Garage object storage is not configured
 
@@ -271,7 +302,7 @@ npm run build
 git diff --check
 ```
 
-The test suite covers model routing, model discovery, prompt normalization, agent configuration, tools, stored-agent payloads and Garage hydration, stored-model migration, thread ownership, proxy paths, UI structure, namespaced storage, Garage adapter safety, and launcher behavior.
+The test suite covers model routing, model discovery, prompt normalization, agent configuration, PM tools and repositories, report APIs/pages and accessible tables, stored-agent payloads and Garage hydration, stored-model migration, thread ownership, proxy paths, UI structure, namespaced storage, Garage adapter safety, and launcher behavior.
 
 ## Production notes
 
