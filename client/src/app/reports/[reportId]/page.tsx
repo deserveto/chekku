@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { notFound } from 'next/navigation';
 
 import { MarkdownMessage } from '@/components/markdown-message';
 import { StudioNav } from '@/components/studio/studio-nav';
@@ -22,6 +23,12 @@ export default async function ReportDetailPage({
   try {
     report = await getPmReportForUser(reportId);
   } catch (error) {
+    if (
+      error instanceof PmReportServiceError
+      && (error.code === 'invalid-report-id' || error.code === 'not-found')
+    ) {
+      notFound();
+    }
     errorMessage = error instanceof PmReportServiceError
       ? error.message
       : 'Could not load report.';
@@ -64,21 +71,21 @@ export default async function ReportDetailPage({
 
         <div className="studio-report-detail">
           <section className="studio-panel studio-report-panel">
-            <p className="studio-eyebrow">Analysis</p>
+            <h2 className="studio-eyebrow">Analysis</h2>
             <div className="studio-report-markdown markdown">
               <MarkdownMessage content={report.analysisMarkdown} />
             </div>
           </section>
 
           <section className="studio-panel studio-report-panel">
-            <p className="studio-eyebrow">Metadata</p>
+            <h2 className="studio-eyebrow">Metadata</h2>
             <pre className="studio-report-metadata">
               {JSON.stringify(report.metadata, null, 2)}
             </pre>
           </section>
 
           <section className="studio-panel studio-report-panel">
-            <p className="studio-eyebrow">Original report input</p>
+            <h2 className="studio-eyebrow">Original report input</h2>
             <div className="studio-report-markdown markdown">
               <MarkdownMessage content={report.inputMarkdown} />
             </div>

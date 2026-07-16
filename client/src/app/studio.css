@@ -435,6 +435,11 @@ body.studio-sidebar-resizing * {
   overflow-x: auto;
 }
 
+.studio-report-table-wrap:focus-visible {
+  outline: 1px solid var(--studio-ink);
+  outline-offset: 2px;
+}
+
 .studio-report-table {
   width: 100%;
   min-width: 620px;
@@ -1644,11 +1649,30 @@ body.studio-sidebar-resizing * {
   }
 
   .studio-nav .studio-primary-action,
-  .studio-nav-links,
   .studio-nav-spacer,
   .studio-runtime-card,
   .studio-user-card {
     display: none;
+  }
+
+  .studio-nav-links {
+    display: flex;
+    gap: 2px;
+  }
+
+  .studio-resizable-sidebar.is-collapsed .studio-nav-links a,
+  .studio-nav-links a {
+    min-height: 34px;
+    justify-content: flex-start;
+    padding-inline: 8px;
+  }
+
+  .studio-nav-links a > span:first-child {
+    display: none;
+  }
+
+  .studio-resizable-sidebar.is-collapsed .studio-nav-links .studio-sidebar-copy {
+    display: inline !important;
   }
 
   .studio-main {

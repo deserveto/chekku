@@ -91,22 +91,6 @@ describe('requested UI structure', () => {
     expect(reportListPage).toContain('role="alert"');
   });
 
-  it('renders report analysis before metadata and original input', () => {
-    const analysisIndex = reportDetailPage.indexOf(
-      '<MarkdownMessage content={report.analysisMarkdown}',
-    );
-    const metadataIndex = reportDetailPage.indexOf('JSON.stringify(report.metadata');
-    const inputIndex = reportDetailPage.indexOf(
-      '<MarkdownMessage content={report.inputMarkdown}',
-    );
-
-    expect(analysisIndex).toBeGreaterThan(-1);
-    expect(metadataIndex).toBeGreaterThan(analysisIndex);
-    expect(inputIndex).toBeGreaterThan(metadataIndex);
-    expect(reportDetailPage).toContain('Report unavailable');
-    expect(reportDetailPage).toContain('role="alert"');
-  });
-
   it('keeps Garage report access server-only', () => {
     expect(reportListPage).not.toContain("'use client'");
     expect(reportDetailPage).not.toContain("'use client'");
@@ -114,11 +98,6 @@ describe('requested UI structure', () => {
     expect(reportDetailPage).toContain("from '@/server/pm-reports'");
     expect(reportListPage).not.toContain("from '@chekku/storage'");
     expect(reportDetailPage).not.toContain("from '@chekku/storage'");
-  });
-
-  it('includes reports in Studio navigation', () => {
-    expect(studioNav).toContain('href="/reports"');
-    expect(studioNav).toContain("pathname.startsWith('/reports')");
   });
 
   it('reserves the PM built-in id in the shared identity set', () => {

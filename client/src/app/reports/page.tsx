@@ -44,7 +44,12 @@ export default async function ReportsPage() {
               <p>PM Agent reports will appear here after they are stored.</p>
             </div>
           ) : (
-            <div className="studio-report-table-wrap studio-panel">
+            <div
+              className="studio-report-table-wrap studio-panel"
+              tabIndex={0}
+              role="region"
+              aria-label="Saved PM reports"
+            >
               <table className="studio-report-table">
                 <thead>
                   <tr>

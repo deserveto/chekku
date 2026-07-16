@@ -67,6 +67,7 @@ export function StudioNav({ resourceId }: { resourceId: string }) {
             <Link
               href="/agents"
               className={pathname.startsWith('/agents') ? 'active' : ''}
+              aria-current={pathname.startsWith('/agents') ? 'page' : undefined}
               aria-label="Agents"
               title={collapsed ? 'Agents' : undefined}
             >
@@ -76,6 +77,7 @@ export function StudioNav({ resourceId }: { resourceId: string }) {
             <Link
               href="/reports"
               className={pathname.startsWith('/reports') ? 'active' : ''}
+              aria-current={pathname.startsWith('/reports') ? 'page' : undefined}
               aria-label="Reports"
               title={collapsed ? 'Reports' : undefined}
             >
