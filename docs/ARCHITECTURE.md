@@ -25,10 +25,12 @@ Chekku contains three npm workspaces: a Next.js client, a Mastra agent server, a
 │ - main-agent         - @mastra/editor      │        │
 │ - pm-agent           - database versions   │        │
 │ - qa-web-agent                             │        │
+│ - social-media-agent                       │        │
 │                                            │        │
 │ Memory + LibSQLStore                       │        │
-│ Calculator + current-time tools            │        │
+│ Calculator + current-time + email tools    │        │
 │ Garage MCP                                 │        │
+│ Chat SDK + Telegram adapter                │        │
 │ Agent Browser                              │        │
 │ OpenAI-compatible custom gateway           │        │
 └──────────────┬────────────────────┬────────┘        │
@@ -47,25 +49,27 @@ Chekku contains three npm workspaces: a Next.js client, a Mastra agent server, a
 Next.js report service / Garage MCP ──► @chekku/storage
                                             │
                                             ▼
-                                 Garage/S3 `chekku-objects`
+                                  Garage/S3 `chekku-objects`
 ```
 
 ## Backend composition
 
 `agent/src/mastra/index.ts` creates the single `Mastra` instance and registers:
 
-- `mainAgent`, `pmAgent`, and `qaWebAgent`;
-- `storedAgentTools` (`calculatorTool` and `getCurrentTimeTool`) for stored-agent hydration;
+- `mainAgent`, `pmAgent`, `qaWebAgent`, and `socialMediaAgent`;
+- `storedAgentTools` (`calculatorTool`, `getCurrentTimeTool`, and `sendEmailTool`) for stored-agent hydration;
+- `garageMcpServer` for generic agent-isolated object storage;
 - `LibSQLStore`;
 - `MastraEditor` with database storage;
 - `OpenAICompatibleGateway`;
-- built-in `garageMcpServer` under MCP server ID `garage`;
 - structured logging and request middleware;
 - `/healthz` and `/models` custom routes.
 
 Mastra provides the native agent, Memory, and editor APIs. Next.js separately provides `/reports/*` pages and `/api/storage/pm-reports/*` APIs through `client/src/server/pm-reports.ts`; those PM report storage interfaces are not Mastra APIs. Chekku does not maintain a parallel custom conversation or agent database.
 
-`storedAgentTools` is the instance-level registry that makes calculator and current-time tools available during stored-agent hydration. PM report tools are attached directly to `pmAgent`; they are not members of `storedAgentTools` or `garageMcpServer`.
+`storedAgentTools` is the instance-level registry that makes calculator, current-time, and email tools available during stored-agent hydration. PM report tools are attached directly to `pmAgent`; they are not members of `storedAgentTools` or `garageMcpServer`.
+
+`socialMediaAgent` also wires a Telegram channel adapter. Once Mastra initializes the agent's `AgentChannels`, `index.ts` registers the agent's slash-command handlers (`/help`, `/roles`, `/role`, `/switch`) on the Chat SDK so Telegram-intercepted bot commands reach the role logic.
 
 ## Agents
 
@@ -77,7 +81,19 @@ Mastra provides the native agent, Memory, and editor APIs. Next.js separately pr
 
 `qa-web-agent` adds Mastra Agent Browser to the common model and Memory stack. Memory is mandatory because browser context processors need a live Memory context during tool loops.
 
-Interactive browser tools require approval unless the request context explicitly enables full browser access. Consequential actions still require user confirmation through the agent instructions.
+Interactive browser tools require approval unless the request context explicitly enables full browser access, and the QA Web Agent's instructions ask it to describe consequential browser actions before taking them. The shared outbound-email tool always requires approval before delivery.
+
+### Social Media Agent
+
+`social-media-agent` is a role-switchable content assistant reachable over a Mastra channel (Telegram today, other platforms later). It shares the common server model and Memory stack with the other code agents and adds a Telegram adapter through the Chat SDK.
+
+Users drive it from the chat platform with slash commands:
+
+- `/help` — show available commands;
+- `/roles` — list roles; `/role` — show the active role;
+- `/switch <role>` — switch between `general`, `x-writer`, `instagram-writer`, `linkedin-writer`, and `tiktok-writer`.
+
+The active role is held in-memory keyed by `${platform}:${userId}`. The agent reads the role from the channel context on `requestContext` and rebuilds its instructions on each turn. Phase scope is drafting and planning only; destination-platform publishing is a later phase.
 
 ### PM Agent
 
@@ -89,7 +105,7 @@ These PM tools are registered only on PM Agent. They compose `@chekku/storage` t
 
 Stored agents are created through the client and persisted by `@mastra/editor`. A stored record contains behavior, model selection, Memory configuration, tools, and delegate-agent references. It does not contain endpoint credentials.
 
-The builder offers one whitelisted MCP capability, `garage`. Selection persists as `mcpClients: { garage: { tools: {} } }`, and hydration resolves that ID against the built-in server. The trusted proxy accepts stored-agent MCP configuration only when absent or exactly that shape, so direct browser requests cannot supply arbitrary MCP URLs, commands, packages, or credentials.
+Selecting Garage persists the fixed editor shape `mcpClients: { garage: { tools: {} } }`. The Next.js proxy accepts only that built-in shape and rejects arbitrary MCP URLs, commands, packages, environment values, and credentials before forwarding stored-agent mutations.
 
 When an older stored model no longer matches the current registry, the client migrates it to the configured gateway and canonical default before chat begins.
 
@@ -131,7 +147,7 @@ This normalization applies to both `doGenerate` and `doStream`.
 
 ## Storage
 
-`LibSQLStore` is the only persistence layer for Mastra-managed state. It stores:
+`LibSQLStore` is the only persistence layer. It stores:
 
 - stored-agent definitions and versions;
 - Mastra Memory threads and messages;
@@ -207,7 +223,6 @@ The browser uses `@mastra/client-js` with the Next.js origin and `/api/agent` pr
 
 - resolves the server-controlled local identity;
 - validates the requested path;
-- rejects stored-agent create/update payloads whose MCP configuration is not absent or exactly `garage: { tools: {} }`;
 - forwards requests to `AGENT_URL`;
 - attaches an optional service credential;
 - supports GET, POST, PUT, PATCH, DELETE, and HEAD;
@@ -248,7 +263,6 @@ Add future functionality through these boundaries:
 
 - code-defined agents in `agent/src/agents/`;
 - registered stored-agent tools in `agent/src/mastra/tools/`;
-- generic object-storage implementations in `storage/`;
 - provider-neutral gateway behavior in `agent/src/mastra/gateways/`;
 - server request context and future authentication seam;
 - routed client components and Mastra client helpers.

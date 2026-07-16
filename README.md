@@ -12,7 +12,7 @@
 
 </div>
 
-Chekku provides a focused interface for managing agents, creating agent-specific conversations, analyzing engineering weekly reports, and running browser-assisted QA through a provider-neutral OpenAI-compatible model gateway. Three npm workspaces provide the Next.js client, Mastra server, and shared Garage/S3 object-storage package. LibSQL remains the local source of truth for agents and conversations; Garage stores generic agent objects and PM report artifacts.
+Chekku provides a focused interface for managing agents, creating agent-specific conversations, analyzing engineering weekly reports, publishing social-media drafts through Telegram, and running browser-assisted QA through a provider-neutral OpenAI-compatible model gateway. Three npm workspaces provide the Next.js client, Mastra server, and shared Garage/S3 object-storage package. LibSQL remains the local source of truth for agents and conversations; Garage stores generic agent objects and PM report artifacts.
 
 ## Highlights
 
@@ -22,10 +22,11 @@ Chekku provides a focused interface for managing agents, creating agent-specific
 - **OpenAI-compatible models** — connect Rafiqspace LLM, LiteLLM, vLLM, or another compatible endpoint with server-only credentials.
 - **Browser QA agent** — navigate and inspect live websites using Mastra Agent Browser.
 - **PM Agent reports** — analyze weekly reports, save risk reviews in Garage, and browse linked report details.
+- **Social media agent** — role-switchable content assistant reachable over Telegram (X, Instagram, LinkedIn, TikTok roles).
 - **Hosted-vLLM compatibility** — final prompt normalization keeps system messages at the beginning.
 - **Local-first storage** — agent definitions, versions, memory, and threads live in LibSQL.
-- **Agent-isolated Garage storage** — stored agents can opt into five generic UTF-8 text-object tools backed by a local Garage bucket.
 - **Same-origin client traffic** — browser requests go through the Next.js proxy instead of calling the Mastra server directly.
+- **Email + time + calculator tools** — registered for stored agents and selectively bound to code-defined agents; email delivery goes through Resend.
 
 ## Architecture
 
@@ -41,9 +42,11 @@ Next.js client :3000
   │     ├── main-agent
   │     ├── pm-agent ──► PM-Agent-only report tools ──┐
   │     ├── qa-web-agent                              │
+  │     ├── social-media-agent (Telegram channel)     │
   │     ├── @mastra/editor stored agents              │
   │     ├── Mastra Memory                             │
-  │     ├── calculator + current-time tools           │
+  │     ├── calculator + current-time + email tools   │
+  │     ├── Chat SDK + Telegram adapter               │
   │     ├── Garage MCP (optional stored-agent          │
   │     │   capability) ───────────────────────────────┤
   │     └── OpenAI-compatible gateway                 │
@@ -101,6 +104,13 @@ LLM_MODELS=qwen3.6-35b-a3b-fast,qwen3.6-35b-a3b
 
 Never expose `LLM_API_KEY` through a `NEXT_PUBLIC_*` variable or commit `agent/.env`.
 
+#### Optional integrations
+
+- **Telegram (social-media-agent)** — create a bot with [@BotFather](https://t.me/BotFather), then set `TELEGRAM_BOT_TOKEN`. Keep `TELEGRAM_MODE=polling` for local dev; switch to `webhook` with `TELEGRAM_WEBHOOK_SECRET_TOKEN` for production.
+- **Email outbound (send-email tool)** — sign up at [resend.com](https://resend.com), set `RESEND_API_KEY`, and (for production) a Resend-verified sender in `RESEND_FROM_EMAIL`. The default `onboarding@resend.dev` sender only delivers to the account owner. Every delivery requires approval.
+
+Both are optional; Chekku boots fine without them. The `social-media-agent` binds the send-email tool and (when configured) the Telegram channel; stored agents can opt in from the builder's **Capabilities** section.
+
 ### 3. Configure the client
 
 ```bash
@@ -109,21 +119,11 @@ cp client/.env.example client/.env.local
 
 The defaults target the local Mastra server and normally require no edits.
 
-### 4. Start the application
-
-For client and agent development without local Garage orchestration:
-
-```bash
-npm run dev
-```
-
-For client, agent, and local Garage together, use Git Bash, WSL, or another Bash environment with Docker Compose:
+### 4. Start Garage and both application workspaces
 
 ```bash
 npm run dev:sh
 ```
-
-`dev:sh` creates private ignored Garage credentials and configuration, exposes the `chekku-objects` S3 API only at `127.0.0.1:3900`, waits for health, writes the five application Garage values to ignored `agent/.env.development`, then starts client and agent processes. It uses tmux when available and otherwise gives process groups a bounded TERM grace period before KILL.
 
 Open:
 
@@ -155,11 +155,12 @@ Local file: `agent/.env`
 | `CHEKKU_DEFAULT_AGENT_ID` | No | `main-agent` | Default agent for new sessions. |
 | `CHEKKU_LOCAL_USER_ID` | No | `local-user` | Development identity and Memory resource ID. |
 | `BROWSER_HEADLESS` | No | `true` | Run the QA browser without a visible window. |
-| `GARAGE_ENDPOINT` | For Garage tools | empty | Server-only S3-compatible endpoint. |
-| `GARAGE_REGION` | For Garage tools | empty | Garage S3 region. |
-| `GARAGE_BUCKET` | For Garage tools | empty | Generic object bucket; local launcher uses `chekku-objects`. |
-| `GARAGE_ACCESS_KEY_ID` | For Garage tools | empty | Server-only Garage access key. |
-| `GARAGE_SECRET_ACCESS_KEY` | For Garage tools | empty | Server-only Garage secret key. |
+| `TELEGRAM_BOT_TOKEN` | Conditional | empty | Bot token from [@BotFather](https://t.me/BotFather). Required when running `social-media-agent`. |
+| `TELEGRAM_MODE` | No | `polling` | Adapter mode: `polling` (dev, no tunnel), `webhook` (prod, public URL), or `auto`. |
+| `TELEGRAM_WEBHOOK_SECRET_TOKEN` | No | empty | Checked against `x-telegram-bot-api-secret-token`. Webhook mode only. |
+| `TELEGRAM_BOT_USERNAME` | No | empty | Override the bot username. Optional. |
+| `RESEND_API_KEY` | Conditional | empty | Resend API key. Required when an agent uses the `send-email` tool. |
+| `RESEND_FROM_EMAIL` | No | `Chekku <onboarding@resend.dev>` | Default sender. Use a Resend-verified domain to deliver beyond the account owner. |
 
 ### Client
 
@@ -176,8 +177,8 @@ Local file: `client/.env.local`
 
 | Command | Purpose |
 | --- | --- |
+| `npm run dev:sh` | Provision local Garage and start agent and client workspaces. |
 | `npm run dev` | Start agent and client workspaces together. |
-| `npm run dev:sh` | Generate local Garage state, start Garage, then start agent and client. |
 | `npm run dev:agent` | Start only the Mastra server. |
 | `npm run dev:client` | Start only the Next.js client. |
 | `npm run typecheck` | Type-check all three workspaces. |
@@ -194,7 +195,7 @@ The client uses system font stacks, so `next build` does not download fonts from
 .
 ├── agent/                  # Mastra server and agent runtime
 │   └── src/
-│       ├── agents/         # main-agent, pm-agent, and qa-web-agent
+│       ├── agents/         # main, PM, QA Web, and Social Media agents
 │       ├── config/         # environment and middleware
 │       ├── mastra/
 │       │   ├── gateways/   # OpenAI-compatible gateway and normalization
@@ -229,6 +230,7 @@ These rules keep the repository from drifting back into parallel implementations
 9. Garage identity comes from trusted Mastra execution context, never tool input; browser code never accesses Garage directly.
 10. PM report semantics stay outside Garage MCP in code-defined `pm-agent` tools and the shared report repository.
 11. PM storage always binds to fixed `pm-agent`; persisted metadata contains relative `pm-reports/...` keys only.
+12. Social Media Agent keeps Telegram slash registration and approval-gated email delivery in the single Mastra runtime.
 
 ## Garage MCP
 
@@ -328,8 +330,6 @@ Depending on the current working directory used by the Mastra CLI, the database 
 - API keys belong only in `agent/.env` or a deployment secret manager.
 - Never use `NEXT_PUBLIC_LLM_API_KEY` or similar browser-exposed credentials.
 - Keep `.env`, local databases, logs, and browser artifacts out of commits.
-- Keep generated `storage/.env.local`, `storage/.garage/`, and Garage credentials/data out of commits and logs.
-- Garage is server-only. Browser components must never import `@chekku/storage` or call Garage directly.
 - Browser actions that submit, publish, purchase, delete, or otherwise cause consequences require approval.
 - `CHEKKU_LOCAL_USER_ID` is a development seam, not production authentication.
 

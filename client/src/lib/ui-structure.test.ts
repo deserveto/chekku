@@ -65,7 +65,6 @@ describe('requested UI structure', () => {
     expect(rule).not.toContain('position: sticky');
     expect(rule).not.toContain('backdrop-filter');
   });
-
   it('offers only the whitelisted Garage MCP capability', () => {
     expect(agentBuilder).toContain('STUDIO_MCP_CLIENT_IDS.map');
     expect(agentBuilder).toContain(

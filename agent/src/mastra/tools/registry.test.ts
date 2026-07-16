@@ -8,6 +8,6 @@ describe('storedAgentTools', () => {
       .map((tool) => tool.id)
       .sort();
 
-    expect(ids).toEqual(['calculator', 'get-current-time']);
+    expect(ids).toEqual(['calculator', 'get-current-time', 'send-email']);
   });
 });

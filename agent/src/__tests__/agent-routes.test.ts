@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { ApiRoute } from '@mastra/core/server';
 import { healthRoute } from '../mastra/routes/health.js';
-import { mastra } from '../mastra/index.js';
 import { garageMcpServer } from '../mastra/mcp/garage-mcp-server.js';
+import { mastra } from '../mastra/index.js';
 
 async function json(response: unknown): Promise<unknown> {
   return await (response as Response).json();
@@ -27,6 +27,7 @@ describe('agent server routes', () => {
       'mainAgent',
       'pmAgent',
       'qaWebAgent',
+      'socialMediaAgent',
     ]);
     expect(mastra.listMCPServers()).toEqual({
       garage: garageMcpServer,

@@ -6,21 +6,24 @@
 npm ci
 cp agent/.env.example agent/.env
 cp client/.env.example client/.env.local
-npm run dev
-```
-
-The root development command starts:
-
-- Mastra on `http://localhost:4111`;
-- Next.js on `http://localhost:3000`.
-
-`npm run dev` does not provision Garage. To run all three local services, install Docker Compose and use a Bash environment:
-
-```bash
 npm run dev:sh
 ```
 
-The launcher validates required model values, creates private Garage state when absent, validates Compose, checks port 3900, starts or recreates Garage, waits up to 30 seconds for health, then starts agent and client. It uses a worktree-specific tmux session when tmux is available; set `CHEKKU_NO_TMUX=1` for direct child processes. `CHEKKU_READY_TIMEOUT_SECONDS` accepts 1-300, `CHEKKU_READY_INTERVAL_SECONDS` accepts a positive integer capped at five seconds, and fallback cleanup uses `CHEKKU_TERM_GRACE_SECONDS` from 1-30 (default 2) before process-group KILL.
+The launcher provisions local Garage configuration, waits for Garage health, then starts:
+
+- Garage S3 API on `http://127.0.0.1:3900`;
+- Mastra on `http://localhost:4111`;
+- Next.js on `http://localhost:3000`.
+
+It generates and exports these application values to both server processes; do not copy generated credentials into tracked files:
+
+```text
+GARAGE_ENDPOINT
+GARAGE_REGION
+GARAGE_BUCKET
+GARAGE_ACCESS_KEY_ID
+GARAGE_SECRET_ACCESS_KEY
+```
 
 ## Environment files
 
@@ -56,20 +59,6 @@ AGENT_SERVICE_TOKEN=
 ```
 
 `AGENT_SERVICE_TOKEN` is optional and remains server-side.
-
-### Garage environment
-
-Garage tools consume exactly five application values:
-
-```dotenv
-GARAGE_ENDPOINT=http://127.0.0.1:3900
-GARAGE_REGION=garage
-GARAGE_BUCKET=chekku-objects
-GARAGE_ACCESS_KEY_ID=replace-with-server-only-key
-GARAGE_SECRET_ACCESS_KEY=replace-with-server-only-secret
-```
-
-`npm run dev:sh` generates stable local values in ignored `storage/.env.local`, renders ignored `storage/.garage/garage.toml`, and writes an ignored `agent/.env.development` that preserves `agent/.env` while replacing stale Garage application values. Generated files use private permissions. Administrative Garage values configure the container only and are removed from agent and client process environments; application processes receive only the five values above. Launcher output prints endpoint, region, and bucket, never credentials.
 
 ## Health and model checks
 
@@ -188,6 +177,30 @@ Browser automation can fail when a site:
 
 Report the blocker rather than bypassing access controls.
 
+## Telegram channel (social-media-agent)
+
+```dotenv
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_MODE=polling
+```
+
+Create a bot with [@BotFather](https://t.me/BotFather) and paste its token. `TELEGRAM_MODE`:
+
+- `polling` (default) — long-polls `getUpdates`; works behind a firewall and needs no public URL. Use for local dev.
+- `webhook` — receives updates at a public URL; requires `TELEGRAM_WEBHOOK_SECRET_TOKEN` and a reachable deployment.
+- `auto` — let the adapter choose based on runtime signals.
+
+Slash commands (`/help`, `/roles`, `/role`, `/switch`) are registered on the Chat SDK after Mastra initializes the agent's channels (see `agent/src/mastra/index.ts`). The active role is in-memory and resets on restart.
+
+## Email outbound (send-email tool)
+
+```dotenv
+RESEND_API_KEY=
+RESEND_FROM_EMAIL=Chekku <onboarding@resend.dev>
+```
+
+Get a key at [resend.com](https://resend.com). The default `onboarding@resend.dev` sender can only deliver to the account owner; production should use a Resend-verified domain in `RESEND_FROM_EMAIL`. Every delivery requires approval. The tool fails with a clear error when `RESEND_API_KEY` is missing.
+
 ## Common failures
 
 ### Garage MCP reports missing identity
@@ -210,8 +223,6 @@ Check Docker and local health without exposing environment values:
 docker compose --env-file storage/.env.local ps garage
 docker inspect --format '{{.State.Health.Status}}' "$(docker compose --env-file storage/.env.local ps -q garage)"
 ```
-
-Port conflicts on 3900, invalid generated configuration, startup failure, and bounded health timeouts produce actionable launcher errors. `NoSuchBucket` is reported as a configuration failure rather than an object miss. Storage errors intentionally omit raw Garage/S3 responses and secrets.
 
 ### Model access denied
 
@@ -302,7 +313,7 @@ npm run build
 git diff --check
 ```
 
-The test suite covers model routing, model discovery, prompt normalization, agent configuration, PM tools and repositories, report APIs/pages and accessible tables, stored-agent payloads and Garage hydration, stored-model migration, thread ownership, proxy paths, UI structure, namespaced storage, Garage adapter safety, and launcher behavior.
+The test suite covers model routing, model discovery, prompt normalization, all four built-in agents, Telegram roles and slash commands, email approval flow, PM tools and repositories, report APIs/pages and accessible tables, stored-agent payloads and Garage hydration, stored-model migration, thread ownership, proxy paths, UI structure, namespaced storage, Garage adapter safety, and launcher behavior.
 
 ## Production notes
 
@@ -314,5 +325,5 @@ Before deploying beyond local development:
 - restrict `WEB_URL` to the deployed client origin;
 - configure an authenticated server-to-server hop if the Mastra service is exposed separately;
 - review browser approval and network policies;
-- keep Garage credentials server-side and prevent browser access to Garage or `@chekku/storage`;
+- if the social-media-agent is enabled, set `TELEGRAM_MODE=webhook` with a public URL and `TELEGRAM_WEBHOOK_SECRET_TOKEN`, and provision a Resend-verified sender for the send-email tool;
 - add rate limits, audit logging, and backup procedures appropriate to the environment.

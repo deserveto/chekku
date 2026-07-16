@@ -21,7 +21,7 @@ describe('stored-agent payload', () => {
       description: '',
       instructions: 'Help',
       model: 'model-a',
-      tools: ['calculator', 'calcualtor'],
+      tools: ['calculator', 'send-email', 'calcualtor'],
       agents: ['qa-web-agent', 'unknown'],
       mcpClients: [
         'garage',
@@ -33,7 +33,7 @@ describe('stored-agent payload', () => {
       memoryEnabled: true,
     })).toMatchObject({
       model: { provider: 'openai-compatible', name: 'gateway/model-a' },
-      tools: { calculator: {} },
+      tools: { calculator: {}, 'send-email': {} },
       agents: { 'qa-web-agent': {} },
       mcpClients: { garage: { tools: {} } },
       memory: { options: { lastMessages: 20 } },

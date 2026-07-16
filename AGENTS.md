@@ -42,7 +42,6 @@ During iteration, use narrower commands when helpful:
 ```bash
 npm run typecheck --workspace agent
 npm run typecheck --workspace client
-npm run typecheck --workspace @chekku/storage
 npm run lint --workspace client
 npx vitest run path/to/file.test.ts
 ```
@@ -115,6 +114,14 @@ LLM_MODELS
 - Browser actions that submit forms, purchase, publish, delete, or cause external consequences require approval.
 - Do not add endpoint-specific discovery tools to the QA agent. Model discovery belongs in the gateway and `/models` route.
 
+### Social Media Agent
+
+- Keep `social-media-agent` code-defined with Mastra Memory, Telegram channel integration, role switching, and the `send-email` tool.
+- Preserve `/help`, `/roles`, `/role`, and `/switch` registration after `AgentChannels` initialization.
+- Telegram uses `TELEGRAM_BOT_TOKEN`, `TELEGRAM_MODE`, optional `TELEGRAM_BOT_USERNAME`, and optional `TELEGRAM_WEBHOOK_SECRET_TOKEN` only.
+- Email uses server-only `RESEND_API_KEY` and `RESEND_FROM_EMAIL`; never expose either to browser code.
+- Preserve approval flow for outbound email and consequential channel actions.
+
 ### Client proxy and identity
 
 - Browser-to-Mastra agent-service requests target the Next.js origin and pass through `/api/agent/*`. PM report pages stay under `/reports/*`, and PM report storage APIs stay under `/api/storage/pm-reports/*` in the Next.js server.
@@ -148,7 +155,6 @@ LLM_MODELS
 - Keep chat and report-list tables horizontally scrollable, keyboard focusable, labeled as regions, and visibly outlined on focus.
 - Preserve generic Garage MCP at exactly five generic tools. PM report tools must never enter its registry.
 - Garage v2.3 external writers can race checked mutations; do not claim cross-process conditional-write guarantees.
-
 ## Coding conventions
 
 - Use TypeScript strict mode and explicit types at external boundaries.
@@ -173,6 +179,7 @@ Add regression tests for behavior changes, especially:
 - sidebar and route structure;
 - shared Garage storage, namespace isolation, PM reports/APIs/pages/tables, MCP hydration, and launcher structure;
 - QA agent Memory and browser integration.
+- Social agent roles, Telegram slash registration, and email approval behavior.
 
 Tests use Vitest. Keep tests alongside the relevant module or in the existing `__tests__` folder. Do not add a second test runner for new tests.
 
@@ -193,7 +200,6 @@ The root `README.md` is the public onboarding document. `docs/ARCHITECTURE.md` d
 ## Files that must not be committed
 
 - `.env` and `.env.local` files containing secrets;
-- generated Garage configuration, credentials, and local Garage data;
 - `node_modules/`, `.next/`, `.mastra/`, `dist/`, coverage, and TypeScript build info;
 - `mastra.db`, WAL, SHM, SQLite, or other local database files;
 - browser recordings, Playwright output, screenshots used only for local debugging;

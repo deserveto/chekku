@@ -1,4 +1,8 @@
-export const STUDIO_TOOL_IDS = ['calculator', 'get-current-time'] as const;
+export const STUDIO_TOOL_IDS = [
+  'calculator',
+  'get-current-time',
+  'send-email',
+] as const;
 export const STUDIO_DELEGATE_IDS = ['qa-web-agent'] as const;
 export const STUDIO_MCP_CLIENT_IDS = ['garage'] as const;
 

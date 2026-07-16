@@ -25,6 +25,14 @@ describe('qa-web-agent (browser QA)', () => {
   it('has listBrowserTools method (browser integration present)', () => {
     expect(typeof (qaWebAgent as unknown as Record<string, unknown>).listBrowserTools).toBe('function');
   });
+
+  it('binds calculator and get-current-time tools', async () => {
+    const tools = await qaWebAgent.listTools();
+    expect(Object.keys(tools).sort()).toEqual([
+      'calculatorTool',
+      'getCurrentTimeTool',
+    ]);
+  });
 });
 
 describe('pm-agent (weekly report analysis)', () => {
