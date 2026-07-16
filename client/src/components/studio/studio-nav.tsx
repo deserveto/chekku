@@ -73,6 +73,15 @@ export function StudioNav({ resourceId }: { resourceId: string }) {
               <span aria-hidden="true">◫</span>
               <span className="studio-sidebar-copy">Agents</span>
             </Link>
+            <Link
+              href="/reports"
+              className={pathname.startsWith('/reports') ? 'active' : ''}
+              aria-label="Reports"
+              title={collapsed ? 'Reports' : undefined}
+            >
+              <span aria-hidden="true">▤</span>
+              <span className="studio-sidebar-copy">Reports</span>
+            </Link>
           </nav>
 
           <div className="studio-nav-spacer" />

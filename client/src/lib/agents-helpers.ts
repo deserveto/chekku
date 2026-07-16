@@ -1,5 +1,9 @@
 export const AGENT_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-export const RESERVED_AGENT_IDS = new Set<string>(['main-agent', 'qa-web-agent']);
+export const RESERVED_AGENT_IDS = new Set<string>([
+  'main-agent',
+  'qa-web-agent',
+  'pm-agent',
+]);
 
 export type AgentIdIssue = 'required' | 'invalid-format' | 'reserved' | 'duplicate';
 

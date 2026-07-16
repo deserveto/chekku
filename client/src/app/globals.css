@@ -130,3 +130,54 @@ a:focus-visible {
   border: 0;
   background: transparent;
 }
+
+.markdown-table-wrap {
+  width: 100%;
+  margin: 8px 0;
+  overflow-x: auto;
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  background: var(--canvas-deep);
+}
+
+.markdown-table-wrap:focus-visible {
+  outline: 1px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.markdown-table-wrap table {
+  width: 100%;
+  min-width: 600px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.markdown-table-wrap th,
+.markdown-table-wrap td {
+  padding: 8px 10px;
+  border-right: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--hairline);
+  white-space: nowrap;
+  text-align: left;
+}
+
+.markdown-table-wrap th {
+  color: var(--mute);
+  font: 10px var(--font-dm-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.markdown-table-wrap th:nth-child(3),
+.markdown-table-wrap td:nth-child(3) {
+  text-align: right;
+}
+
+.markdown-table-wrap th:last-child,
+.markdown-table-wrap td:last-child {
+  border-right: 0;
+}
+
+.markdown-table-wrap tbody tr:last-child td {
+  border-bottom: 0;
+}
