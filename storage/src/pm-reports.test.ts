@@ -95,6 +95,30 @@ describe('PM report storage', () => {
     await expect(listPmReports(storage)).resolves.toEqual([]);
   });
 
+  it.each([
+    ['analysis.md', ['pm-reports/pmr_partial/input.md']],
+    ['metadata.json', ['pm-reports/pmr_partial/input.md', 'pm-reports/pmr_partial/analysis.md']],
+  ])('propagates %s create failures without exposing a completed report', async (failedObject, persistedKeys) => {
+    const { objects, storage } = createMemoryStorage();
+    const failingStorage: ObjectStorage = {
+      ...storage,
+      async createText(key, value, contentType) {
+        if (key.endsWith(`/${failedObject}`)) throw new Error(`Injected ${failedObject} failure`);
+        await storage.createText(key, value, contentType);
+      },
+    };
+
+    await expect(savePmReport({
+      store: failingStorage,
+      reportMarkdown: 'Report input',
+      analysisMarkdown,
+      reportId: 'pmr_partial',
+    })).rejects.toThrow(`Injected ${failedObject} failure`);
+    expect([...objects.keys()]).toEqual(persistedKeys);
+    expect(objects.has('pm-reports/pmr_partial/metadata.json')).toBe(false);
+    await expect(listPmReports(storage)).resolves.toEqual([]);
+  });
+
   it('isolates PM reports from another agent namespace', async () => {
     const { storage } = createMemoryStorage();
     const pmStore = createPmReportStorage(storage);
@@ -114,6 +138,20 @@ describe('PM report storage', () => {
     expect((await listPmReports(storage)).map((report) => report.reportId)).toEqual(['pmr_new', 'pmr_old']);
   });
 
+  it('rejects truncated object listings instead of returning an incomplete report list', async () => {
+    const { storage } = createMemoryStorage();
+    const truncatedStorage: ObjectStorage = {
+      ...storage,
+      async listKeys() {
+        return { keys: [], truncated: true };
+      },
+    };
+
+    await expect(listPmReports(truncatedStorage)).rejects.toThrow(
+      'Cannot list all PM reports: object storage truncated the pm-reports/ listing. Increase the storage listing limit.',
+    );
+  });
+
   it.each([
     ['2026-07-15T11:26:42.7Z', Date.UTC(2026, 6, 15, 11, 26, 42, 700)],
     ['2026-07-15T11:26:42.123456789z', Date.UTC(2026, 6, 15, 11, 26, 42, 123)],
@@ -128,7 +166,8 @@ describe('PM report storage', () => {
     '2026-02-30T11:26:42.123456Z',
     '2025-02-29t11:26:42.123456z',
     '2026-13-01T00:00:00Z',
-  ])('rejects calendar-overflow timestamp %s', (createdAt) => {
+    '2026-07-15T13:56:42+0230',
+  ])('rejects invalid RFC3339 timestamp %s', (createdAt) => {
     expect(parsePmReportTimestamp(createdAt)).toBeUndefined();
   });
 
@@ -170,6 +209,14 @@ describe('PM report storage', () => {
     expect(() => parseRiskHeader('Risk Rating: 3/10 - WARNING')).toThrow(
       'Risk rating 3 requires status ON-TRACK, received WARNING',
     );
+  });
+
+  it.each([
+    'Risk Rating: 3/10 - ON-TRACKED',
+    'Risk Rating: 4/10 - WARNING-extra',
+    'Risk Rating: 8/10 - IN-DANGER later',
+  ])('rejects risk status with trailing content: %s', (header) => {
+    expect(() => parseRiskHeader(header)).toThrow(/missing a parseable risk rating header/);
   });
 
   it('skips malformed metadata but retains otherwise valid invalid createdAt strings', async () => {

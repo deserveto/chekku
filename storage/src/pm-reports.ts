@@ -32,9 +32,9 @@ export interface PmReportReadResult {
   metadata: PmReportMetadata;
 }
 
-const HEADER_RE = /Risk Rating:\s*(\d{1,2})\s*\/\s*10\s*[—–-]\s*(ON-TRACK|WARNING|IN-DANGER)/;
+const HEADER_RE = /^[ \t]*(?:\*\*)?Risk Rating:[ \t]*(\d{1,2})[ \t]*\/[ \t]*10[ \t]*[—–-][ \t]*(ON-TRACK|WARNING|IN-DANGER)(?:\*\*)?[ \t]*$/m;
 const REPORT_ID_RE = /^pmr_[a-zA-Z0-9_-]+$/;
-const RFC3339_RE = /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(?:[Zz]|([+-])(\d{2}):?(\d{2}))$/;
+const RFC3339_RE = /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(?:[Zz]|([+-])(\d{2}):(\d{2}))$/;
 
 export const createPmReportStorage = (root: ObjectStorage): ObjectStorage =>
   createNamespacedObjectStorage(root, PM_REPORT_AGENT_ID);
@@ -146,6 +146,9 @@ export async function savePmReport(input: SavePmReportInput): Promise<PmReportMe
 
 export async function listPmReports(store: ObjectStorage): Promise<PmReportMetadata[]> {
   const result = await store.listKeys('pm-reports/');
+  if (result.truncated) {
+    throw new Error('Cannot list all PM reports: object storage truncated the pm-reports/ listing. Increase the storage listing limit.');
+  }
   const keys = result.keys.filter((key) => key.endsWith('/metadata.json'));
   const entries = await Promise.all(keys.map(async (key) => {
     const metadataText = await store.getText(key);
