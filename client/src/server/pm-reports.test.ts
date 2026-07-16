@@ -76,30 +76,44 @@ describe('PM report server service', () => {
 
   it('rejects missing identity before creating storage', async () => {
     const rootStoreFactory = vi.fn(() => createRootStore());
+    const listReports = vi.fn(async () => [metadata]);
 
     await expect(listPmReportsForUser({
       getServerUserId: async () => null,
       rootStoreFactory,
+      listReports,
     })).rejects.toMatchObject({
       code: 'forbidden',
       status: 403,
       message: 'Authentication is required.',
     });
     expect(rootStoreFactory).not.toHaveBeenCalled();
+    expect(listReports).not.toHaveBeenCalled();
   });
 
-  it('rejects invalid report IDs before creating storage', async () => {
+  it.each([
+    'pmr_x',
+    'pmr_-',
+    'pmr_20260714120000_DEADBEEF',
+    'pmr_20260714120000_deadbeef_extra',
+    '../secret',
+    `pmr_20260714120000_deadbeef%2Fsecret`,
+    `pmr_20260714120000_deadbeef%5Csecret`,
+  ])('rejects malformed report ID %s before resolving storage', async (malformedReportId) => {
     const rootStoreFactory = vi.fn(() => createRootStore());
+    const getReport = vi.fn(async () => report);
 
-    await expect(getPmReportForUser('../secret', {
+    await expect(getPmReportForUser(malformedReportId, {
       getServerUserId: async () => 'user-1',
       rootStoreFactory,
+      getReport,
     })).rejects.toMatchObject({
       code: 'invalid-report-id',
       status: 400,
       message: 'Invalid report id.',
     });
     expect(rootStoreFactory).not.toHaveBeenCalled();
+    expect(getReport).not.toHaveBeenCalled();
   });
 
   it('lists reports through PM-namespaced injected root storage', async () => {
@@ -200,19 +214,35 @@ describe('PM report API routes', () => {
     await expect(response.json()).resolves.toEqual(report);
   });
 
-  it.each([
-    [async () => {
-      mocks.getUserId.mockResolvedValue(null);
-      return listReportsRoute();
-    }, 403, 'forbidden', 'Authentication is required.'],
-    [async () => getReportRoute(new Request('http://localhost'), {
-      params: Promise.resolve({ reportId: '../secret' }),
-    }), 400, 'invalid-report-id', 'Invalid report id.'],
-  ] as const)('returns safe client errors', async (requestRoute, status, code, message) => {
-    const response = await requestRoute();
+  it('returns forbidden before resolving storage', async () => {
+    mocks.getUserId.mockResolvedValue(null);
 
-    expect(response.status).toBe(status);
-    await expect(response.json()).resolves.toEqual({ error: { code, message } });
+    const response = await listReportsRoute();
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: 'forbidden', message: 'Authentication is required.' },
+    });
+    expect(mocks.rootStoreFactory).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'pmr_x',
+    'pmr_-',
+    'pmr_20260714120000_DEADBEEF',
+    'pmr_20260714120000_deadbeef_extra',
+    '../secret',
+    `pmr_20260714120000_deadbeef%2Fsecret`,
+    `pmr_20260714120000_deadbeef%5Csecret`,
+  ])('returns 400 for malformed report ID %s before resolving storage', async (malformedReportId) => {
+    const response = await getReportRoute(new Request('http://localhost'), {
+      params: Promise.resolve({ reportId: malformedReportId }),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: 'invalid-report-id', message: 'Invalid report id.' },
+    });
     expect(mocks.rootStoreFactory).not.toHaveBeenCalled();
   });
 

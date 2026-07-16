@@ -13,7 +13,7 @@ import {
 
 import { getUserId as getServerUserId } from './auth';
 
-const REPORT_ID_RE = /^pmr_[a-zA-Z0-9_-]+$/;
+const REPORT_ID_RE = /^pmr_[0-9]{14}_[0-9a-f]{8}$/;
 
 export type PmReportServiceErrorCode =
   | 'forbidden'
