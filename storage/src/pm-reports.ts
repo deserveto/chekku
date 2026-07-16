@@ -33,7 +33,7 @@ export interface PmReportReadResult {
 }
 
 const HEADER_RE = /^[ \t]*(?:\*\*)?Risk Rating:[ \t]*(\d{1,2})[ \t]*\/[ \t]*10[ \t]*[—–-][ \t]*(ON-TRACK|WARNING|IN-DANGER)(?:\*\*)?[ \t]*$/m;
-const REPORT_ID_RE = /^pmr_[a-zA-Z0-9_-]+$/;
+const REPORT_ID_RE = /^pmr_[0-9]{14}_[0-9a-f]{8}$/;
 const RFC3339_RE = /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(?:[Zz]|([+-])(\d{2}):(\d{2}))$/;
 
 export const createPmReportStorage = (root: ObjectStorage): ObjectStorage =>

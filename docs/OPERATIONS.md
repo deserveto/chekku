@@ -156,7 +156,7 @@ pm-reports/<reportId>/metadata.json
 
 Metadata contains these relative keys only. Do not expose or manually construct physical `agents/<base64url-agent-id>/...` keys. No migration reads old global development objects; reports outside the fixed namespace remain invisible.
 
-Generated and publicly readable IDs use `pmr_YYYYMMDDHHMMSS_<8 lowercase hex>`, such as `pmr_20260715112642_e720cebd`. Public detail requests reject IDs outside `^pmr_[0-9]{14}_[0-9a-f]{8}$` before storage access.
+Generated IDs and all repository, PM tool, and public report boundaries use `pmr_YYYYMMDDHHMMSS_<8 lowercase hex>`, such as `pmr_20260715112642_e720cebd`. Values outside `^pmr_[0-9]{14}_[0-9a-f]{8}$` are rejected before direct reads, and noncanonical stored metadata is excluded from lists. No migration or compatibility fallback is provided.
 
 Report interfaces:
 
@@ -165,7 +165,7 @@ Report interfaces:
 - `GET /api/storage/pm-reports` returns `{ reports }` after server identity validation.
 - `GET /api/storage/pm-reports/[reportId]` returns input, analysis, and metadata after identity and ID validation.
 
-All four interfaces use `client/src/server/pm-reports.ts` and the temporary server-side `CHEKKU_LOCAL_USER_ID` seam. Browser code never contacts Garage. Missing identity returns 403; invalid IDs return 400 or page not-found; missing reports return 404; storage failures return bounded 503 responses without provider details.
+All four report interfaces call `client/src/server/pm-reports.ts` directly in the Next.js server and use the temporary server-side `CHEKKU_LOCAL_USER_ID` seam. They do not pass through Mastra. Chat PM tool calls separately pass through `/api/agent/*` and Mastra. Browser code never contacts Garage. Missing identity returns 403; invalid IDs return 400 or page not-found; missing reports return 404; storage failures return bounded 503 responses without provider details.
 
 When PM Agent lists reports in chat, its code-defined list tool generates a deterministic GFM table and the agent returns it unchanged. Rows contain URL-encoded relative report links, compact UTC timestamps, ratings, and statuses. Links open in a new tab with `rel="noreferrer"`. Chat and `/reports` tables are labeled keyboard-focusable regions with visible focus styles and horizontal scrolling on narrow screens. Empty lists return `No saved reports found.` exactly; invalid stored timestamps remain visible rather than breaking the list.
 

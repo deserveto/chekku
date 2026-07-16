@@ -142,7 +142,7 @@ LLM_MODELS
 - Bind every PM tool and server-side report operation to fixed namespace `pm-agent`; never accept namespace or agent identity from model, route, browser, or local user input.
 - Persist and expose only relative `pm-reports/<reportId>/...` metadata keys. Never leak physical `agents/<base64url-agent-id>/...` prefixes.
 - Do not migrate or fall back to old global development report objects.
-- Canonical public report IDs use `pmr_YYYYMMDDHHMMSS_<8 lowercase hex>` and public reads validate `^pmr_[0-9]{14}_[0-9a-f]{8}$` before storage access.
+- Canonical report IDs use `pmr_YYYYMMDDHHMMSS_<8 lowercase hex>`; repository, PM tool, and public read boundaries enforce `^pmr_[0-9]{14}_[0-9a-f]{8}$`, and lists skip noncanonical metadata.
 - Keep `reportUrl` and `reportsMarkdown` presentation-only in list-tool output. They must not enter persisted metadata, save output, view output, or repository types.
 - PM Agent must return deterministic `reportsMarkdown` unchanged. Preserve newest-first rows, URL-encoded relative links, compact UTC dates, safe escaping, and exact empty text `No saved reports found.`
 - Keep chat and report-list tables horizontally scrollable, keyboard focusable, labeled as regions, and visibly outlined on focus.

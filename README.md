@@ -34,25 +34,28 @@ Browser
   │
   ▼
 Next.js client :3000
-  │  /api/agent/*
-  │  same-origin server proxy
-  ▼
-Mastra server :4111
-  ├── main-agent
-  ├── pm-agent ──► code-defined PM report tools
-  ├── qa-web-agent
-  ├── @mastra/editor stored agents
-  ├── Mastra Memory
-  ├── calculator + current-time tools
-  ├── Garage MCP (optional stored-agent capability)
+  ├── /api/agent/* same-origin proxy
   │       │
   │       ▼
-  │   @chekku/storage ──► Garage/S3 bucket
-  ├── PM report repository ──► fixed pm-agent namespace
-  └── OpenAI-compatible gateway
-          │
-          ▼
-  Rafiqspace LLM / LiteLLM / vLLM / compatible endpoint
+  │   Mastra server :4111
+  │     ├── main-agent
+  │     ├── pm-agent ──► code-defined PM tools ──┐
+  │     ├── qa-web-agent                         │
+  │     ├── Garage MCP ──────────────────────────┤
+  │     ├── @mastra/editor + Memory              │
+  │     └── OpenAI-compatible gateway            │
+  │             │                                │
+  │             ▼                                │
+  │     Compatible model endpoint                │
+  └── /reports/* + /api/storage/pm-reports/*     │
+          │                                      │
+          ▼                                      │
+      client/src/server/pm-reports.ts ───────────┤
+                                                 ▼
+                                      @chekku/storage
+                                                 │
+                                                 ▼
+                                      Garage/S3 bucket
 
 LibSQL stores agent definitions, versions, memory, and threads.
 ```
@@ -255,7 +258,7 @@ pm-reports/<reportId>/metadata.json
 
 Physical `agents/<base64url-agent-id>/...` prefixes never appear in persisted metadata, tool output, APIs, or pages. Existing global development objects are not migrated or used as fallback. Canonical public report IDs use `pmr_YYYYMMDDHHMMSS_<8 lowercase hex>`, for example `pmr_20260715112642_e720cebd`.
 
-Authenticated server boundaries expose `GET /api/storage/pm-reports` and `GET /api/storage/pm-reports/[reportId]`. Pages at `/reports` and `/reports/[reportId]` use the same server-only service and temporary `CHEKKU_LOCAL_USER_ID` identity seam; browser code never imports storage or contacts Garage directly. Detail pages render analysis, metadata, then original input.
+Authenticated server boundaries expose `GET /api/storage/pm-reports` and `GET /api/storage/pm-reports/[reportId]`. Pages at `/reports` and `/reports/[reportId]` call `client/src/server/pm-reports.ts` directly inside the Next.js server, then `@chekku/storage`; they do not route report reads through Mastra. Chat PM tool calls take the separate `/api/agent/*` path through Mastra before reaching the same storage package. Both paths use the temporary `CHEKKU_LOCAL_USER_ID` identity seam where applicable; browser code never imports storage or contacts Garage directly. Detail pages render analysis, metadata, then original input.
 
 Report-list tool output includes structured metadata plus presentation-only `reportUrl` and deterministic `reportsMarkdown`. PM Agent returns the generated newest-first GFM table unchanged. Valid dates render as `YYYY-MM-DD HH:mm UTC`; invalid stored text remains visible and safely escaped. Report links use URL-encoded relative paths, open in a new tab with `rel="noreferrer"`, and are not persisted. Chat and report-list tables use labeled, keyboard-focusable horizontal-scroll regions with visible focus outlines, preserving readable columns on narrow screens.
 

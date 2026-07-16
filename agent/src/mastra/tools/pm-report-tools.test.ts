@@ -62,13 +62,13 @@ const report = (reportId: string, createdAt: string, rating: number, status: 'ON
 describe('PM report tools', () => {
   it('formats report lists as deterministic Markdown tables', () => {
     expect(formatPmReportsMarkdown([
-      report('pmr_new', '2026-07-15T11:26:42.702Z', 8, 'IN-DANGER'),
-      report('pmr_old', 'not|a\\date', 4, 'WARNING'),
+      report('pmr_20260715112642_00000001', '2026-07-15T11:26:42.702Z', 8, 'IN-DANGER'),
+      report('pmr_20260714112642_00000002', 'not|a\\date', 4, 'WARNING'),
     ])).toBe([
       '| Report | Created | Risk | Status |',
       '| --- | --- | ---: | --- |',
-      '| [pmr_new](/reports/pmr_new) | 2026-07-15 11:26 UTC | 8/10 | IN-DANGER |',
-      '| [pmr_old](/reports/pmr_old) | not\\|a\\\\date | 4/10 | WARNING |',
+      '| [pmr_20260715112642_00000001](/reports/pmr_20260715112642_00000001) | 2026-07-15 11:26 UTC | 8/10 | IN-DANGER |',
+      '| [pmr_20260714112642_00000002](/reports/pmr_20260714112642_00000002) | not\\|a\\\\date | 4/10 | WARNING |',
     ].join('\n'));
     expect(formatPmReportsMarkdown([])).toBe('No saved reports found.');
   });
@@ -80,7 +80,7 @@ describe('PM report tools', () => {
     ['2026-02-30T11:26:00.000Z', `2026\\-${markdownBreak}02\\-${markdownBreak}30T11\\:${markdownBreak}26\\:${markdownBreak}00\\.${markdownBreak}000Z`],
   ])('formats or safely preserves timestamp %s', (createdAt, expected) => {
     expect(formatPmReportsMarkdown([
-      report('pmr_date', createdAt, 4, 'WARNING'),
+      report('pmr_20260715112642_00000003', createdAt, 4, 'WARNING'),
     ])).toContain(` | ${expected} | 4/10 | WARNING |`);
   });
 
@@ -91,14 +91,14 @@ describe('PM report tools', () => {
     ['![image](https://example.com/x.png)', `\\!${markdownBreak}\\[${markdownBreak}image\\]${markdownBreak}\\(${markdownBreak}https\\:${markdownBreak}\\/${markdownBreak}\\/${markdownBreak}example\\.${markdownBreak}com\\/${markdownBreak}x\\.${markdownBreak}png\\)${markdownBreak}`],
     ['<b>unsafe</b>', `\\<${markdownBreak}b\\>${markdownBreak}unsafe\\<${markdownBreak}\\/${markdownBreak}b\\>${markdownBreak}`],
   ])('escapes invalid timestamp %s without changing visible text', (createdAt, escaped) => {
-    const markdown = formatPmReportsMarkdown([report('pmr_escape', createdAt, 4, 'WARNING')]);
+    const markdown = formatPmReportsMarkdown([report('pmr_20260715112642_00000004', createdAt, 4, 'WARNING')]);
 
     expect(markdown).toContain(` | ${escaped} | 4/10 | WARNING |`);
   });
 
   it('escapes invalid timestamps against Markdown and control-character injection', () => {
     const createdAt = 'bad\r\n| [link](https://example.com) | ![image](https://example.com/x.png) | <b>\t\u0000';
-    const markdown = formatPmReportsMarkdown([report('pmr_injection', createdAt, 4, 'WARNING')]);
+    const markdown = formatPmReportsMarkdown([report('pmr_20260715112642_00000005', createdAt, 4, 'WARNING')]);
 
     expect(markdown.split('\n')).toHaveLength(3);
     expect(markdown).toContain('bad\\r\\n\\|');
@@ -159,19 +159,19 @@ describe('PM report tools', () => {
     const listTool = createListPmReportsFromGarageTool();
     const viewTool = createViewPmReportFromGarageTool();
     const metadata = {
-      reportId: 'pmr_schema',
+      reportId: 'pmr_20260713120000_00000006',
       createdAt: '2026-07-13T12:00:00.000Z',
       rating: 8,
       status: 'IN-DANGER',
-      inputObjectKey: 'pm-reports/pmr_schema/input.md',
-      analysisObjectKey: 'pm-reports/pmr_schema/analysis.md',
-      metadataObjectKey: 'pm-reports/pmr_schema/metadata.json',
+      inputObjectKey: 'pm-reports/pmr_20260713120000_00000006/input.md',
+      analysisObjectKey: 'pm-reports/pmr_20260713120000_00000006/analysis.md',
+      metadataObjectKey: 'pm-reports/pmr_20260713120000_00000006/metadata.json',
     };
 
     const validations = await Promise.all([
       saveTool.inputSchema!['~standard'].validate({ reportMarkdown: 'report', analysisMarkdown, reportId: 'pmr_override' }),
       listTool.inputSchema!['~standard'].validate({ unexpected: true }),
-      viewTool.inputSchema!['~standard'].validate({ reportId: 'pmr_valid', unexpected: true }),
+      viewTool.inputSchema!['~standard'].validate({ reportId: 'pmr_20260713120000_00000006', unexpected: true }),
       saveTool.outputSchema!['~standard'].validate({ ...metadata, unexpected: true }),
       listTool.outputSchema!['~standard'].validate({ reports: [], reportsMarkdown: '', unexpected: true }),
       viewTool.outputSchema!['~standard'].validate({
@@ -190,6 +190,14 @@ describe('PM report tools', () => {
     ]);
 
     for (const validation of validations) expect(validation.issues).toBeDefined();
+  });
+
+  it('rejects noncanonical report ids in view input', async () => {
+    const viewTool = createViewPmReportFromGarageTool();
+
+    const validation = await viewTool.inputSchema!['~standard'].validate({ reportId: 'pmr_legacy' });
+
+    expect(validation.issues).toBeDefined();
   });
 
   it('rejects blank save inputs without trimming accepted values', async () => {

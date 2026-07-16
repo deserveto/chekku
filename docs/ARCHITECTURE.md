@@ -5,41 +5,36 @@
 Chekku contains three npm workspaces: a Next.js client, a Mastra agent server, and the shared `@chekku/storage` package. The system is local-first, uses LibSQL for agent and conversation persistence, offers Garage-backed generic agent object storage plus PM report persistence, and connects to one server-owned OpenAI-compatible model endpoint.
 
 ```text
-┌───────────────────────────────┐
-│ Browser                       │
-│ Agents, chat, report pages    │
-└───────────────┬───────────────┘
-                │ HTTP /api/agent/*
-                ▼
-┌───────────────────────────────┐
-│ Next.js client :3000          │
-│ Same-origin proxy + auth seam │
-└───────────────┬───────────────┘
-                │ Mastra HTTP API
-                ▼
-┌──────────────────────────────────────────┐
-│ Mastra server :4111                      │
-│                                          │
-│  Code agents      Stored agents          │
-│  - main-agent     - @mastra/editor       │
-│  - pm-agent       - database versions    │
-│  - qa-web-agent                          │
-│                                          │
-│  Memory + LibSQLStore                    │
-│  Calculator + current-time tools         │
-│  Garage MCP + PM report tools            │
-│  Agent Browser                           │
-│  OpenAI-compatible custom gateway        │
-└───────────────────┬──────────────────────┘
-                    │ /v1/models
-                    │ /v1/chat/completions
-                    ▼
-┌──────────────────────────────────────────┐
-│ Rafiqspace LLM, LiteLLM, vLLM, or other │
-│ OpenAI-compatible endpoint               │
-└──────────────────────────────────────────┘
-
-Mastra server ──► @chekku/storage ──► Garage/S3 `chekku-objects`
+Browser
+  │
+  ▼
+Next.js client/server :3000
+  ├── Chat: /api/agent/* proxy
+  │       │
+  │       ▼
+  │   Mastra server :4111
+  │     ├── main-agent
+  │     ├── pm-agent ──► code-defined PM tools ──┐
+  │     ├── qa-web-agent                         │
+  │     ├── Garage MCP ──────────────────────────┤
+  │     ├── Memory + LibSQLStore                 │
+  │     ├── @mastra/editor stored agents         │
+  │     ├── Agent Browser                        │
+  │     └── OpenAI-compatible gateway            │
+  │             │                                │
+  │             ▼                                │
+  │     OpenAI-compatible endpoint               │
+  │                                              │
+  └── Reports: /reports/* and                    │
+               /api/storage/pm-reports/*         │
+          │                                      │
+          ▼                                      │
+      client/src/server/pm-reports.ts ───────────┤
+                                                 ▼
+                                      @chekku/storage
+                                                 │
+                                                 ▼
+                                      Garage/S3 `chekku-objects`
 ```
 
 ## Backend composition
@@ -177,7 +172,7 @@ pm-reports/<reportId>/metadata.json
 
 Metadata is written last so partial saves do not become list entries. Metadata and public outputs retain only relative keys; physical `agents/<base64url(pm-agent)>/...` keys remain inside the namespaced adapter. There is no migration or fallback for old global development objects.
 
-Generated IDs use canonical public form `pmr_YYYYMMDDHHMMSS_<8 lowercase hex>` and public detail access enforces `^pmr_[0-9]{14}_[0-9a-f]{8}$`. Repository-level helpers accept broader IDs for internal validation and tests, but those are not public report identifiers.
+Generated IDs and every repository, tool, and public detail boundary use canonical form `pmr_YYYYMMDDHHMMSS_<8 lowercase hex>` and enforce `^pmr_[0-9]{14}_[0-9a-f]{8}$`. Noncanonical metadata is skipped during listing; there is no compatibility fallback.
 
 The list tool returns newest-first structured reports and presentation-only `reportUrl` and `reportsMarkdown` fields. Neither field enters persisted metadata, save output, view output, or repository types. `reportsMarkdown` is deterministic GFM with columns `Report`, `Created`, `Risk`, and `Status`; PM Agent returns it unchanged. Valid timestamps render to minute precision in UTC, while invalid stored text is preserved with Markdown-safe escaping.
 
@@ -205,7 +200,7 @@ The browser uses `@mastra/client-js` with the Next.js origin and `/api/agent` pr
 
 The current identity implementation is intentionally replaceable. Future OIDC must preserve the same resource and thread-ownership checks.
 
-Garage access remains server-side through hydrated agent tools. Browser components neither import `@chekku/storage` nor make direct S3/Garage requests.
+Garage access remains server-side through two explicit paths. Chat tool calls pass through `/api/agent/*`, Mastra, and hydrated agent tools. Report pages and `/api/storage/pm-reports/*` execute in the Next.js server and call `client/src/server/pm-reports.ts` directly. Browser components neither import `@chekku/storage` nor make direct S3/Garage requests.
 
 `client/src/server/pm-reports.ts` is a separate server-only boundary for report pages and APIs. It requires the same server identity seam before storage access, validates public report IDs before reads, fixes the namespace to `pm-agent`, and maps provider failures to safe 400, 403, 404, or 503 responses. OIDC may replace `CHEKKU_LOCAL_USER_ID` later without changing namespace or report-access semantics.
 

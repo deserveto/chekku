@@ -135,7 +135,7 @@ export function createViewPmReportFromGarageTool(options: PmReportToolOptions = 
     id: 'view_pm_report_from_garage',
     description: 'View a saved PM Agent report from Garage by report id.',
     inputSchema: z.object({
-      reportId: z.string().regex(/^pmr_[a-zA-Z0-9_-]+$/),
+      reportId: z.string().regex(/^pmr_[0-9]{14}_[0-9a-f]{8}$/),
     }).strict(),
     outputSchema: z.object({
       reportId: z.string(),

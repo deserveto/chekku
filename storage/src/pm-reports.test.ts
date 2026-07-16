@@ -58,15 +58,15 @@ describe('PM report storage', () => {
       store,
       reportMarkdown: 'Weekly report body',
       analysisMarkdown,
-      reportId: 'pmr_test_123',
+      reportId: 'pmr_20260713120000_00000001',
       now: () => new Date('2026-07-13T12:00:00.000Z'),
     });
 
     expect(PM_REPORT_AGENT_ID).toBe('pm-agent');
     expect([...objects.keys()]).toContain(
-      `agents/${Buffer.from('pm-agent').toString('base64url')}/pm-reports/pmr_test_123/metadata.json`,
+      `agents/${Buffer.from('pm-agent').toString('base64url')}/pm-reports/pmr_20260713120000_00000001/metadata.json`,
     );
-    expect(metadata.metadataObjectKey).toBe('pm-reports/pmr_test_123/metadata.json');
+    expect(metadata.metadataObjectKey).toBe('pm-reports/pmr_20260713120000_00000001/metadata.json');
   });
 
   it('writes input and analysis before metadata using createText', async () => {
@@ -76,28 +76,28 @@ describe('PM report storage', () => {
       store: storage,
       reportMarkdown: 'Weekly report body',
       analysisMarkdown,
-      reportId: 'pmr_test_123',
+      reportId: 'pmr_20260713120000_00000001',
       now: () => new Date('2026-07-13T12:00:00.000Z'),
     });
 
     expect(writes).toEqual([
-      { method: 'create', key: 'pm-reports/pmr_test_123/input.md', value: 'Weekly report body', contentType: 'text/markdown' },
-      { method: 'create', key: 'pm-reports/pmr_test_123/analysis.md', value: analysisMarkdown, contentType: 'text/markdown' },
-      { method: 'create', key: 'pm-reports/pmr_test_123/metadata.json', value: JSON.stringify(metadata, null, 2), contentType: 'application/json' },
+      { method: 'create', key: 'pm-reports/pmr_20260713120000_00000001/input.md', value: 'Weekly report body', contentType: 'text/markdown' },
+      { method: 'create', key: 'pm-reports/pmr_20260713120000_00000001/analysis.md', value: analysisMarkdown, contentType: 'text/markdown' },
+      { method: 'create', key: 'pm-reports/pmr_20260713120000_00000001/metadata.json', value: JSON.stringify(metadata, null, 2), contentType: 'application/json' },
     ]);
   });
 
   it('does not list a partial save without metadata', async () => {
     const { storage } = createMemoryStorage();
-    await storage.createText('pm-reports/pmr_partial/input.md', 'input');
-    await storage.createText('pm-reports/pmr_partial/analysis.md', analysisMarkdown);
+    await storage.createText('pm-reports/pmr_20260713120000_00000002/input.md', 'input');
+    await storage.createText('pm-reports/pmr_20260713120000_00000002/analysis.md', analysisMarkdown);
 
     await expect(listPmReports(storage)).resolves.toEqual([]);
   });
 
   it.each([
-    ['analysis.md', ['pm-reports/pmr_partial/input.md']],
-    ['metadata.json', ['pm-reports/pmr_partial/input.md', 'pm-reports/pmr_partial/analysis.md']],
+    ['analysis.md', ['pm-reports/pmr_20260713120000_00000002/input.md']],
+    ['metadata.json', ['pm-reports/pmr_20260713120000_00000002/input.md', 'pm-reports/pmr_20260713120000_00000002/analysis.md']],
   ])('propagates %s create failures without exposing a completed report', async (failedObject, persistedKeys) => {
     const { objects, storage } = createMemoryStorage();
     const failingStorage: ObjectStorage = {
@@ -112,10 +112,10 @@ describe('PM report storage', () => {
       store: failingStorage,
       reportMarkdown: 'Report input',
       analysisMarkdown,
-      reportId: 'pmr_partial',
+      reportId: 'pmr_20260713120000_00000002',
     })).rejects.toThrow(`Injected ${failedObject} failure`);
     expect([...objects.keys()]).toEqual(persistedKeys);
-    expect(objects.has('pm-reports/pmr_partial/metadata.json')).toBe(false);
+    expect(objects.has('pm-reports/pmr_20260713120000_00000002/metadata.json')).toBe(false);
     await expect(listPmReports(storage)).resolves.toEqual([]);
   });
 
@@ -123,19 +123,19 @@ describe('PM report storage', () => {
     const { storage } = createMemoryStorage();
     const pmStore = createPmReportStorage(storage);
     const foreignStore = createNamespacedObjectStorage(storage, 'other-agent');
-    await savePmReport({ store: pmStore, reportMarkdown: 'PM', analysisMarkdown, reportId: 'pmr_pm' });
-    await savePmReport({ store: foreignStore, reportMarkdown: 'Foreign', analysisMarkdown, reportId: 'pmr_foreign' });
+    await savePmReport({ store: pmStore, reportMarkdown: 'PM', analysisMarkdown, reportId: 'pmr_20260713120000_00000003' });
+    await savePmReport({ store: foreignStore, reportMarkdown: 'Foreign', analysisMarkdown, reportId: 'pmr_20260713120000_00000004' });
 
-    await expect(listPmReports(pmStore)).resolves.toMatchObject([{ reportId: 'pmr_pm' }]);
-    await expect(getPmReport(pmStore, 'pmr_foreign')).rejects.toThrow('Missing object');
+    await expect(listPmReports(pmStore)).resolves.toMatchObject([{ reportId: 'pmr_20260713120000_00000003' }]);
+    await expect(getPmReport(pmStore, 'pmr_20260713120000_00000004')).rejects.toThrow('Missing object');
   });
 
   it('lists report metadata newest first', async () => {
     const { storage } = createMemoryStorage();
-    await savePmReport({ store: storage, reportMarkdown: 'Old', analysisMarkdown, reportId: 'pmr_old', now: () => new Date('2026-07-13T10:00:00.000Z') });
-    await savePmReport({ store: storage, reportMarkdown: 'New', analysisMarkdown, reportId: 'pmr_new', now: () => new Date('2026-07-13T11:00:00.000Z') });
+    await savePmReport({ store: storage, reportMarkdown: 'Old', analysisMarkdown, reportId: 'pmr_20260713100000_00000005', now: () => new Date('2026-07-13T10:00:00.000Z') });
+    await savePmReport({ store: storage, reportMarkdown: 'New', analysisMarkdown, reportId: 'pmr_20260713110000_00000006', now: () => new Date('2026-07-13T11:00:00.000Z') });
 
-    expect((await listPmReports(storage)).map((report) => report.reportId)).toEqual(['pmr_new', 'pmr_old']);
+    expect((await listPmReports(storage)).map((report) => report.reportId)).toEqual(['pmr_20260713110000_00000006', 'pmr_20260713100000_00000005']);
   });
 
   it('rejects truncated object listings instead of returning an incomplete report list', async () => {
@@ -180,16 +180,16 @@ describe('PM report storage', () => {
       status: 'WARNING',
       ...keysFor(reportId),
     });
-    objects.set('pm-reports/pmr_invalid_calendar/metadata.json', JSON.stringify(metadata('pmr_invalid_calendar', '2026-02-30T11:26:00.000Z')));
-    objects.set('pm-reports/pmr_equal_first/metadata.json', JSON.stringify(metadata('pmr_equal_first', '2026-07-15T11:26:42.1239Z')));
-    objects.set('pm-reports/pmr_invalid_text/metadata.json', JSON.stringify(metadata('pmr_invalid_text', 'not a date')));
-    objects.set('pm-reports/pmr_equal_second/metadata.json', JSON.stringify(metadata('pmr_equal_second', '2026-07-15T11:26:42.1231Z')));
+    objects.set('pm-reports/pmr_20260715112640_00000007/metadata.json', JSON.stringify(metadata('pmr_20260715112640_00000007', '2026-02-30T11:26:00.000Z')));
+    objects.set('pm-reports/pmr_20260715112642_00000008/metadata.json', JSON.stringify(metadata('pmr_20260715112642_00000008', '2026-07-15T11:26:42.1239Z')));
+    objects.set('pm-reports/pmr_20260715112641_00000009/metadata.json', JSON.stringify(metadata('pmr_20260715112641_00000009', 'not a date')));
+    objects.set('pm-reports/pmr_20260715112643_0000000a/metadata.json', JSON.stringify(metadata('pmr_20260715112643_0000000a', '2026-07-15T11:26:42.1231Z')));
 
     expect((await listPmReports(storage)).map((report) => [report.reportId, report.createdAt])).toEqual([
-      ['pmr_equal_first', '2026-07-15T11:26:42.1239Z'],
-      ['pmr_equal_second', '2026-07-15T11:26:42.1231Z'],
-      ['pmr_invalid_calendar', '2026-02-30T11:26:00.000Z'],
-      ['pmr_invalid_text', 'not a date'],
+      ['pmr_20260715112642_00000008', '2026-07-15T11:26:42.1239Z'],
+      ['pmr_20260715112643_0000000a', '2026-07-15T11:26:42.1231Z'],
+      ['pmr_20260715112640_00000007', '2026-02-30T11:26:00.000Z'],
+      ['pmr_20260715112641_00000009', 'not a date'],
     ]);
   });
 
@@ -221,40 +221,74 @@ describe('PM report storage', () => {
 
   it('skips malformed metadata but retains otherwise valid invalid createdAt strings', async () => {
     const { objects, storage } = createMemoryStorage();
-    const valid = { reportId: 'pmr_valid', createdAt: 'invalid date', rating: 4, status: 'WARNING', ...keysFor('pmr_valid') };
-    objects.set('pm-reports/pmr_valid/metadata.json', JSON.stringify(valid));
+    const validId = 'pmr_20260715112644_0000000b';
+    const valid = { reportId: validId, createdAt: 'invalid date', rating: 4, status: 'WARNING', ...keysFor(validId) };
+    objects.set(valid.metadataObjectKey, JSON.stringify(valid));
     objects.set('pm-reports/pmr_corrupt/metadata.json', '{not-json');
     objects.set('pm-reports/pmr_bad_id/metadata.json', JSON.stringify({ ...valid, reportId: 'bad_id' }));
     objects.set('pm-reports/pmr_bad_key/metadata.json', JSON.stringify({ ...valid, reportId: 'pmr_bad_key' }));
-    objects.set('pm-reports/pmr_bad_rating/metadata.json', JSON.stringify({ ...valid, reportId: 'pmr_bad_rating', rating: 11, ...keysFor('pmr_bad_rating') }));
-    objects.set('pm-reports/pmr_bad_status/metadata.json', JSON.stringify({ ...valid, reportId: 'pmr_bad_status', status: 'ON-TRACK', ...keysFor('pmr_bad_status') }));
+    objects.set('pm-reports/pmr_20260715112645_0000000c/metadata.json', JSON.stringify({ ...valid, reportId: 'pmr_20260715112645_0000000c', rating: 11, ...keysFor('pmr_20260715112645_0000000c') }));
+    objects.set('pm-reports/pmr_20260715112646_0000000d/metadata.json', JSON.stringify({ ...valid, reportId: 'pmr_20260715112646_0000000d', status: 'ON-TRACK', ...keysFor('pmr_20260715112646_0000000d') }));
+
+    await expect(listPmReports(storage)).resolves.toEqual([valid]);
+  });
+
+  it('skips internally consistent metadata with a noncanonical report id', async () => {
+    const { objects, storage } = createMemoryStorage();
+    const reportId = 'pmr_20260715112642_deadbeef';
+    const valid = {
+      reportId,
+      createdAt: '2026-07-15T11:26:42.000Z',
+      rating: 4,
+      status: 'WARNING',
+      ...keysFor(reportId),
+    };
+    const noncanonical = {
+      ...valid,
+      reportId: 'pmr_legacy',
+      inputObjectKey: 'pm-reports/pmr_legacy/input.md',
+      analysisObjectKey: 'pm-reports/pmr_legacy/analysis.md',
+      metadataObjectKey: 'pm-reports/pmr_legacy/metadata.json',
+    };
+    objects.set(valid.metadataObjectKey, JSON.stringify(valid));
+    objects.set(noncanonical.metadataObjectKey, JSON.stringify(noncanonical));
 
     await expect(listPmReports(storage)).resolves.toEqual([valid]);
   });
 
   it('propagates metadata read failures while safely rejecting invalid read metadata', async () => {
     const { objects, storage } = createMemoryStorage();
-    await savePmReport({ store: storage, reportMarkdown: 'Report input', analysisMarkdown, reportId: 'pmr_view' });
+    const reportId = 'pmr_20260715112647_0000000e';
+    await savePmReport({ store: storage, reportMarkdown: 'Report input', analysisMarkdown, reportId });
     const failingStorage: ObjectStorage = { ...storage, async getText() { throw new Error('Garage access denied'); } };
     await expect(listPmReports(failingStorage)).rejects.toThrow('Garage access denied');
 
-    objects.set('pm-reports/pmr_view/metadata.json', JSON.stringify({ reportId: 'pmr_view' }));
-    await expect(getPmReport(storage, 'pmr_view')).rejects.toThrow('Invalid PM report metadata for pmr_view');
+    objects.set(`pm-reports/${reportId}/metadata.json`, JSON.stringify({ reportId }));
+    await expect(getPmReport(storage, reportId)).rejects.toThrow(`Invalid PM report metadata for ${reportId}`);
   });
 
   it('reads a saved report', async () => {
     const { storage } = createMemoryStorage();
-    const metadata = await savePmReport({ store: storage, reportMarkdown: 'Report input', analysisMarkdown, reportId: 'pmr_view' });
+    const reportId = 'pmr_20260715112648_0000000f';
+    const metadata = await savePmReport({ store: storage, reportMarkdown: 'Report input', analysisMarkdown, reportId });
 
-    await expect(getPmReport(storage, 'pmr_view')).resolves.toEqual({
-      reportId: 'pmr_view',
+    await expect(getPmReport(storage, reportId)).resolves.toEqual({
+      reportId,
       inputMarkdown: 'Report input',
       analysisMarkdown,
       metadata,
     });
   });
 
-  it.each(['../escape', 'pmr_bad/id', 'report', 'pmr_'])('rejects invalid report id %s at every boundary', async (reportId) => {
+  it.each([
+    '../escape',
+    'pmr_bad/id',
+    'report',
+    'pmr_',
+    'pmr_legacy',
+    'pmr_20260715112642_DEADBEEF',
+    'pmr_20260715112642_deadbeef_extra',
+  ])('rejects invalid report id %s at every boundary', async (reportId) => {
     const { storage, writes } = createMemoryStorage();
     expect(() => keysFor(reportId)).toThrow(`Invalid PM report id: ${reportId}`);
     await expect(savePmReport({ store: storage, reportMarkdown: 'Report', analysisMarkdown, reportId })).rejects.toThrow(`Invalid PM report id: ${reportId}`);

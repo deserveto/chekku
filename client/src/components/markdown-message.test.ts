@@ -15,7 +15,7 @@ it('renders only the generated report link from hostile report metadata', () => 
     '<b>unsafe</b>',
   ];
   const content = formatPmReportsMarkdown(values.map((createdAt, index) => {
-    const reportId = `pmr_render_${index}`;
+    const reportId = `pmr_20260715112642_${index.toString(16).padStart(8, '0')}`;
     return {
       reportId,
       reportUrl: `/reports/${reportId}`,
@@ -33,7 +33,7 @@ it('renders only the generated report link from hostile report metadata', () => 
 
   expect(html.match(/<a /g)).toHaveLength(values.length);
   for (let index = 0; index < values.length; index += 1) {
-    expect(html).toContain(`href="/reports/pmr_render_${index}"`);
+    expect(html).toContain(`href="/reports/pmr_20260715112642_${index.toString(16).padStart(8, '0')}"`);
   }
   expect(html).not.toContain('href="http');
   expect(html).not.toContain('href="mailto:');
@@ -62,7 +62,7 @@ it('renders report tables in a labeled keyboard-scrollable region', () => {
   const content = [
     '| Report | Created | Risk | Status |',
     '| --- | --- | ---: | --- |',
-    '| [pmr_test](/reports/pmr_test) | 2026-07-15 11:26 UTC | 8/10 | IN-DANGER |',
+    '| [pmr_20260715112642_deadbeef](/reports/pmr_20260715112642_deadbeef) | 2026-07-15 11:26 UTC | 8/10 | IN-DANGER |',
   ].join('\n');
   const markup = renderToStaticMarkup(createElement(MarkdownMessage, { content }));
 
@@ -71,7 +71,7 @@ it('renders report tables in a labeled keyboard-scrollable region', () => {
   expect(markup).toContain('role="region"');
   expect(markup).toContain('aria-label="Scrollable table"');
   expect(markup).toContain('<table>');
-  expect(markup).toContain('href="/reports/pmr_test"');
+  expect(markup).toContain('href="/reports/pmr_20260715112642_deadbeef"');
   expect(markup).toContain('target="_blank"');
   expect(markup).toContain('rel="noreferrer"');
   expect(markup).toContain('>Risk</th>');
