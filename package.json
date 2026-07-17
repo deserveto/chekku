@@ -5,17 +5,19 @@
   "private": true,
   "workspaces": [
     "agent",
-    "client"
+    "client",
+    "storage"
   ],
   "engines": {
     "node": ">=22.22.0"
   },
   "scripts": {
     "dev": "concurrently --kill-others-on-fail --names agent,client --prefix-colors cyan,magenta \"npm run dev:agent\" \"npm run dev:client\"",
+    "dev:sh": "bash ./scripts/dev.sh",
     "dev:agent": "npm run dev --workspace agent",
     "dev:client": "npm run dev --workspace client",
     "build": "npm run build --workspace agent && npm run build --workspace client",
-    "typecheck": "npm run typecheck --workspace agent && npm run typecheck --workspace client",
+    "typecheck": "npm run typecheck --workspace @chekku/storage && npm run typecheck --workspace agent && npm run typecheck --workspace client",
     "lint": "npm run lint --workspace client",
     "test": "vitest run",
     "check": "npm run typecheck && npm run lint && npm test"

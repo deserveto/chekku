@@ -6,8 +6,24 @@ export function MarkdownMessage({ content }: { content: string }) {
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       components={{
-        a: ({ children, ...props }) => <a {...props} target="_blank" rel="noreferrer">{children}</a>,
+        a: ({ children, node, ...props }) => {
+          void node;
+          return <a {...props} target="_blank" rel="noreferrer">{children}</a>;
+        },
         pre: ({ children }) => <div className="code-block"><pre>{children}</pre></div>,
+        table: ({ children, node, ...props }) => {
+          void node;
+          return (
+            <div
+              className="markdown-table-wrap"
+              tabIndex={0}
+              role="region"
+              aria-label="Scrollable table"
+            >
+              <table {...props}>{children}</table>
+            </div>
+          );
+        },
       }}
     >
       {content}

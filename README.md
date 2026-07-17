@@ -12,7 +12,7 @@
 
 </div>
 
-Chekku provides a focused interface for managing agents, creating agent-specific conversations, and running browser-assisted QA through a provider-neutral OpenAI-compatible model gateway. The repository contains one Next.js client and one Mastra server, with LibSQL as the local source of truth.
+Chekku provides a focused interface for managing agents, creating agent-specific conversations, analyzing engineering weekly reports, publishing social-media drafts through Telegram, and running browser-assisted QA through a provider-neutral OpenAI-compatible model gateway. Three npm workspaces provide the Next.js client, Mastra server, and shared Garage/S3 object-storage package. LibSQL remains the local source of truth for agents and conversations; Garage stores generic agent objects and PM report artifacts.
 
 ## Highlights
 
@@ -21,6 +21,7 @@ Chekku provides a focused interface for managing agents, creating agent-specific
 - **Agent-isolated history** — each agent owns its own Memory threads and conversation list.
 - **OpenAI-compatible models** — connect Rafiqspace LLM, LiteLLM, vLLM, or another compatible endpoint with server-only credentials.
 - **Browser QA agent** — navigate and inspect live websites using Mastra Agent Browser.
+- **PM Agent reports** — analyze weekly reports, save risk reviews in Garage, and browse linked report details.
 - **Social media agent** — role-switchable content assistant reachable over Telegram (X, Instagram, LinkedIn, TikTok roles).
 - **Hosted-vLLM compatibility** — final prompt normalization keeps system messages at the beginning.
 - **Local-first storage** — agent definitions, versions, memory, and threads live in LibSQL.
@@ -34,21 +35,34 @@ Browser
   │
   ▼
 Next.js client :3000
-  │  /api/agent/*
-  │  same-origin server proxy
-  ▼
-Mastra server :4111
-   ├── main-agent
-   ├── qa-web-agent
-   ├── social-media-agent (Telegram channel)
-   ├── @mastra/editor stored agents
-   ├── Mastra Memory
-   ├── calculator + current-time + send-email tools
-   ├── Chat SDK + Telegram adapter
-   └── OpenAI-compatible gateway
-           │
-           ▼
-   Rafiqspace LLM / LiteLLM / vLLM / compatible endpoint
+  ├── /api/agent/* same-origin proxy
+  │       │
+  │       ▼
+  │   Mastra server :4111
+  │     ├── main-agent
+  │     ├── pm-agent ──► PM-Agent-only report tools ──┐
+  │     ├── qa-web-agent                              │
+  │     ├── social-media-agent (Telegram channel)     │
+  │     ├── @mastra/editor stored agents              │
+  │     ├── Mastra Memory                             │
+  │     ├── calculator + current-time + email tools   │
+  │     ├── Chat SDK + Telegram adapter               │
+  │     ├── Garage MCP (optional stored-agent          │
+  │     │   capability) ───────────────────────────────┤
+  │     └── OpenAI-compatible gateway                 │
+  │             │                                     │
+  │             ▼                                     │
+  │     Rafiqspace LLM / LiteLLM / vLLM /             │
+  │     compatible endpoint                           │
+  └── /reports/* + /api/storage/pm-reports/*          │
+          │                                           │
+          ▼                                           │
+      client/src/server/pm-reports.ts ────────────────┤
+                                                      ▼
+                                           @chekku/storage
+                                                      │
+                                                      ▼
+                                           Garage/S3 bucket
 
 LibSQL stores agent definitions, versions, memory, and threads.
 ```
@@ -93,7 +107,7 @@ Never expose `LLM_API_KEY` through a `NEXT_PUBLIC_*` variable or commit `agent/.
 #### Optional integrations
 
 - **Telegram (social-media-agent)** — create a bot with [@BotFather](https://t.me/BotFather), then set `TELEGRAM_BOT_TOKEN`. Keep `TELEGRAM_MODE=polling` for local dev; switch to `webhook` with `TELEGRAM_WEBHOOK_SECRET_TOKEN` for production.
-- **Email outbound (send-email tool)** — sign up at [resend.com](https://resend.com), set `RESEND_API_KEY`, and (for production) a Resend-verified sender in `RESEND_FROM_EMAIL`. The default `onboarding@resend.dev` sender only delivers to the account owner.
+- **Email outbound (send-email tool)** — sign up at [resend.com](https://resend.com), set `RESEND_API_KEY`, and (for production) a Resend-verified sender in `RESEND_FROM_EMAIL`. The default `onboarding@resend.dev` sender only delivers to the account owner. Every delivery requires approval.
 
 Both are optional; Chekku boots fine without them. The `social-media-agent` binds the send-email tool and (when configured) the Telegram channel; stored agents can opt in from the builder's **Capabilities** section.
 
@@ -105,15 +119,16 @@ cp client/.env.example client/.env.local
 
 The defaults target the local Mastra server and normally require no edits.
 
-### 4. Start both workspaces
+### 4. Start Garage and both application workspaces
 
 ```bash
-npm run dev
+npm run dev:sh
 ```
 
 Open:
 
 - Studio: `http://localhost:3000`
+- Reports: `http://localhost:3000/reports`
 - Mastra health: `http://localhost:4111/healthz`
 - Model registry: `http://localhost:4111/models`
 
@@ -162,10 +177,11 @@ Local file: `client/.env.local`
 
 | Command | Purpose |
 | --- | --- |
+| `npm run dev:sh` | Provision local Garage and start agent and client workspaces. |
 | `npm run dev` | Start agent and client workspaces together. |
 | `npm run dev:agent` | Start only the Mastra server. |
 | `npm run dev:client` | Start only the Next.js client. |
-| `npm run typecheck` | Type-check both workspaces. |
+| `npm run typecheck` | Type-check all three workspaces. |
 | `npm run lint` | Run the client ESLint configuration. |
 | `npm test` | Run all Vitest tests. |
 | `npm run check` | Run typecheck, lint, and tests. |
@@ -179,13 +195,13 @@ The client uses system font stacks, so `next build` does not download fonts from
 .
 ├── agent/                  # Mastra server and agent runtime
 │   └── src/
-│       ├── agents/         # main-agent, qa-web-agent, social-media-agent
+│       ├── agents/         # main, PM, QA Web, and Social Media agents
 │       ├── config/         # environment and middleware
 │       ├── mastra/
 │       │   ├── gateways/   # OpenAI-compatible gateway and normalization
 │       │   ├── processors/ # browser/tool compatibility
 │       │   ├── routes/     # /healthz and /models
-│       │   └── tools/      # stored-agent tools
+│       │   └── tools/      # stored-agent and code-defined PM tools
 │       └── providers/      # model configuration helpers
 ├── client/                 # Next.js studio
 │   └── src/
@@ -193,6 +209,8 @@ The client uses system font stacks, so `next build` does not download fonts from
 │       ├── components/     # agent catalog, builder, chat, shared UI
 │       ├── lib/            # Mastra client, models, agents, threads
 │       └── server/         # auth seam, proxy validation, payload helpers
+├── storage/                # generic Garage/S3 storage plus PM report repository
+├── scripts/                # local Garage environment and development launchers
 ├── docs/                   # architecture, operations, cleanup history
 └── .github/workflows/      # CI
 ```
@@ -207,7 +225,48 @@ These rules keep the repository from drifting back into parallel implementations
 4. Models use only `LLM_*` configuration through the OpenAI-compatible gateway.
 5. Thread IDs must include the agent and resource prefix.
 6. QA Web Agent must keep active Memory and final system-message normalization.
-7. Client HTTP traffic must use `/api/agent/*` unless a protocol cannot be proxied by Next.js.
+7. Browser-to-Mastra agent-service traffic must use `/api/agent/*` unless a protocol cannot be proxied by Next.js. PM report pages remain under `/reports/*`, and PM report storage APIs remain under `/api/storage/pm-reports/*` in the Next.js server.
+8. Garage MCP exposes only `create_text_object`, `get_text_object`, `list_text_objects`, `replace_text_object`, and `delete_object`.
+9. Garage identity comes from trusted Mastra execution context, never tool input; browser code never accesses Garage directly.
+10. PM report semantics stay outside Garage MCP in code-defined `pm-agent` tools and the shared report repository.
+11. PM storage always binds to fixed `pm-agent`; persisted metadata contains relative `pm-reports/...` keys only.
+12. Social Media Agent keeps Telegram slash registration and approval-gated email delivery in the single Mastra runtime.
+
+## Garage MCP
+
+Stored agents may select the whitelisted `garage` capability in the builder. Selection persists as `mcpClients: { garage: { tools: {} } }`; arbitrary MCP URLs, commands, packages, and credentials are rejected by the same-origin proxy before stored-agent create or update requests reach Mastra.
+
+Garage MCP exposes exactly five generic tools:
+
+- `create_text_object` rejects a key that already exists.
+- `get_text_object` reads an existing UTF-8 text object.
+- `list_text_objects` returns at most 100 relative keys plus a `truncated` flag.
+- `replace_text_object` replaces an existing object and requires approval.
+- `delete_object` deletes an existing object and requires approval.
+
+Garage v2.3 does not provide destination conditional PUT/DELETE semantics. Chekku serializes same-key mutations within one storage adapter instance and checks existence immediately before mutation; external Garage writers can still race these operations.
+
+Every operation requires trusted `context.agent.agentId`. Physical keys use `agents/<base64url-agent-id>/<relative-key>`, while inputs and responses contain relative keys only. Relative keys are limited to 512 UTF-8 bytes and reject absolute paths, backslashes, traversal, control characters, and empty segments. Text is limited to 262,144 UTF-8 bytes.
+
+Missing identity, invalid input, collisions, missing objects, configuration failures, and connectivity failures return bounded actionable errors. Provider responses, endpoints, headers, credentials, and request IDs are never copied into errors.
+
+## PM reports
+
+`pm-agent` is a protected code-defined agent with Memory and three private tools: `save_pm_report_to_garage`, `list_pm_reports_from_garage`, and `view_pm_report_from_garage`. These tools are registered only on PM Agent. They are not Garage MCP tools and do not change the generic five-tool contract available to stored agents.
+
+Both PM Agent tools and `client/src/server/pm-reports.ts` bind root storage to the fixed `pm-agent` namespace. Logical objects use relative keys:
+
+```text
+pm-reports/<reportId>/input.md
+pm-reports/<reportId>/analysis.md
+pm-reports/<reportId>/metadata.json
+```
+
+Physical `agents/<base64url-agent-id>/...` prefixes never appear in persisted metadata, tool output, APIs, or pages. Existing global development objects are not migrated or used as fallback. Canonical public report IDs use `pmr_YYYYMMDDHHMMSS_<8 lowercase hex>`, for example `pmr_20260715112642_e720cebd`.
+
+Authenticated server boundaries expose `GET /api/storage/pm-reports` and `GET /api/storage/pm-reports/[reportId]`. Pages at `/reports` and `/reports/[reportId]` call `client/src/server/pm-reports.ts` directly inside the Next.js server, then `@chekku/storage`; they do not route report reads through Mastra. Chat PM tool calls take the separate `/api/agent/*` path through Mastra before reaching the same storage package. Both paths use the temporary `CHEKKU_LOCAL_USER_ID` identity seam where applicable; browser code never imports storage or contacts Garage directly. Detail pages render analysis, metadata, then original input.
+
+Report-list tool output includes structured metadata plus presentation-only `reportUrl` and deterministic `reportsMarkdown`. PM Agent returns the generated newest-first GFM table unchanged. Valid dates render as `YYYY-MM-DD HH:mm UTC`; invalid stored text remains visible and safely escaped. Report links use URL-encoded relative paths, open in a new tab with `rel="noreferrer"`, and are not persisted. Chat and report-list tables use labeled, keyboard-focusable horizontal-scroll regions with visible focus outlines, preserving readable columns on narrow screens.
 
 Detailed contributor constraints are in [AGENTS.md](AGENTS.md).
 

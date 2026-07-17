@@ -6,12 +6,14 @@ import { PinoLogger } from '@mastra/loggers';
 import { env } from '../config/env.js';
 import { requestIdInjector, requestLogger } from '../config/middleware.js';
 import { mainAgent } from '../agents/main-agent.js';
+import { pmAgent } from '../agents/pm-agent.js';
 import { qaWebAgent } from '../agents/qa-web-agent.js';
 import {
   socialMediaAgent,
   registerSocialSlashCommands,
 } from '../agents/social-media-agent.js';
 import { OpenAICompatibleGateway } from './gateways/openai-compatible.js';
+import { garageMcpServer } from './mcp/garage-mcp-server.js';
 import { healthRoute } from './routes/health.js';
 import { modelsRoute } from './routes/models.js';
 import { storedAgentTools } from './tools/registry.js';
@@ -26,8 +28,9 @@ const storage = new LibSQLStore({
 });
 
 export const mastra = new Mastra({
-  agents: { mainAgent, qaWebAgent, socialMediaAgent },
+  agents: { mainAgent, pmAgent, qaWebAgent, socialMediaAgent },
   workflows: { dailyTask },
+  mcpServers: { garage: garageMcpServer },
   tools: storedAgentTools,
   storage,
   editor: new MastraEditor({ source: 'db' }),

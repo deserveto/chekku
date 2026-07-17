@@ -2,8 +2,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 import {
   buildResendEmailBody,
+  sendEmailTool,
   sendEmailViaResend,
 } from './send-email.js';
+
+describe('sendEmailTool', () => {
+  it('requires approval before external delivery', () => {
+    expect(sendEmailTool.requireApproval).toBe(true);
+  });
+});
 
 describe('buildResendEmailBody', () => {
   beforeEach(() => {
