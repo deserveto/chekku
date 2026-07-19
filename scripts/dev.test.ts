@@ -33,6 +33,8 @@ const validAgentEnv = [
   'GARAGE_SECRET_ACCESS_KEY=stale-secret-key',
   '',
 ].join('\n');
+const invalidSearxngAssignmentError = 'SearXNG application environment contains an invalid assignment.';
+const leakedSearxngValueError = 'SearXNG service-only values must not appear in agent environment.';
 
 function executable(path: string, body: string): void {
   writeFileSync(path, `#!/usr/bin/env bash\nset -euo pipefail\n${body}`);
@@ -375,29 +377,6 @@ describe('SearXNG environment generation', () => {
     }
   });
 
-  it('removes service secret and config hash values from any agent line', () => {
-    const root = fixture();
-    expect(run(root, ['scripts/storage-env.sh']).status).toBe(0);
-    expect(run(root, ['scripts/searxng-env.sh']).status).toBe(0);
-
-    const localValues = parse(readFileSync(resolve(root, 'searxng/.env.local'), 'utf8'));
-    const agentPath = resolve(root, 'agent/.env.development');
-    appendFileSync(agentPath, [
-      `UNRELATED_SECRET=${localValues.SEARXNG_SECRET}`,
-      `# config fingerprint ${localValues.SEARXNG_CONFIG_HASH}`,
-      '',
-    ].join('\n'));
-
-    const result = run(root, ['scripts/searxng-env.sh']);
-    const generated = readFileSync(agentPath, 'utf8');
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(generated.includes(localValues.SEARXNG_SECRET!)).toBe(false);
-    expect(generated.includes(localValues.SEARXNG_CONFIG_HASH!)).toBe(false);
-    expect((result.stdout + result.stderr).includes(localValues.SEARXNG_SECRET!)).toBe(false);
-    expect((result.stdout + result.stderr).includes(localValues.SEARXNG_CONFIG_HASH!)).toBe(false);
-  });
-
   it('exports the persisted winner from concurrent first runs', async () => {
     const root = fixture({ agentEnv: null });
     const log = resolve(root, 'mock-log');
@@ -469,6 +448,94 @@ exec ${shellValue(realNode)} "$@"
     expect(generated).toContain('UNRELATED=preserved');
     expect(result.stdout + result.stderr).not.toContain('stale-base-continuation');
     expect(result.stdout + result.stderr).not.toContain('stale-api-continuation');
+  });
+
+  it('ignores escaped delimiters until multiline single and backtick assignments close', () => {
+    const root = fixture({
+      agentEnv: [
+        validAgentEnv.trimEnd(),
+        "SEARXNG_BASE_URL='https://stale.example.test/escaped\\'delimiter",
+        "stale-single-continuation' # stale single comment",
+        'SEARXNG_API_KEY=`stale\\`delimiter',
+        'stale-backtick-continuation`',
+        'UNRELATED=preserved-after-escaped-values',
+        '',
+      ].join('\n'),
+    });
+    expect(run(root, ['scripts/storage-env.sh']).status).toBe(0);
+
+    const result = run(root, ['scripts/searxng-env.sh']);
+    const generated = readFileSync(resolve(root, 'agent/.env.development'), 'utf8');
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(generated.includes('stale-single-continuation')).toBe(false);
+    expect(generated.includes('stale-backtick-continuation')).toBe(false);
+    expect(generated).toContain('UNRELATED=preserved-after-escaped-values');
+    expect(result.stdout + result.stderr).not.toContain('stale-single-continuation');
+    expect(result.stdout + result.stderr).not.toContain('stale-backtick-continuation');
+  });
+
+  it('rejects an unterminated target assignment without changing generated state', () => {
+    const root = fixture();
+    expect(run(root, ['scripts/storage-env.sh']).status).toBe(0);
+    expect(run(root, ['scripts/searxng-env.sh']).status).toBe(0);
+
+    const localPath = resolve(root, 'searxng/.env.local');
+    const localContent = readFileSync(localPath, 'utf8');
+    const localValues = parse(localContent);
+    const sourcePath = resolve(root, 'agent/.env');
+    const sourceContent = readFileSync(sourcePath, 'utf8');
+    const generatedPath = resolve(root, 'agent/.env.development');
+    appendFileSync(generatedPath, [
+      'SEARXNG_API_KEY="unterminated-target-value',
+      'UNRELATED=must-remain-after-invalid-assignment',
+      '',
+    ].join('\n'));
+    const generatedContent = readFileSync(generatedPath, 'utf8');
+
+    const result = run(root, ['scripts/searxng-env.sh']);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr.split(invalidSearxngAssignmentError)).toHaveLength(2);
+    expect(result.stdout).toBe('');
+    expect(result.stderr.includes('unterminated-target-value')).toBe(false);
+    expect(result.stderr.includes('must-remain-after-invalid-assignment')).toBe(false);
+    expect(result.stderr.includes(localValues.SEARXNG_SECRET!)).toBe(false);
+    expect(result.stderr.includes(localValues.SEARXNG_CONFIG_HASH!)).toBe(false);
+    expect(readFileSync(sourcePath, 'utf8') === sourceContent).toBe(true);
+    expect(readFileSync(generatedPath, 'utf8') === generatedContent).toBe(true);
+    expect(readFileSync(localPath, 'utf8') === localContent).toBe(true);
+  });
+
+  it('rejects service-only values in retained agent content without mutation', () => {
+    const root = fixture({ agentEnv: null });
+    expect(run(root, ['scripts/searxng-env.sh']).status).toBe(0);
+
+    const localPath = resolve(root, 'searxng/.env.local');
+    const localContent = readFileSync(localPath, 'utf8');
+    const localValues = parse(localContent);
+    const sourcePath = resolve(root, 'agent/.env');
+    writeFileSync(sourcePath, [
+      validAgentEnv.trimEnd(),
+      `UNRELATED_SECRET=${localValues.SEARXNG_SECRET}`,
+      `# retained fingerprint ${localValues.SEARXNG_CONFIG_HASH}`,
+      '',
+    ].join('\n'));
+    expect(run(root, ['scripts/storage-env.sh']).status).toBe(0);
+    const sourceContent = readFileSync(sourcePath, 'utf8');
+    const generatedPath = resolve(root, 'agent/.env.development');
+    const generatedContent = readFileSync(generatedPath, 'utf8');
+
+    const result = run(root, ['scripts/searxng-env.sh']);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr.split(leakedSearxngValueError)).toHaveLength(2);
+    expect(result.stdout).toBe('');
+    expect(result.stderr.includes(localValues.SEARXNG_SECRET!)).toBe(false);
+    expect(result.stderr.includes(localValues.SEARXNG_CONFIG_HASH!)).toBe(false);
+    expect(readFileSync(sourcePath, 'utf8') === sourceContent).toBe(true);
+    expect(readFileSync(generatedPath, 'utf8') === generatedContent).toBe(true);
+    expect(readFileSync(localPath, 'utf8') === localContent).toBe(true);
   });
 
   it('does not create an agent development environment without an agent source', () => {

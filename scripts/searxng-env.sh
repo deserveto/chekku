@@ -97,10 +97,12 @@ const searxngKeys = ['SEARXNG_BASE_URL', 'SEARXNG_API_KEY'];
 const assignmentPattern = new RegExp(
   `^[ \\t]*(?:export[ \\t]+)?(?:${searxngKeys.join('|')})[ \\t]*=[ \\t]*(.*)$`,
 );
+const invalidAssignmentError = 'SearXNG application environment contains an invalid assignment.';
+const leakedValueError = 'SearXNG service-only values must not appear in agent environment.';
 
 const hasClosingQuote = (value, quote) => {
   for (let index = 0; index < value.length; index += 1) {
-    if (quote === '"' && value[index] === '\\') {
+    if (value[index] === '\\') {
       index += 1;
     } else if (value[index] === quote) {
       return true;
@@ -128,14 +130,15 @@ const removeAssignments = (input) => {
         index += 1;
         remainder += lines[index];
       }
+      if (!hasClosingQuote(remainder, quote)) throw new Error(invalidAssignmentError);
     }
   }
   return kept.join('');
 };
 
-let source = removeAssignments(readFileSync(sourcePath, 'utf8'));
+const source = removeAssignments(readFileSync(sourcePath, 'utf8'));
 for (const value of [process.env.SEARXNG_SECRET, process.env.SEARXNG_CONFIG_HASH]) {
-  if (value) source = source.replaceAll(value, '');
+  if (value && source.includes(value)) throw new Error(leakedValueError);
 }
 
 const serialize = (name, value) => {
