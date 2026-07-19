@@ -15,8 +15,17 @@ const config = parseSearxngConfiguration({
 
 describe('SearXNG search client', () => {
   it('posts only fixed search form fields with server-owned authentication', async () => {
-    const fetch = vi.fn(async (_url: URL | RequestInfo, _init?: RequestInit) => (
-      jsonResponse({ results: [] })
+    const fetch = vi.fn(async (url: URL | RequestInfo, _init?: RequestInit) => (
+      String(url).endsWith('/config')
+        ? jsonResponse({
+            categories: ['general', 'news'],
+            locales: { en: 'English' },
+            engines: [
+              { name: 'brave', enabled: true, languages: ['en'] },
+              { name: 'bing', enabled: true, languages: ['en'] },
+            ],
+          })
+        : jsonResponse({ results: [] })
     ));
     const client = createSearxngSearchClient({ config, fetch });
 
@@ -24,12 +33,17 @@ describe('SearXNG search client', () => {
       query: 'competitor research',
       maxResults: 10,
       page: 2,
+      language: 'en',
+      categories: ['general', 'news'],
+      engines: ['brave', 'bing'],
       safeSearch: 1,
       timeRange: 'month',
     });
 
-    expect(fetch).toHaveBeenCalledOnce();
-    const [url, init] = fetch.mock.calls[0]!;
+    expect(fetch).toHaveBeenCalledTimes(2);
+    const [url, init] = fetch.mock.calls.find(([requestUrl]) => (
+      String(requestUrl).endsWith('/search')
+    ))!;
     expect(String(url)).toBe('https://search.example.test/private/search');
     expect(init).toMatchObject({
       method: 'POST',
@@ -41,7 +55,8 @@ describe('SearXNG search client', () => {
       },
     });
     expect(String(init?.body)).toBe(
-      'q=competitor+research&format=json&pageno=2&time_range=month&safesearch=1',
+      'q=competitor+research&format=json&pageno=2&language=en&categories=general%2Cnews'
+      + '&engines=brave%2Cbing&time_range=month&safesearch=1',
     );
   });
 
@@ -49,6 +64,24 @@ describe('SearXNG search client', () => {
     const client = createSearxngSearchClient({ config: undefined, fetch: vi.fn() });
     await expect(client.search({ query: 'x', maxResults: 10, page: 1 }))
       .rejects.toThrow('SearXNG search is not configured.');
+  });
+
+  it.each([
+    { maxResults: 0, page: 1 },
+    { maxResults: 21, page: 1 },
+    { maxResults: 1.5, page: 1 },
+    { maxResults: 10, page: 0 },
+    { maxResults: 10, page: 6 },
+    { maxResults: 10, page: 1.5 },
+  ])('rejects invalid numeric bounds before upstream access: %j', async (bounds) => {
+    const fetch = vi.fn(async () => jsonResponse({ results: [] }));
+    const client = createSearxngSearchClient({ config, fetch });
+    const error = await client.search({ query: 'private-query', ...bounds })
+      .then(() => undefined, (reason: unknown) => reason);
+
+    expect(String(error)).toBe('Error: SearXNG search input is invalid.');
+    expect(String(error)).not.toContain('private-query');
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('validates and caches optional targeting from fixed config', async () => {
@@ -75,6 +108,36 @@ describe('SearXNG search client', () => {
 
     expect(fetch.mock.calls.filter(([url]) => String(url).endsWith('/config'))).toHaveLength(1);
     expect(fetch.mock.calls.filter(([url]) => String(url).endsWith('/search'))).toHaveLength(2);
+  });
+
+  it('uses one deadline across capability validation and search', async () => {
+    const requestSignals: AbortSignal[] = [];
+    const fetch = vi.fn(async (url: URL | RequestInfo, init?: RequestInit) => {
+      requestSignals.push(init?.signal as AbortSignal);
+      return String(url).endsWith('/config')
+        ? jsonResponse({
+            categories: ['general'],
+            locales: { en: 'English' },
+            engines: [{ name: 'brave', enabled: true, languages: ['en'] }],
+          })
+        : jsonResponse({ results: [] });
+    });
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    const client = createSearxngSearchClient({ config, fetch });
+
+    try {
+      await client.search({
+        query: 'x', maxResults: 10, page: 1,
+        language: 'en', categories: ['general'], engines: ['brave'],
+      });
+
+      expect(timeout).toHaveBeenCalledOnce();
+      expect(timeout).toHaveBeenCalledWith(12_000);
+      expect(requestSignals).toHaveLength(2);
+      expect(requestSignals[0]).toBe(requestSignals[1]);
+    } finally {
+      timeout.mockRestore();
+    }
   });
 
   it.each([
@@ -242,6 +305,63 @@ describe('SearXNG search client', () => {
     expect(Buffer.byteLength(JSON.stringify(output), 'utf8')).toBeLessThanOrEqual(131_072);
     expect(JSON.stringify(output)).not.toContain('private-upstream-diagnostic');
     expect(output.truncated).toBe(true);
+  });
+
+  it('marks missing and non-string result text fields as truncated', async () => {
+    const fetch = vi.fn(async () => jsonResponse({
+      results: [
+        { url: 'https://missing.example/', engines: [] },
+        { url: 'https://invalid.example/', title: 7, content: {}, engines: [] },
+      ],
+    }));
+    const client = createSearxngSearchClient({ config, fetch });
+
+    await expect(client.search({ query: 'x', maxResults: 10, page: 1 }))
+      .resolves.toEqual({
+        query: 'x',
+        page: 1,
+        results: [
+          {
+            url: 'https://missing.example/',
+            title: '',
+            snippet: '',
+            engines: [],
+          },
+          {
+            url: 'https://invalid.example/',
+            title: '',
+            snippet: '',
+            engines: [],
+          },
+        ],
+        answers: [],
+        corrections: [],
+        suggestions: [],
+        truncated: true,
+      });
+  });
+
+  it('omits a result when URL byte truncation no longer leaves valid HTTP(S)', async () => {
+    const fetch = vi.fn(async () => jsonResponse({
+      results: [{
+        url: `${' '.repeat(2_048)}https://product.example/`,
+        title: 'Product',
+        content: 'Summary',
+        engines: ['brave'],
+      }],
+    }));
+    const client = createSearxngSearchClient({ config, fetch });
+
+    await expect(client.search({ query: 'x', maxResults: 10, page: 1 }))
+      .resolves.toEqual({
+        query: 'x',
+        page: 1,
+        results: [],
+        answers: [],
+        corrections: [],
+        suggestions: [],
+        truncated: true,
+      });
   });
 
   it('returns a small clean response without truncation', async () => {

@@ -54,6 +54,7 @@ const ERRORS = {
   tooLarge: 'SearXNG returned too much data.',
   invalid: 'SearXNG returned an invalid response.',
   targeting: 'Search targeting is not supported by the configured SearXNG instance.',
+  input: 'SearXNG search input is invalid.',
 } as const;
 
 type ClientErrorCategory = keyof typeof ERRORS;
@@ -68,6 +69,12 @@ interface Capabilities {
   categories: Set<string>;
   engines: Set<string>;
   languages: Set<string>;
+}
+
+interface RequestDeadline {
+  signal: AbortSignal;
+  timeoutSignal: AbortSignal;
+  callerSignal?: AbortSignal;
 }
 
 function normalizeCapabilities(payload: unknown): Capabilities {
@@ -153,6 +160,15 @@ function truncateUtf8(value: string, maxBytes: number): { value: string; truncat
   return { value: truncatedValue, truncated: true };
 }
 
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 function normalizeSearchPayload(
   payload: unknown,
   input: SearxngSearchInput,
@@ -175,18 +191,16 @@ function normalizeSearchPayload(
       truncated = true;
       continue;
     }
-    try {
-      const url = new URL(result.url);
-      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-        truncated = true;
-        continue;
-      }
-    } catch {
+    if (!isHttpUrl(result.url)) {
       truncated = true;
       continue;
     }
 
     const normalizedUrl = truncateUtf8(result.url, 2_048);
+    if (!isHttpUrl(normalizedUrl.value)) {
+      truncated = true;
+      continue;
+    }
     const normalizedTitle = truncateUtf8(
       typeof result.title === 'string' ? result.title : '',
       512,
@@ -195,7 +209,9 @@ function normalizeSearchPayload(
       typeof result.content === 'string' ? result.content : '',
       4_096,
     );
-    truncated ||= normalizedUrl.truncated
+    truncated ||= typeof result.title !== 'string'
+      || typeof result.content !== 'string'
+      || normalizedUrl.truncated
       || normalizedTitle.truncated
       || normalizedSnippet.truncated;
 
@@ -307,22 +323,18 @@ export function createSearxngSearchClient(
     config: SearxngConfiguration,
     path: 'config' | 'search',
     init: RequestInit,
-    callerSignal?: AbortSignal,
+    deadline: RequestDeadline,
   ): Promise<unknown> {
-    const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? 12_000);
-    const signal = callerSignal
-      ? AbortSignal.any([callerSignal, timeoutSignal])
-      : timeoutSignal;
     try {
       const response = await fetch(searxngEndpoint(config, path), {
         ...init,
         redirect: 'error',
-        signal,
+        signal: deadline.signal,
       });
       return await readBoundedJson(response);
     } catch (error) {
       if (error instanceof SearxngClientError) throw error;
-      if (!callerSignal?.aborted && timeoutSignal.aborted) {
+      if (!deadline.callerSignal?.aborted && deadline.timeoutSignal.aborted) {
         throw new SearxngClientError('timeout');
       }
       throw new SearxngClientError('unavailable');
@@ -335,6 +347,20 @@ export function createSearxngSearchClient(
       if (!config) {
         throw new Error('SearXNG search is not configured.');
       }
+      if (!Number.isInteger(input.maxResults)
+        || input.maxResults < 1
+        || input.maxResults > 20
+        || !Number.isInteger(input.page)
+        || input.page < 1
+        || input.page > 5) {
+        throw new SearxngClientError('input');
+      }
+      const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? 12_000);
+      const deadline: RequestDeadline = {
+        timeoutSignal,
+        ...(signal ? { callerSignal: signal } : {}),
+        signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
+      };
 
       if (input.language !== undefined
         || input.categories !== undefined
@@ -345,7 +371,7 @@ export function createSearxngSearchClient(
           const payload = await requestJson(config, 'config', {
             method: 'GET',
             headers,
-          }, signal);
+          }, deadline);
           const value = normalizeCapabilities(payload);
           cachedCapabilities = { value, expiresAt: now() + CAPABILITY_CACHE_MS };
         }
@@ -382,7 +408,7 @@ export function createSearxngSearchClient(
         method: 'POST',
         headers,
         body,
-      }, signal);
+      }, deadline);
 
       return normalizeSearchPayload(payload, input);
     },
