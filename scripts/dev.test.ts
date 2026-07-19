@@ -46,9 +46,9 @@ function shellValue(value: string): string {
 }
 
 function prefixedAssignmentNames(content: string): string[] {
-  return [...content.matchAll(
-    /^[ \t]*(?:export[ \t]+)?((?:GARAGE|SEARXNG)_[A-Za-z0-9_]+)[ \t]*=/gm,
-  )].map((match) => match[1]).sort();
+  return Object.keys(parse(content))
+    .filter((name) => /^(?:GARAGE|SEARXNG)_/.test(name))
+    .sort();
 }
 
 function storageEnv(values: Record<string, string>): string {
@@ -323,6 +323,11 @@ describe('storage environment generation', () => {
   });
 
   it('removes every Garage-prefixed assignment including multiline values', () => {
+    const preserved = [
+      'NON-GARAGE.KEY: preserved-colon-value',
+      'OTHER.DOTTED="preserved-multiline-first',
+      'preserved-multiline-second"',
+    ].join('\r\n');
     const root = fixture({
       agentEnv: [
         validAgentEnv.trimEnd(),
@@ -333,6 +338,11 @@ describe('storage environment generation', () => {
         'GARAGE_ADMIN_TOKEN=`stale-admin-first',
         'stale-admin-second`',
         'GARAGE_UNRELATED=stale-unrelated',
+        'GARAGE_RPC-SECRET=stale-rpc-hyphen',
+        'GARAGE_UNRELATED.ALT=stale-unrelated-dot',
+        'GARAGE_COLON.ALT: "stale-colon-first',
+        'stale-colon-second"',
+        preserved,
         'UNRELATED=preserved',
         '',
       ].join('\r\n'),
@@ -349,12 +359,19 @@ describe('storage environment generation', () => {
       'GARAGE_REGION',
       'GARAGE_SECRET_ACCESS_KEY',
     ]);
+    expect(generated).toContain(preserved);
     expect(generated).toContain('UNRELATED=preserved');
     expect(generated).not.toContain('stale-');
     expect(result.stdout + result.stderr).not.toContain('stale-');
   });
 
-  it('rejects malformed Garage-prefixed assignments without leaking or changing generated state', () => {
+  it.each([
+    ['equals', 'GARAGE_UNRELATED="'],
+    ['colon', 'GARAGE_UNRELATED.ALT: "'],
+  ])('rejects malformed Garage-prefixed %s assignments without leaking or changing generated state', (
+    _operator,
+    assignment,
+  ) => {
     const root = fixture();
     expect(run(root, ['scripts/storage-env.sh']).status).toBe(0);
     const sourcePath = resolve(root, 'agent/.env');
@@ -363,7 +380,7 @@ describe('storage environment generation', () => {
     const privateValue = 'private-garage-first';
     const retainedValue = 'private-garage-retained';
     appendFileSync(sourcePath, [
-      `GARAGE_UNRELATED="${privateValue}`,
+      `${assignment}${privateValue}`,
       retainedValue,
       '',
     ].join('\n'));
@@ -537,6 +554,11 @@ exec ${shellValue(realNode)} "$@"
         'SEARXNG_CONFIG_HASH=stale-config-hash',
         'SEARXNG_UNRELATED="stale-unrelated-first',
         'stale-unrelated-continuation"',
+        'SEARXNG_SECRET.ALT=stale-secret-dot',
+        'SEARXNG_UNRELATED: stale-unrelated-colon',
+        'SEARXNG_COLON.ALT: "stale-colon-first',
+        'stale-colon-continuation"',
+        'NON-SEARXNG.KEY: preserved-searxng-colon',
         'UNRELATED=preserved',
         '',
       ].join('\r\n'),
@@ -557,6 +579,10 @@ exec ${shellValue(realNode)} "$@"
     expect(generated.includes('stale-secret-continuation')).toBe(false);
     expect(generated.includes('stale-config-hash')).toBe(false);
     expect(generated.includes('stale-unrelated-continuation')).toBe(false);
+    expect(generated.includes('stale-secret-dot')).toBe(false);
+    expect(generated.includes('stale-unrelated-colon')).toBe(false);
+    expect(generated.includes('stale-colon-continuation')).toBe(false);
+    expect(generated).toContain('NON-SEARXNG.KEY: preserved-searxng-colon');
     expect(generated).toContain('UNRELATED=preserved');
     expect(result.stdout + result.stderr).not.toContain('stale-base-continuation');
     expect(result.stdout + result.stderr).not.toContain('stale-api-continuation');
@@ -627,9 +653,13 @@ exec ${shellValue(realNode)} "$@"
     expect((result.stdout + result.stderr).includes(marker)).toBe(false);
   });
 
-  it.each(['SEARXNG_API_KEY', 'SEARXNG_UNRELATED'])(
-    'rejects an unterminated $assignmentName assignment without changing generated state',
-    (assignmentName) => {
+  it.each([
+    ['SEARXNG_API_KEY', '='],
+    ['SEARXNG_UNRELATED', '='],
+    ['SEARXNG_UNRELATED.ALT', ': '],
+  ])(
+    'rejects an unterminated $0 assignment without changing generated state',
+    (assignmentName, operator) => {
       const root = fixture();
       expect(run(root, ['scripts/storage-env.sh']).status).toBe(0);
       expect(run(root, ['scripts/searxng-env.sh']).status).toBe(0);
@@ -641,7 +671,7 @@ exec ${shellValue(realNode)} "$@"
       const sourceContent = readFileSync(sourcePath, 'utf8');
       const generatedPath = resolve(root, 'agent/.env.development');
       appendFileSync(generatedPath, [
-        `${assignmentName}="unterminated-target-value`,
+        `${assignmentName}${operator}"unterminated-target-value`,
         'UNRELATED=must-remain-after-invalid-assignment',
         '',
       ].join('\n'));
@@ -931,10 +961,16 @@ describe('development launcher', () => {
       'garage-rpc-first',
       'garage-rpc-continuation',
       'garage-admin-value',
+      'garage-rpc-hyphen-value',
+      'garage-unrelated-dot-value',
+      'garage-colon-continuation',
       'searxng-secret-first',
       'searxng-secret-continuation',
       'searxng-config-value',
       'searxng-unrelated-value',
+      'searxng-secret-dot-value',
+      'searxng-unrelated-colon-value',
+      'searxng-colon-continuation',
     ];
     const root = fixture({
       captureNpmEnv: true,
@@ -946,12 +982,21 @@ describe('development launcher', () => {
         "garage-rpc-continuation'",
         'GARAGE_ADMIN_TOKEN=garage-admin-value',
         'GARAGE_UNRELATED=$(touch "$MOCK_LOG/source-executed")',
+        'GARAGE_RPC-SECRET=garage-rpc-hyphen-value',
+        'GARAGE_UNRELATED.ALT=garage-unrelated-dot-value',
+        'GARAGE_COLON.ALT: "garage-colon-first',
+        'garage-colon-continuation"',
         'SEARXNG_BASE_URL=https://stale-searxng.example.test',
         'SEARXNG_API_KEY=stale-api-key',
         'SEARXNG_SECRET="searxng-secret-first',
         'searxng-secret-continuation"',
         'SEARXNG_CONFIG_HASH=searxng-config-value',
         'SEARXNG_UNRELATED=searxng-unrelated-value',
+        'SEARXNG_SECRET.ALT=searxng-secret-dot-value',
+        'SEARXNG_UNRELATED: searxng-unrelated-colon-value',
+        'SEARXNG_COLON.ALT: "searxng-colon-first',
+        'searxng-colon-continuation"',
+        'NON-SERVICE.KEY: preserved-colon-value',
         'UNRELATED=preserved-end-to-end',
         '',
       ].join('\n'),
@@ -971,6 +1016,7 @@ describe('development launcher', () => {
     expect(run(root, ['scripts/searxng-env.sh']).status).toBe(0);
     const generated = readFileSync(resolve(root, 'agent/.env.development'), 'utf8');
     expect(prefixedAssignmentNames(generated)).toEqual(expectedAgentNames);
+    expect(generated).toContain('NON-SERVICE.KEY: preserved-colon-value');
     expect(generated).toContain('UNRELATED=preserved-end-to-end');
 
     const result = runDev(root, { CHEKKU_NO_TMUX: '1', RELOAD_AGENT_ENV: '1' });

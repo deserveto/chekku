@@ -64,7 +64,7 @@ const garageKeys = [
   'GARAGE_SECRET_ACCESS_KEY',
 ];
 const assignmentPattern = new RegExp(
-  '^[ \\t]*(?:export[ \\t]+)?GARAGE_[A-Za-z0-9_]*[ \\t]*=[ \\t]*(.*)$',
+  '^[ \\t]*(?:export[ \\t]+)?([\\w.-]+)(?:[ \\t]*=[ \\t]*|:[ \\t]+)(.*)$',
 );
 const invalidAssignmentError = 'Garage application environment contains an invalid assignment.';
 
@@ -83,12 +83,12 @@ const removeAssignments = (input) => {
   for (let index = 0; index < lines.length; index += 1) {
     const content = lines[index].replace(/\r?\n$/, '');
     const assignment = content.match(assignmentPattern);
-    if (!assignment) {
+    if (!assignment || !assignment[1].startsWith('GARAGE_')) {
       kept.push(lines[index]);
       continue;
     }
 
-    const value = assignment[1].trimStart();
+    const value = assignment[2].trimStart();
     const quote = value[0];
     if (quote === "'" || quote === '"' || quote === '`') {
       let remainder = value.slice(1);
