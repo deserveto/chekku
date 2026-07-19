@@ -19,8 +19,8 @@ export function parseSearxngConfiguration(
     if (!['http:', 'https:'].includes(baseUrl.protocol)
       || baseUrl.username
       || baseUrl.password
-      || baseUrl.search
-      || baseUrl.hash
+      || baseUrl.href.includes('?')
+      || baseUrl.href.includes('#')
       || /[\r\n]/.test(input.apiKey)) {
       throw new Error(INVALID_CONFIGURATION);
     }

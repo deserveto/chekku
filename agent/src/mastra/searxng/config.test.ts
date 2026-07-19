@@ -22,11 +22,22 @@ describe('SearXNG configuration', () => {
     expect(config.apiKey).toBe('token');
   });
 
+  it('accepts an HTTP base URL and constructs a fixed endpoint', () => {
+    const config = parseSearxngConfiguration({
+      baseUrl: 'http://search.example.test',
+      apiKey: '',
+    })!;
+    expect(searxngEndpoint(config, 'search').href)
+      .toBe('http://search.example.test/search');
+  });
+
   it.each([
     'ftp://search.example.test',
     'https://user:pass@search.example.test',
     'https://search.example.test?q=secret',
+    'https://search.example.test/?',
     'https://search.example.test/#fragment',
+    'https://search.example.test/#',
   ])('rejects unsafe base URL %s', (baseUrl) => {
     expect(() => parseSearxngConfiguration({ baseUrl, apiKey: '' }))
       .toThrow('SearXNG search configuration is invalid.');
