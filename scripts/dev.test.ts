@@ -62,11 +62,15 @@ function fixture(options: {
 } = {}): string {
   const root = mkdtempSync(resolve(tmpdir(), 'chekku-dev-'));
   fixtures.push(root);
-  for (const directory of ['scripts', 'storage', 'agent', 'bin']) mkdirSync(resolve(root, directory));
+  for (const directory of ['scripts', 'storage', 'searxng', 'agent', 'bin']) {
+    mkdirSync(resolve(root, directory));
+  }
   for (const path of [
     'scripts/dev.sh',
     'scripts/storage-env.sh',
+    'scripts/searxng-env.sh',
     'storage/garage.toml.template',
+    'searxng/settings.yml',
     'compose.yaml',
     '.gitignore',
   ]) {
@@ -280,6 +284,65 @@ describe('storage environment generation', () => {
     expect(run(root, ['scripts/storage-env.sh']).status).toBe(0);
     rmSync(resolve(root, 'agent/.env'));
     expect(run(root, ['scripts/storage-env.sh']).status).toBe(0);
+    expect(existsSync(resolve(root, 'agent/.env.development'))).toBe(false);
+  });
+});
+
+describe('SearXNG environment generation', () => {
+  it('keeps a private stable secret and updates the tracked settings hash', () => {
+    const root = fixture({
+      agentEnv: [
+        validAgentEnv.trimEnd(),
+        'SEARXNG_BASE_URL=https://stale.example.test',
+        ' export SEARXNG_API_KEY = stale-key',
+        'SEARXNG_BASE_URL=duplicate-stale-value',
+        '',
+      ].join('\n'),
+    });
+    expect(run(root, ['scripts/storage-env.sh']).status).toBe(0);
+
+    const first = run(root, ['scripts/searxng-env.sh']);
+    const envPath = resolve(root, 'searxng/.env.local');
+    const firstContent = readFileSync(envPath, 'utf8');
+    const firstValues = parse(firstContent);
+    const firstAgentContent = readFileSync(resolve(root, 'agent/.env.development'), 'utf8');
+
+    expect(first.status, first.stderr).toBe(0);
+    expect(firstValues.SEARXNG_SECRET).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(firstValues.SEARXNG_CONFIG_HASH).toMatch(/^[a-f0-9]{64}$/);
+    expect(firstValues.SEARXNG_BASE_URL).toBe('http://127.0.0.1:8888');
+    expect(firstValues.SEARXNG_API_KEY).toBe('');
+    expect(firstAgentContent.match(/^SEARXNG_BASE_URL=/gm)).toHaveLength(1);
+    expect(firstAgentContent.match(/^SEARXNG_API_KEY=/gm)).toHaveLength(1);
+    expect(parse(firstAgentContent).SEARXNG_BASE_URL).toBe('http://127.0.0.1:8888');
+    expect(parse(firstAgentContent).SEARXNG_API_KEY).toBe('');
+    expect(firstAgentContent).not.toMatch(/^SEARXNG_(?:SECRET|CONFIG_HASH)=/m);
+    expect(firstAgentContent).not.toContain('stale');
+    expect(first.stdout + first.stderr).not.toContain(firstValues.SEARXNG_SECRET!);
+
+    const unchanged = run(root, ['scripts/searxng-env.sh']);
+    expect(unchanged.status, unchanged.stderr).toBe(0);
+    expect(readFileSync(envPath, 'utf8')).toBe(firstContent);
+
+    appendFileSync(resolve(root, 'searxng/settings.yml'), '\n# changed\n');
+    const changed = run(root, ['scripts/searxng-env.sh']);
+    const changedValues = parse(readFileSync(envPath, 'utf8'));
+
+    expect(changed.status, changed.stderr).toBe(0);
+    expect(changedValues.SEARXNG_SECRET).toBe(firstValues.SEARXNG_SECRET);
+    expect(changedValues.SEARXNG_CONFIG_HASH).not.toBe(firstValues.SEARXNG_CONFIG_HASH);
+    expect(changed.stdout + changed.stderr).not.toContain(firstValues.SEARXNG_SECRET!);
+    if (process.platform !== 'win32') {
+      expect(statSync(envPath).mode & 0o077).toBe(0);
+    }
+  });
+
+  it('does not create an agent development environment without an agent source', () => {
+    const root = fixture({ agentEnv: null });
+    const result = run(root, ['scripts/searxng-env.sh']);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(existsSync(resolve(root, 'searxng/.env.local'))).toBe(true);
     expect(existsSync(resolve(root, 'agent/.env.development'))).toBe(false);
   });
 });
@@ -527,6 +590,7 @@ describe('committed Garage runtime', () => {
     const compose = readFileSync(resolve(sourceRoot, 'compose.yaml'), 'utf8');
     const scripts = readFileSync(resolve(sourceRoot, 'scripts/storage-env.sh'), 'utf8');
     const launcher = readFileSync(resolve(sourceRoot, 'scripts/dev.sh'), 'utf8');
+    const settings = readFileSync(resolve(sourceRoot, 'searxng/settings.yml'), 'utf8');
 
     expect(compose).toContain('dxflrs/garage:v2.3.0');
     expect(scripts).toContain('GARAGE_BUCKET=chekku-objects');
@@ -537,6 +601,14 @@ describe('committed Garage runtime', () => {
     expect(compose).toMatch(/garage-metadata:\/var\/lib\/garage\/meta/);
     expect(compose).toMatch(/garage-data:\/var\/lib\/garage\/data/);
     expect(compose).toMatch(/healthcheck:[\s\S]*retries:\s*[1-9]/);
+    expect(compose).toContain('docker.io/searxng/searxng:2026.7.18-277d8469c');
+    expect(compose).toContain('"127.0.0.1:8888:8080"');
+    expect(compose).toMatch(/\.\/searxng\/settings\.yml:\/etc\/searxng\/settings\.yml:ro/);
+    expect(compose).toMatch(/searxng-cache:\/var\/cache\/searxng/);
+    expect(settings).toMatch(/formats:\s*\r?\n\s*- html\s*\r?\n\s*- json/);
+    expect(settings).toMatch(/limiter:\s*false/);
+    expect(settings).toMatch(/public_instance:\s*false/);
+    expect(settings).toMatch(/image_proxy:\s*false/);
   });
 
   it('ignores generated credentials, configuration, and data paths', () => {
@@ -548,9 +620,10 @@ describe('committed Garage runtime', () => {
       'storage/.garage/garage.toml',
       'storage/.garage-data/x',
       'storage/.garage-meta/x',
+      'searxng/.env.local',
     ], { cwd: root, encoding: 'utf8' });
 
     expect(ignored.status, ignored.stderr).toBe(0);
-    expect(ignored.stdout.trim().split(/\r?\n/)).toHaveLength(4);
+    expect(ignored.stdout.trim().split(/\r?\n/)).toHaveLength(5);
   });
 });
