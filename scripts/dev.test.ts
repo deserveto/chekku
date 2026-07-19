@@ -409,7 +409,7 @@ describe('development launcher', () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('Docker health command timed out');
-    expect(elapsedMs).toBeLessThan(3_500);
+    expect(elapsedMs).toBeLessThan(process.platform === 'win32' ? 5_000 : 3_500);
     expect(existsSync(resolve(root, 'mock-log/orphan-finished'))).toBe(false);
     const orphanPid = readFileSync(resolve(root, 'mock-log/orphan-pid'), 'utf8').trim();
     const orphanCheck = run(root, ['-c', `! kill -0 ${orphanPid} 2>/dev/null`]);

@@ -72,39 +72,37 @@ fi
 
 run_with_timeout() {
   local timeout_seconds="$1"
-  local command_pid command_status output_file timed_out_file watchdog_pid
+  local command_pid command_status output_file deadline_microseconds now timed_out
   shift
   output_file="$(mktemp "${TMPDIR:-/tmp}/chekku-health-output.XXXXXX")"
-  timed_out_file="${output_file}.timeout"
 
   set -m
   "$@" >"$output_file" 2>/dev/null &
   command_pid=$!
-  (
-    sleep "$timeout_seconds"
-    : >"$timed_out_file"
-    kill -TERM -- "-$command_pid" 2>/dev/null || true
-    sleep 0.25
-    kill -KILL -- "-$command_pid" 2>/dev/null || true
-  ) &
-  watchdog_pid=$!
+  now="${EPOCHREALTIME/./}"
+  deadline_microseconds=$((10#$now + timeout_seconds * 1000000))
+  timed_out=false
 
+  while kill -0 "$command_pid" 2>/dev/null; do
+    now="${EPOCHREALTIME/./}"
+    if ((10#$now >= deadline_microseconds)); then
+      timed_out=true
+      kill -TERM -- "-$command_pid" 2>/dev/null || true
+      sleep 0.25
+      kill -KILL -- "-$command_pid" 2>/dev/null || true
+      break
+    fi
+    sleep 0.05
+  done
   set +e
   wait "$command_pid" 2>/dev/null
   command_status=$?
   set -e
-  if [[ ! -f "$timed_out_file" ]]; then
-    kill -TERM -- "-$watchdog_pid" 2>/dev/null || true
-  fi
-  wait "$watchdog_pid" 2>/dev/null || true
   set +m
 
   cat "$output_file"
   rm -f "$output_file"
-  if [[ -f "$timed_out_file" ]]; then
-    rm -f "$timed_out_file"
-    return 124
-  fi
+  if [[ "$timed_out" == true ]]; then return 124; fi
   return "$command_status"
 }
 
@@ -175,9 +173,12 @@ fi
 
 ready=false
 ready_deadline=$((SECONDS + ready_timeout_seconds))
-while ((SECONDS < ready_deadline)); do
+first_ready_poll=true
+while [[ "$first_ready_poll" == true ]] || ((SECONDS < ready_deadline)); do
   remaining_seconds=$((ready_deadline - SECONDS))
-  if ((remaining_seconds <= 0)); then break; fi
+  if ((remaining_seconds <= 0)); then
+    if [[ "$first_ready_poll" == true ]]; then remaining_seconds=1; else break; fi
+  fi
   set +e
   service_id="$(run_with_timeout "$remaining_seconds" docker compose --env-file storage/.env.local ps -q garage)"
   health_status=$?
@@ -187,13 +188,16 @@ while ((SECONDS < ready_deadline)); do
   health_status_value=''
   if [[ -n "$service_id" ]]; then
     remaining_seconds=$((ready_deadline - SECONDS))
-    if ((remaining_seconds <= 0)); then break; fi
+    if ((remaining_seconds <= 0)); then
+      if [[ "$first_ready_poll" == true ]]; then remaining_seconds=1; else break; fi
+    fi
     set +e
     health_status_value="$(run_with_timeout "$remaining_seconds" docker inspect --format '{{.State.Health.Status}}' "$service_id")"
     health_status=$?
     set -e
     if [[ "$health_status" == 124 ]]; then docker_health_timeout; fi
   fi
+  first_ready_poll=false
   if [[ "$health_status_value" == healthy ]]; then
     ready=true
     break
