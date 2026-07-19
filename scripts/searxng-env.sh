@@ -9,7 +9,9 @@ AGENT_ENV_FILE="$ROOT/agent/.env"
 AGENT_DEVELOPMENT_ENV_FILE="$ROOT/agent/.env.development"
 
 unset SEARXNG_SECRET SEARXNG_CONFIG_HASH SEARXNG_BASE_URL SEARXNG_API_KEY
+ENV_FILE_EXISTED=0
 if [[ -f "$ENV_FILE" ]]; then
+  ENV_FILE_EXISTED=1
   set -a
   # shellcheck disable=SC1090
   source "$ENV_FILE"
@@ -22,13 +24,16 @@ render_searxng_env() (
   trap 'rm -f "$env_tmp"' EXIT
   chmod 600 "$env_tmp"
 
-  node - "$SETTINGS_FILE" "$env_tmp" <<'NODE'
-const { readFileSync, writeFileSync } = require('node:fs');
+  node - "$SETTINGS_FILE" "$env_tmp" "$ENV_FILE" "$ENV_FILE_EXISTED" <<'NODE'
+const { chmodSync, linkSync, readFileSync, writeFileSync } = require('node:fs');
 const { createHash, randomBytes } = require('node:crypto');
 
-const [settingsPath, outputPath] = process.argv.slice(2);
+const [settingsPath, outputPath, envPath, envFileExisted] = process.argv.slice(2);
 const settings = readFileSync(settingsPath, 'utf8');
 const existingSecret = process.env.SEARXNG_SECRET;
+if (envFileExisted === '1' && existingSecret === undefined) {
+  throw new Error('Missing SEARXNG_SECRET in searxng/.env.local');
+}
 if (existingSecret !== undefined && !/^[A-Za-z0-9_-]{43}$/.test(existingSecret)) {
   throw new Error('Invalid SEARXNG_SECRET in searxng/.env.local');
 }
@@ -42,10 +47,22 @@ writeFileSync(outputPath, [
   'SEARXNG_API_KEY=',
   '',
 ].join('\n'), { mode: 0o600 });
+
+if (envFileExisted === '0') {
+  try {
+    linkSync(outputPath, envPath);
+    chmodSync(envPath, 0o600);
+  } catch (error) {
+    if (error?.code !== 'EEXIST') throw error;
+  }
+}
 NODE
 
   chmod 600 "$env_tmp"
-  if [[ -f "$ENV_FILE" ]] && cmp -s "$env_tmp" "$ENV_FILE"; then
+  if ((ENV_FILE_EXISTED == 0)); then
+    rm -f "$env_tmp"
+    chmod 600 "$ENV_FILE"
+  elif cmp -s "$env_tmp" "$ENV_FILE"; then
     chmod 600 "$ENV_FILE"
   else
     mv -f "$env_tmp" "$ENV_FILE"
@@ -77,11 +94,49 @@ const { parse } = require('dotenv');
 
 const [sourcePath, outputPath] = process.argv.slice(2);
 const searxngKeys = ['SEARXNG_BASE_URL', 'SEARXNG_API_KEY'];
-const keyPattern = new RegExp(
-  `^[ \\t]*(?:export[ \\t]+)?(?:${searxngKeys.join('|')})[ \\t]*=.*(?:\\r?\\n|$)`,
-  'gm',
+const assignmentPattern = new RegExp(
+  `^[ \\t]*(?:export[ \\t]+)?(?:${searxngKeys.join('|')})[ \\t]*=[ \\t]*(.*)$`,
 );
-const source = readFileSync(sourcePath, 'utf8').replace(keyPattern, '');
+
+const hasClosingQuote = (value, quote) => {
+  for (let index = 0; index < value.length; index += 1) {
+    if (quote === '"' && value[index] === '\\') {
+      index += 1;
+    } else if (value[index] === quote) {
+      return true;
+    }
+  }
+  return false;
+};
+
+const removeAssignments = (input) => {
+  const lines = input.match(/[^\r\n]*(?:\r\n|\n|$)/g)?.filter(Boolean) ?? [];
+  const kept = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const content = lines[index].replace(/\r?\n$/, '');
+    const assignment = content.match(assignmentPattern);
+    if (!assignment) {
+      kept.push(lines[index]);
+      continue;
+    }
+
+    const value = assignment[1].trimStart();
+    const quote = value[0];
+    if (quote === "'" || quote === '"' || quote === '`') {
+      let remainder = value.slice(1);
+      while (!hasClosingQuote(remainder, quote) && index + 1 < lines.length) {
+        index += 1;
+        remainder += lines[index];
+      }
+    }
+  }
+  return kept.join('');
+};
+
+let source = removeAssignments(readFileSync(sourcePath, 'utf8'));
+for (const value of [process.env.SEARXNG_SECRET, process.env.SEARXNG_CONFIG_HASH]) {
+  if (value) source = source.replaceAll(value, '');
+}
 
 const serialize = (name, value) => {
   if (/[\r\n]/.test(value)) {

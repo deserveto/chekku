@@ -188,6 +188,42 @@ function run(root: string, args: string[], env: Record<string, string> = {}): Sp
   });
 }
 
+function runAsync(
+  root: string,
+  args: string[],
+  env: Record<string, string> = {},
+): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  const log = resolve(root, 'mock-log');
+  mkdirSync(log, { recursive: true });
+  const child = spawn(bash, args, {
+    cwd: root,
+    env: {
+      ...process.env,
+      ...env,
+      MOCK_LOG: log,
+      NODE_PATH: resolve(sourceRoot, 'node_modules'),
+      PATH: `${resolve(root, 'bin')}${delimiter}${process.env.PATH ?? ''}`,
+    },
+  });
+
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (data) => { stdout += String(data); });
+  child.stderr.on('data', (data) => { stderr += String(data); });
+  return new Promise((resolveResult, reject) => {
+    child.once('error', reject);
+    child.once('close', (status) => resolveResult({ status, stdout, stderr }));
+  });
+}
+
+async function waitForPath(path: string, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!existsSync(path)) {
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${path}`);
+    await new Promise((resolveWait) => setTimeout(resolveWait, 10));
+  }
+}
+
 function runDev(root: string, env: Record<string, string> = {}): SpawnSyncReturns<string> {
   return run(root, ['scripts/dev.sh'], env);
 }
@@ -317,8 +353,10 @@ describe('SearXNG environment generation', () => {
     expect(parse(firstAgentContent).SEARXNG_BASE_URL).toBe('http://127.0.0.1:8888');
     expect(parse(firstAgentContent).SEARXNG_API_KEY).toBe('');
     expect(firstAgentContent).not.toMatch(/^SEARXNG_(?:SECRET|CONFIG_HASH)=/m);
+    expect(firstAgentContent.includes(firstValues.SEARXNG_SECRET!)).toBe(false);
+    expect(firstAgentContent.includes(firstValues.SEARXNG_CONFIG_HASH!)).toBe(false);
     expect(firstAgentContent).not.toContain('stale');
-    expect(first.stdout + first.stderr).not.toContain(firstValues.SEARXNG_SECRET!);
+    expect((first.stdout + first.stderr).includes(firstValues.SEARXNG_SECRET!)).toBe(false);
 
     const unchanged = run(root, ['scripts/searxng-env.sh']);
     expect(unchanged.status, unchanged.stderr).toBe(0);
@@ -329,12 +367,108 @@ describe('SearXNG environment generation', () => {
     const changedValues = parse(readFileSync(envPath, 'utf8'));
 
     expect(changed.status, changed.stderr).toBe(0);
-    expect(changedValues.SEARXNG_SECRET).toBe(firstValues.SEARXNG_SECRET);
+    expect(changedValues.SEARXNG_SECRET === firstValues.SEARXNG_SECRET).toBe(true);
     expect(changedValues.SEARXNG_CONFIG_HASH).not.toBe(firstValues.SEARXNG_CONFIG_HASH);
-    expect(changed.stdout + changed.stderr).not.toContain(firstValues.SEARXNG_SECRET!);
+    expect((changed.stdout + changed.stderr).includes(firstValues.SEARXNG_SECRET!)).toBe(false);
     if (process.platform !== 'win32') {
       expect(statSync(envPath).mode & 0o077).toBe(0);
     }
+  });
+
+  it('removes service secret and config hash values from any agent line', () => {
+    const root = fixture();
+    expect(run(root, ['scripts/storage-env.sh']).status).toBe(0);
+    expect(run(root, ['scripts/searxng-env.sh']).status).toBe(0);
+
+    const localValues = parse(readFileSync(resolve(root, 'searxng/.env.local'), 'utf8'));
+    const agentPath = resolve(root, 'agent/.env.development');
+    appendFileSync(agentPath, [
+      `UNRELATED_SECRET=${localValues.SEARXNG_SECRET}`,
+      `# config fingerprint ${localValues.SEARXNG_CONFIG_HASH}`,
+      '',
+    ].join('\n'));
+
+    const result = run(root, ['scripts/searxng-env.sh']);
+    const generated = readFileSync(agentPath, 'utf8');
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(generated.includes(localValues.SEARXNG_SECRET!)).toBe(false);
+    expect(generated.includes(localValues.SEARXNG_CONFIG_HASH!)).toBe(false);
+    expect((result.stdout + result.stderr).includes(localValues.SEARXNG_SECRET!)).toBe(false);
+    expect((result.stdout + result.stderr).includes(localValues.SEARXNG_CONFIG_HASH!)).toBe(false);
+  });
+
+  it('exports the persisted winner from concurrent first runs', async () => {
+    const root = fixture({ agentEnv: null });
+    const log = resolve(root, 'mock-log');
+    const realNode = process.execPath.replaceAll('\\', '/');
+    executable(resolve(root, 'bin/node'), `
+if [[ "$1" == - ]] && mkdir "$MOCK_LOG/first-node" 2>/dev/null; then
+  ${shellValue(realNode)} "$@"
+  touch "$MOCK_LOG/first-generated"
+  for _ in {1..500}; do
+    if [[ -f "$MOCK_LOG/caller-2-sourced" ]]; then exit 0; fi
+    sleep 0.01
+  done
+  exit 70
+fi
+exec ${shellValue(realNode)} "$@"
+`);
+
+    const first = runAsync(root, ['-c', [
+      'source scripts/searxng-env.sh',
+      'printf %s "$SEARXNG_SECRET" > "$MOCK_LOG/caller-1"',
+    ].join('; ')]);
+    await waitForPath(resolve(log, 'first-generated'));
+    const second = runAsync(root, ['-c', [
+      'source scripts/searxng-env.sh',
+      'printf %s "$SEARXNG_SECRET" > "$MOCK_LOG/caller-2"',
+      'touch "$MOCK_LOG/caller-2-sourced"',
+    ].join('; ')]);
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    const persisted = parse(readFileSync(resolve(root, 'searxng/.env.local'), 'utf8'));
+    const firstSecret = readFileSync(resolve(log, 'caller-1'), 'utf8');
+    const secondSecret = readFileSync(resolve(log, 'caller-2'), 'utf8');
+
+    expect(firstResult.status, firstResult.stderr).toBe(0);
+    expect(secondResult.status, secondResult.stderr).toBe(0);
+    expect(firstSecret === persisted.SEARXNG_SECRET).toBe(true);
+    expect(secondSecret === persisted.SEARXNG_SECRET).toBe(true);
+    expect((firstResult.stdout + firstResult.stderr).includes(firstSecret)).toBe(false);
+    expect((secondResult.stdout + secondResult.stderr).includes(secondSecret)).toBe(false);
+    if (process.platform !== 'win32') {
+      expect(statSync(resolve(root, 'searxng/.env.local')).mode & 0o077).toBe(0);
+    }
+  }, 10_000);
+
+  it('removes complete multiline quoted application assignments', () => {
+    const root = fixture({
+      agentEnv: [
+        validAgentEnv.trimEnd(),
+        'SEARXNG_BASE_URL="https://stale.example.test',
+        'stale-base-continuation" # stale base comment',
+        "SEARXNG_API_KEY='stale-api-first",
+        "stale-api-continuation'",
+        'UNRELATED=preserved',
+        '',
+      ].join('\r\n'),
+    });
+    expect(run(root, ['scripts/storage-env.sh']).status).toBe(0);
+
+    const result = run(root, ['scripts/searxng-env.sh']);
+    const generated = readFileSync(resolve(root, 'agent/.env.development'), 'utf8');
+    const values = parse(generated);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(values.SEARXNG_BASE_URL).toBe('http://127.0.0.1:8888');
+    expect(values.SEARXNG_API_KEY).toBe('');
+    expect(generated.match(/^SEARXNG_BASE_URL=/gm)).toHaveLength(1);
+    expect(generated.match(/^SEARXNG_API_KEY=/gm)).toHaveLength(1);
+    expect(generated.includes('stale-base-continuation')).toBe(false);
+    expect(generated.includes('stale-api-continuation')).toBe(false);
+    expect(generated).toContain('UNRELATED=preserved');
+    expect(result.stdout + result.stderr).not.toContain('stale-base-continuation');
+    expect(result.stdout + result.stderr).not.toContain('stale-api-continuation');
   });
 
   it('does not create an agent development environment without an agent source', () => {
@@ -585,7 +719,7 @@ describe('development launcher', () => {
   }, 20_000);
 });
 
-describe('committed Garage runtime', () => {
+describe('committed local runtime', () => {
   it('publishes only the loopback S3 port and keeps Garage internals private', () => {
     const compose = readFileSync(resolve(sourceRoot, 'compose.yaml'), 'utf8');
     const scripts = readFileSync(resolve(sourceRoot, 'scripts/storage-env.sh'), 'utf8');
