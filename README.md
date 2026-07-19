@@ -12,7 +12,7 @@
 
 </div>
 
-Chekku provides a focused interface for managing agents, creating agent-specific conversations, analyzing engineering weekly reports, publishing social-media drafts through Telegram, and running browser-assisted QA through a provider-neutral OpenAI-compatible model gateway. Three npm workspaces provide the Next.js client, Mastra server, and shared Garage/S3 object-storage package. LibSQL remains the local source of truth for agents and conversations; Garage stores generic agent objects and PM report artifacts.
+Chekku provides a focused interface for managing agents, creating agent-specific conversations, searching the web through SearXNG, analyzing engineering weekly reports, publishing social-media drafts through Telegram, and running browser-assisted QA through a provider-neutral OpenAI-compatible model gateway. Three npm workspaces provide the Next.js client, Mastra server, and shared Garage/S3 object-storage package. LibSQL remains the local source of truth for agents and conversations; Garage stores generic agent objects and PM report artifacts.
 
 ## Highlights
 
@@ -22,6 +22,7 @@ Chekku provides a focused interface for managing agents, creating agent-specific
 - **OpenAI-compatible models** — connect Rafiqspace LLM, LiteLLM, vLLM, or another compatible endpoint with server-only credentials.
 - **Browser QA agent** — navigate and inspect live websites using Mastra Agent Browser.
 - **PM Agent reports** — analyze weekly reports, save risk reviews in Garage, and browse linked report details.
+- **SearXNG search** — fixed read-only `search_web` capability for PM Agent and selectable stored agents, with server-owned endpoint configuration and bounded result snippets.
 - **Social media agent** — role-switchable content assistant reachable over Telegram (X, Instagram, LinkedIn, TikTok roles).
 - **Hosted-vLLM compatibility** — final prompt normalization keeps system messages at the beginning.
 - **Local-first storage** — agent definitions, versions, memory, and threads live in LibSQL.
@@ -32,37 +33,37 @@ Chekku provides a focused interface for managing agents, creating agent-specific
 
 ```text
 Browser
-  │
-  ▼
+  |
+  v
 Next.js client :3000
   ├── /api/agent/* same-origin proxy
-  │       │
-  │       ▼
+  │       |
+  │       v
   │   Mastra server :4111
   │     ├── main-agent
-  │     ├── pm-agent ──► PM-Agent-only report tools ──┐
-  │     ├── qa-web-agent                              │
-  │     ├── social-media-agent (Telegram channel)     │
-  │     ├── @mastra/editor stored agents              │
-  │     ├── Mastra Memory                             │
-  │     ├── calculator + current-time + email tools   │
-  │     ├── Chat SDK + Telegram adapter               │
-  │     ├── Garage MCP (optional stored-agent          │
-  │     │   capability) ───────────────────────────────┤
-  │     └── OpenAI-compatible gateway                 │
-  │             │                                     │
-  │             ▼                                     │
-  │     Rafiqspace LLM / LiteLLM / vLLM /             │
-  │     compatible endpoint                           │
-  └── /reports/* + /api/storage/pm-reports/*          │
-          │                                           │
-          ▼                                           │
-      client/src/server/pm-reports.ts ────────────────┤
-                                                      ▼
-                                           @chekku/storage
-                                                      │
-                                                      ▼
-                                           Garage/S3 bucket
+  │     ├── pm-agent + PM report tools + search_web
+  │     ├── qa-web-agent
+  │     ├── social-media-agent (Telegram channel)
+  │     ├── @mastra/editor stored agents
+  │     ├── Mastra Memory + LibSQLStore
+  │     ├── Garage MCP + SearXNG MCP
+  │     ├── calculator + current-time + email tools
+  │     └── OpenAI-compatible gateway
+  │             |
+  │             v
+  │     Rafiqspace LLM / LiteLLM / vLLM /
+  │     compatible endpoint
+  └── /reports/* + /api/storage/pm-reports/*
+
+PM Agent / selected stored agent
+  -> search_web
+  -> fixed in-process SearXNG MCP/client
+  -> SearXNG :8888
+  -> configured external search engines
+
+PM report tools / Next.js report service / Garage MCP
+  -> @chekku/storage
+  -> Garage/S3 bucket
 
 LibSQL stores agent definitions, versions, memory, and threads.
 ```
@@ -73,7 +74,7 @@ See [Architecture](docs/ARCHITECTURE.md) for the runtime boundaries and data flo
 
 - **Node.js 22.22 or newer**
 - **npm 10 or newer**
-- **Docker Engine with Docker Compose** for local Garage object storage
+- **Docker Engine with Docker Compose** for local Garage object storage and SearXNG search
 - An API key for an OpenAI-compatible endpoint
 - A Chromium-compatible environment for browser-agent workflows
 
@@ -81,7 +82,7 @@ See [Architecture](docs/ARCHITECTURE.md) for the runtime boundaries and data flo
 
 ### Install Docker Compose
 
-Chekku's local launcher uses Docker Compose to run Garage object storage.
+Chekku's local launcher uses Docker Compose to run Garage object storage and the pinned SearXNG service.
 
 **Windows 10/11**
 
@@ -159,7 +160,7 @@ cp client/.env.example client/.env.local
 
 The defaults target the local Mastra server and normally require no edits.
 
-### 4. Start Garage and both application workspaces
+### 4. Start Garage, SearXNG, and both application workspaces
 
 ```bash
 npm run dev:sh
@@ -171,6 +172,7 @@ Open:
 - Reports: `http://localhost:3000/reports`
 - Mastra health: `http://localhost:4111/healthz`
 - Model registry: `http://localhost:4111/models`
+- SearXNG health: `http://127.0.0.1:8888/healthz`
 
 ## Environment
 
@@ -195,6 +197,8 @@ Local file: `agent/.env`
 | `CHEKKU_DEFAULT_AGENT_ID` | No | `main-agent` | Default agent for new sessions. |
 | `CHEKKU_LOCAL_USER_ID` | No | `local-user` | Development identity and Memory resource ID. |
 | `BROWSER_HEADLESS` | No | `true` | Run the QA browser without a visible window. |
+| `SEARXNG_BASE_URL` | Conditional | empty | Server-owned SearXNG base URL. `npm run dev:sh` supplies `http://127.0.0.1:8888`; set it explicitly for an external service. |
+| `SEARXNG_API_KEY` | No | empty | Optional server-only bearer token for an authenticated external SearXNG reverse proxy. |
 | `TELEGRAM_BOT_TOKEN` | Conditional | empty | Bot token from [@BotFather](https://t.me/BotFather). Required when running `social-media-agent`. |
 | `TELEGRAM_MODE` | No | `polling` | Adapter mode: `polling` (dev, no tunnel), `webhook` (prod, public URL), or `auto`. |
 | `TELEGRAM_WEBHOOK_SECRET_TOKEN` | No | empty | Checked against `x-telegram-bot-api-secret-token`. Webhook mode only. |
@@ -217,8 +221,8 @@ Local file: `client/.env.local`
 
 | Command | Purpose |
 | --- | --- |
-| `npm run dev:sh` | Provision local Garage and start agent and client workspaces. |
-| `npm run dev` | Start agent and client workspaces together. |
+| `npm run dev:sh` | Provision local Garage and SearXNG, then start agent and client workspaces. |
+| `npm run dev` | Start agent and client workspaces without provisioning local services. |
 | `npm run dev:agent` | Start only the Mastra server. |
 | `npm run dev:client` | Start only the Next.js client. |
 | `npm run typecheck` | Type-check all three workspaces. |
@@ -239,9 +243,11 @@ The client uses system font stacks, so `next build` does not download fonts from
 │       ├── config/         # environment and middleware
 │       ├── mastra/
 │       │   ├── gateways/   # OpenAI-compatible gateway and normalization
+│       │   ├── mcp/        # fixed Garage and SearXNG MCP servers
 │       │   ├── processors/ # browser/tool compatibility
 │       │   ├── routes/     # /healthz and /models
-│       │   └── tools/      # stored-agent and code-defined PM tools
+│       │   ├── searxng/    # bounded search client and configuration
+│       │   └── tools/      # stored-agent, PM, and search tools
 │       └── providers/      # model configuration helpers
 ├── client/                 # Next.js studio
 │   └── src/
@@ -250,7 +256,8 @@ The client uses system font stacks, so `next build` does not download fonts from
 │       ├── lib/            # Mastra client, models, agents, threads
 │       └── server/         # auth seam, proxy validation, payload helpers
 ├── storage/                # generic Garage/S3 storage plus PM report repository
-├── scripts/                # local Garage environment and development launchers
+├── scripts/                # local Garage/SearXNG environment and development launchers
+├── searxng/                # tracked local search settings; generated state stays ignored
 ├── docs/                   # architecture, operations, cleanup history
 └── .github/workflows/      # CI
 ```
@@ -271,6 +278,9 @@ These rules keep the repository from drifting back into parallel implementations
 10. PM report semantics stay outside Garage MCP in code-defined `pm-agent` tools and the shared report repository.
 11. PM storage always binds to fixed `pm-agent`; persisted metadata contains relative `pm-reports/...` keys only.
 12. Social Media Agent keeps Telegram slash registration and approval-gated email delivery in the single Mastra runtime.
+13. SearXNG MCP uses fixed ID `searxng` and exactly `search_web`; PM Agent receives the same reusable tool directly.
+14. `search_web` returns bounded result metadata and snippets only. It does not fetch result pages or promise competitive-analysis output.
+15. SearXNG endpoint and optional bearer configuration stay server-side; stored records contain only `mcpClients: { searxng: { tools: {} } }`.
 
 ## Garage MCP
 
@@ -289,6 +299,14 @@ Garage v2.3 does not provide destination conditional PUT/DELETE semantics. Chekk
 Every operation requires trusted `context.agent.agentId`. Physical keys use `agents/<base64url-agent-id>/<relative-key>`, while inputs and responses contain relative keys only. Relative keys are limited to 512 UTF-8 bytes and reject absolute paths, backslashes, traversal, control characters, and empty segments. Text is limited to 262,144 UTF-8 bytes.
 
 Missing identity, invalid input, collisions, missing objects, configuration failures, and connectivity failures return bounded actionable errors. Provider responses, endpoints, headers, credentials, and request IDs are never copied into errors.
+
+## SearXNG MCP
+
+SearXNG is a fixed read-only MCP capability available to PM Agent and selectable stored agents. PM Agent binds the reusable `search_web` tool directly; a stored-agent selection persists only `mcpClients: { searxng: { tools: {} } }`. The endpoint and optional bearer token remain server-side, and the proxy rejects arbitrary MCP URLs, commands, packages, environment values, credentials, headers, and tool overrides.
+
+`search_web` returns bounded titles, HTTP(S) URLs, snippets, source engines, optional result metadata, answers, corrections, and suggestions. It does not download page content. Search output contains at most 20 results and 131,072 UTF-8 bytes; upstream JSON bodies stop at 2 MiB and requests share a 12-second deadline with redirects rejected.
+
+This branch provides search foundation only. Arbitrary page reading through a Web Reader and PM competitive analysis, including any five-product workflow, remain deferred to separate independently reviewed work.
 
 ## PM reports
 
@@ -355,6 +373,22 @@ rm -rf client/.next
 npm run dev
 ```
 
+### `SearXNG search is not configured`
+
+Use `npm run dev:sh` to provision local SearXNG and inject `SEARXNG_BASE_URL=http://127.0.0.1:8888` into the Mastra process. For an external instance, set `SEARXNG_BASE_URL` in `agent/.env` and restart the agent. Keep any `SEARXNG_API_KEY` server-side.
+
+### SearXNG is unavailable or times out
+
+Check local service health and logs without printing generated environment values:
+
+```bash
+curl --fail http://127.0.0.1:8888/healthz
+docker compose --env-file storage/.env.local --env-file searxng/.env.local ps searxng
+docker compose --env-file storage/.env.local --env-file searxng/.env.local logs searxng
+```
+
+Port `8888` must be free before local startup. Search has a fixed 12-second application deadline; investigate upstream engines or external reverse-proxy latency rather than increasing undocumented client limits.
+
 ### Reset local agents and conversations
 
 Stop the server, then remove the local database:
@@ -369,6 +403,8 @@ Depending on the current working directory used by the Mastra CLI, the database 
 
 - API keys belong only in `agent/.env` or a deployment secret manager.
 - Never use `NEXT_PUBLIC_LLM_API_KEY` or similar browser-exposed credentials.
+- Keep `SEARXNG_BASE_URL` and optional `SEARXNG_API_KEY` server-side. Never persist them in stored-agent records or expose them through browser variables.
+- Local SearXNG service credentials stay in ignored generated `searxng/.env.local`; they are not application configuration and must not be copied into tracked environment examples, logs, or tickets.
 - Keep `.env`, local databases, logs, and browser artifacts out of commits.
 - Browser actions that submit, publish, purchase, delete, or otherwise cause consequences require approval.
 - `CHEKKU_LOCAL_USER_ID` is a development seam, not production authentication.
