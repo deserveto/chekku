@@ -20,7 +20,7 @@ render_searxng_env() (
   trap 'rm -f "$env_tmp"' EXIT
   chmod 600 "$env_tmp"
 
-  node - "$SETTINGS_FILE" "$env_tmp" "$ENV_FILE" "$ENV_FILE_EXISTED" <<'NODE'
+  if ! node - "$SETTINGS_FILE" "$env_tmp" "$ENV_FILE" "$ENV_FILE_EXISTED" <<'NODE'
 const { chmodSync, linkSync, readFileSync, writeFileSync } = require('node:fs');
 const { createHash, randomBytes } = require('node:crypto');
 
@@ -73,6 +73,9 @@ try {
   process.exitCode = 1;
 }
 NODE
+  then
+    return 1
+  fi
 
   chmod 600 "$env_tmp"
   if ((ENV_FILE_EXISTED == 0)); then
@@ -86,7 +89,9 @@ NODE
   fi
 )
 
-render_searxng_env
+if ! render_searxng_env; then
+  return 1 2>/dev/null || exit 1
+fi
 
 load_searxng_env() {
   local parsed
@@ -132,7 +137,9 @@ NODE
   export SEARXNG_SECRET SEARXNG_CONFIG_HASH SEARXNG_BASE_URL SEARXNG_API_KEY
 }
 
-load_searxng_env
+if ! load_searxng_env; then
+  return 1 2>/dev/null || exit 1
+fi
 
 render_agent_env() (
   local agent_env_source agent_env_tmp
@@ -145,7 +152,7 @@ render_agent_env() (
   trap 'rm -f "$agent_env_tmp"' EXIT
   chmod 600 "$agent_env_tmp"
 
-  node - "$agent_env_source" "$agent_env_tmp" <<'NODE'
+  if ! node - "$agent_env_source" "$agent_env_tmp" <<'NODE'
 const { readFileSync, writeFileSync } = require('node:fs');
 const { parse } = require('dotenv');
 
@@ -221,6 +228,9 @@ const overrides = searxngKeys.map((name) => serialize(name, process.env[name] ??
 const separator = source.length > 0 && !source.endsWith('\n') ? '\n' : '';
 writeFileSync(outputPath, `${source}${separator}${overrides.join('\n')}\n`);
 NODE
+  then
+    return 1
+  fi
 
   chmod 600 "$agent_env_tmp"
   if [[ -f "$AGENT_DEVELOPMENT_ENV_FILE" ]] && cmp -s "$agent_env_tmp" "$AGENT_DEVELOPMENT_ENV_FILE"; then
@@ -232,5 +242,7 @@ NODE
 )
 
 if [[ -f "$AGENT_ENV_FILE" ]]; then
-  render_agent_env
+  if ! render_agent_env; then
+    return 1 2>/dev/null || exit 1
+  fi
 fi

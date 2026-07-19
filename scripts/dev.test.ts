@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -477,6 +478,89 @@ describe('storage environment generation', () => {
 });
 
 describe('SearXNG environment generation', () => {
+  it('propagates render failure from chained source without changing state', () => {
+    const root = fixture();
+    expect(run(root, ['scripts/searxng-env.sh']).status).toBe(0);
+    const localPath = resolve(root, 'searxng/.env.local');
+    const generatedPath = resolve(root, 'agent/.env.development');
+    const generatedContent = readFileSync(generatedPath, 'utf8');
+    const successMarker = resolve(root, 'mock-log/chained-source-succeeded');
+    const privateValue = 'private-invalid-render-value';
+    const invalidContent = `${searxngEnv()}UNRELATED=${privateValue}\n`;
+    writeFileSync(localPath, invalidContent);
+
+    const result = run(root, ['-c', 'source scripts/searxng-env.sh && touch "$MOCK_LOG/chained-source-succeeded"']);
+
+    expect(result.status).not.toBe(0);
+    expect(existsSync(successMarker)).toBe(false);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toBe(invalidSearxngLocalStateError);
+    expect(result.stderr).not.toContain(privateValue);
+    expect(readFileSync(localPath, 'utf8')).toBe(invalidContent);
+    expect(readFileSync(generatedPath, 'utf8')).toBe(generatedContent);
+    expect(readdirSync(resolve(root, 'searxng')).filter((name) => name.includes('.tmp.'))).toEqual([]);
+    expect(readdirSync(resolve(root, 'agent')).filter((name) => name.includes('.tmp.'))).toEqual([]);
+  });
+
+  it('propagates post-render load failure from chained source without changing state', () => {
+    const root = fixture();
+    expect(run(root, ['scripts/searxng-env.sh']).status).toBe(0);
+    const localPath = resolve(root, 'searxng/.env.local');
+    const generatedPath = resolve(root, 'agent/.env.development');
+    const localContent = readFileSync(localPath, 'utf8');
+    const generatedContent = readFileSync(generatedPath, 'utf8');
+    const successMarker = resolve(root, 'mock-log/chained-source-succeeded');
+    const privateValue = 'private-invalid-load-value';
+    writeFileSync(resolve(root, 'mock-log/invalid-load-state'), `${privateValue}\n`);
+    const realNode = process.execPath.replaceAll('\\', '/');
+    executable(resolve(root, 'bin/node'), `
+if [[ "$1" == - ]]; then
+  count=0
+  if [[ -f "$MOCK_LOG/searxng-node-count" ]]; then count="$(<"$MOCK_LOG/searxng-node-count")"; fi
+  count=$((count + 1))
+  printf '%s' "$count" > "$MOCK_LOG/searxng-node-count"
+  if ((count == 2)); then exec ${shellValue(realNode)} "$1" "$MOCK_LOG/invalid-load-state"; fi
+fi
+exec ${shellValue(realNode)} "$@"
+`);
+
+    const result = run(root, ['-c', 'source scripts/searxng-env.sh && touch "$MOCK_LOG/chained-source-succeeded"']);
+
+    expect(result.status).not.toBe(0);
+    expect(existsSync(successMarker)).toBe(false);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toBe(invalidSearxngLocalStateError);
+    expect(result.stderr).not.toContain(privateValue);
+    expect(readFileSync(localPath, 'utf8')).toBe(localContent);
+    expect(readFileSync(generatedPath, 'utf8')).toBe(generatedContent);
+    expect(readdirSync(resolve(root, 'searxng')).filter((name) => name.includes('.tmp.'))).toEqual([]);
+    expect(readdirSync(resolve(root, 'agent')).filter((name) => name.includes('.tmp.'))).toEqual([]);
+  });
+
+  it('propagates agent render failure from chained source without changing state', () => {
+    const root = fixture();
+    expect(run(root, ['scripts/searxng-env.sh']).status).toBe(0);
+    const localPath = resolve(root, 'searxng/.env.local');
+    const generatedPath = resolve(root, 'agent/.env.development');
+    const localContent = readFileSync(localPath, 'utf8');
+    const privateValue = 'private-invalid-agent-value';
+    appendFileSync(generatedPath, `SEARXNG_UNRELATED="${privateValue}\n`);
+    const generatedContent = readFileSync(generatedPath, 'utf8');
+    const successMarker = resolve(root, 'mock-log/chained-source-succeeded');
+
+    const result = run(root, ['-c', 'source scripts/searxng-env.sh && touch "$MOCK_LOG/chained-source-succeeded"']);
+
+    expect(result.status).not.toBe(0);
+    expect(existsSync(successMarker)).toBe(false);
+    expect(result.stdout).toBe('');
+    expect(result.stderr.split(invalidSearxngAssignmentError)).toHaveLength(2);
+    expect(result.stderr).not.toContain(privateValue);
+    expect(readFileSync(localPath, 'utf8')).toBe(localContent);
+    expect(readFileSync(generatedPath, 'utf8')).toBe(generatedContent);
+    expect(readdirSync(resolve(root, 'searxng')).filter((name) => name.includes('.tmp.'))).toEqual([]);
+    expect(readdirSync(resolve(root, 'agent')).filter((name) => name.includes('.tmp.'))).toEqual([]);
+  });
+
   it('treats existing local state as data without executing commands or injecting environment', () => {
     const root = fixture();
     expect(run(root, ['scripts/searxng-env.sh']).status).toBe(0);
