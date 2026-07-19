@@ -30,6 +30,8 @@ fi
 
 # shellcheck disable=SC1091
 source "$ROOT/scripts/storage-env.sh"
+# shellcheck disable=SC1091
+source "$ROOT/scripts/searxng-env.sh"
 
 if ! docker compose --env-file storage/.env.local config --quiet >/dev/null 2>&1; then
   echo "Garage Compose configuration is invalid. Check compose.yaml and generated Garage configuration." >&2
@@ -107,12 +109,13 @@ run_with_timeout() {
 }
 
 docker_health_timeout() {
-  echo "Docker health command timed out before Garage became ready. Check Docker responsiveness." >&2
+  local display_name="$1"
+  echo "Docker health command timed out before $display_name became ready. Check Docker responsiveness." >&2
   exit 1
 }
 
-garage_port_conflicts() {
-  node - ${CHEKKU_GARAGE_PORTS:-3900} <<'NODE'
+service_port_conflicts() {
+  node - $1 <<'NODE'
 const net = require('node:net');
 
 const ports = process.argv.slice(2).map(Number);
@@ -138,89 +141,112 @@ Promise.all(ports.map(check)).then((results) => {
 NODE
 }
 
-set +e
-service_id="$(run_with_timeout "$ready_timeout_seconds" docker compose --env-file storage/.env.local ps -q garage)"
-health_status=$?
-set -e
-if [[ "$health_status" == 124 ]]; then docker_health_timeout; fi
-if [[ "$health_status" != 0 ]]; then
-  echo "Could not query Garage service status. Check Docker responsiveness." >&2
-  exit 1
-fi
-if [[ -z "$service_id" ]]; then
-  conflicts="$(garage_port_conflicts)"
-  if [[ -n "$conflicts" ]]; then
-    echo "Garage port conflict: ${conflicts// /, } (required: 3900). Stop conflicting service or change its port." >&2
-    exit 1
-  fi
-fi
+ensure_service_ready() {
+  local service="$1"
+  local display_name="$2"
+  local test_ports="$3"
+  local required_port service_id health_status conflicts ready ready_deadline first_ready_poll
+  local remaining_seconds health_status_value sleep_seconds duration_unit
+  local -a start_args
 
-if [[ "$GARAGE_CONFIG_CHANGED" == 1 ]]; then
-  start_args=(up -d --force-recreate garage)
-else
-  start_args=(up -d garage)
-fi
+  case "$service" in
+    garage) required_port=3900 ;;
+    searxng) required_port=8888 ;;
+    *) echo "Unsupported development service." >&2; exit 1 ;;
+  esac
 
-if ! docker compose --env-file storage/.env.local "${start_args[@]}"; then
-  conflicts="$(garage_port_conflicts)"
-  if [[ -n "$conflicts" ]]; then
-    echo "Garage Compose failed because required port ${conflicts// /, } is occupied (required: 3900)." >&2
-  else
-    echo "Garage Compose startup failed. Review Docker output above for service details." >&2
-  fi
-  exit 1
-fi
-
-ready=false
-ready_deadline=$((SECONDS + ready_timeout_seconds))
-first_ready_poll=true
-while [[ "$first_ready_poll" == true ]] || ((SECONDS < ready_deadline)); do
-  remaining_seconds=$((ready_deadline - SECONDS))
-  if ((remaining_seconds <= 0)); then
-    if [[ "$first_ready_poll" == true ]]; then remaining_seconds=1; else break; fi
-  fi
   set +e
-  service_id="$(run_with_timeout "$remaining_seconds" docker compose --env-file storage/.env.local ps -q garage)"
+  service_id="$(run_with_timeout "$ready_timeout_seconds" docker compose --env-file storage/.env.local ps -q "$service")"
   health_status=$?
   set -e
-  if [[ "$health_status" == 124 ]]; then docker_health_timeout; fi
+  if [[ "$health_status" == 124 ]]; then docker_health_timeout "$display_name"; fi
+  if [[ "$health_status" != 0 ]]; then
+    echo "Could not query $display_name service status. Check Docker responsiveness." >&2
+    exit 1
+  fi
+  if [[ -z "$service_id" ]]; then
+    conflicts="$(service_port_conflicts "$test_ports")"
+    if [[ -n "$conflicts" ]]; then
+      echo "$display_name port conflict: ${conflicts// /, } (required: $required_port). Stop conflicting service or change its port." >&2
+      exit 1
+    fi
+  fi
 
-  health_status_value=''
-  if [[ -n "$service_id" ]]; then
+  if [[ "$service" == garage && "$GARAGE_CONFIG_CHANGED" == 1 ]]; then
+    start_args=(up -d --force-recreate "$service")
+  else
+    start_args=(up -d "$service")
+  fi
+
+  if ! docker compose --env-file storage/.env.local "${start_args[@]}"; then
+    conflicts="$(service_port_conflicts "$test_ports")"
+    if [[ -n "$conflicts" ]]; then
+      echo "$display_name Compose failed because required port ${conflicts// /, } is occupied (required: $required_port)." >&2
+    else
+      echo "$display_name Compose startup failed. Review Docker output above for service details." >&2
+    fi
+    exit 1
+  fi
+
+  ready=false
+  ready_deadline=$((SECONDS + ready_timeout_seconds))
+  first_ready_poll=true
+  while [[ "$first_ready_poll" == true ]] || ((SECONDS < ready_deadline)); do
     remaining_seconds=$((ready_deadline - SECONDS))
     if ((remaining_seconds <= 0)); then
       if [[ "$first_ready_poll" == true ]]; then remaining_seconds=1; else break; fi
     fi
     set +e
-    health_status_value="$(run_with_timeout "$remaining_seconds" docker inspect --format '{{.State.Health.Status}}' "$service_id")"
+    service_id="$(run_with_timeout "$remaining_seconds" docker compose --env-file storage/.env.local ps -q "$service")"
     health_status=$?
     set -e
-    if [[ "$health_status" == 124 ]]; then docker_health_timeout; fi
-  fi
-  first_ready_poll=false
-  if [[ "$health_status_value" == healthy ]]; then
-    ready=true
-    break
-  fi
+    if [[ "$health_status" == 124 ]]; then docker_health_timeout "$display_name"; fi
 
-  remaining_seconds=$((ready_deadline - SECONDS))
-  if ((remaining_seconds <= 0)); then break; fi
-  sleep_seconds="$ready_interval_seconds"
-  if ((sleep_seconds > remaining_seconds)); then sleep_seconds="$remaining_seconds"; fi
-  sleep "$sleep_seconds"
-done
+    health_status_value=''
+    if [[ -n "$service_id" ]]; then
+      remaining_seconds=$((ready_deadline - SECONDS))
+      if ((remaining_seconds <= 0)); then
+        if [[ "$first_ready_poll" == true ]]; then remaining_seconds=1; else break; fi
+      fi
+      set +e
+      health_status_value="$(run_with_timeout "$remaining_seconds" docker inspect --format '{{.State.Health.Status}}' "$service_id")"
+      health_status=$?
+      set -e
+      if [[ "$health_status" == 124 ]]; then docker_health_timeout "$display_name"; fi
+    fi
+    first_ready_poll=false
+    if [[ "$health_status_value" == healthy ]]; then
+      ready=true
+      break
+    fi
 
-if [[ "$ready" != true ]]; then
-  duration_unit=seconds
-  if [[ "$ready_timeout_seconds" == 1 ]]; then duration_unit=second; fi
-  echo "Garage did not become healthy within $ready_timeout_seconds $duration_unit." >&2
-  exit 1
-fi
+    remaining_seconds=$((ready_deadline - SECONDS))
+    if ((remaining_seconds <= 0)); then break; fi
+    sleep_seconds="$ready_interval_seconds"
+    if ((sleep_seconds > remaining_seconds)); then sleep_seconds="$remaining_seconds"; fi
+    sleep "$sleep_seconds"
+  done
+
+  if [[ "$ready" != true ]]; then
+    duration_unit=seconds
+    if [[ "$ready_timeout_seconds" == 1 ]]; then duration_unit=second; fi
+    echo "$display_name did not become healthy within $ready_timeout_seconds $duration_unit." >&2
+    exit 1
+  fi
+}
+
+ensure_service_ready garage Garage "${CHEKKU_GARAGE_PORTS:-3900}"
 
 printf 'Garage ready\n  endpoint: %s\n  region: %s\n  bucket: %s\n' \
   "$GARAGE_ENDPOINT" "$GARAGE_REGION" "$GARAGE_BUCKET"
 
+ensure_service_ready searxng SearXNG "${CHEKKU_SEARXNG_PORTS:-8888}"
+
+printf 'SearXNG ready\n  base URL: %s\n' "$SEARXNG_BASE_URL"
+
 garage_app_cleanup='for garage_name in ${!GARAGE_@}; do case "$garage_name" in GARAGE_ENDPOINT|GARAGE_REGION|GARAGE_BUCKET|GARAGE_ACCESS_KEY_ID|GARAGE_SECRET_ACCESS_KEY) ;; *) unset "$garage_name" ;; esac; done'
+searxng_agent_cleanup='for searxng_name in ${!SEARXNG_@}; do case "$searxng_name" in SEARXNG_BASE_URL|SEARXNG_API_KEY) ;; *) unset "$searxng_name" ;; esac; done'
+searxng_client_cleanup='for searxng_name in ${!SEARXNG_@}; do unset "$searxng_name"; done'
 
 if [[ "${CHEKKU_NO_TMUX:-0}" != 1 ]] && command -v tmux >/dev/null 2>&1; then
   root_hash="$(node - "$ROOT" <<'NODE'
@@ -230,11 +256,11 @@ NODE
 )"
   session_name="chekku-dev-$root_hash"
   if ! tmux has-session -t "$session_name" 2>/dev/null; then
-    if ! tmux new-session -d -s "$session_name" -c "$ROOT" "source scripts/storage-env.sh && $garage_app_cleanup && exec npm run dev:agent"; then
+    if ! tmux new-session -d -s "$session_name" -c "$ROOT" "source scripts/storage-env.sh && source scripts/searxng-env.sh && $garage_app_cleanup && $searxng_agent_cleanup && exec npm run dev:agent"; then
       echo "Could not create tmux session '$session_name'." >&2
       exit 1
     fi
-    if ! tmux split-window -h -t "$session_name" -c "$ROOT" "source scripts/storage-env.sh && $garage_app_cleanup && exec npm run dev:client" ||
+    if ! tmux split-window -h -t "$session_name" -c "$ROOT" "source scripts/storage-env.sh && source scripts/searxng-env.sh && $garage_app_cleanup && $searxng_client_cleanup && exec npm run dev:client" ||
       ! tmux select-layout -t "$session_name" even-horizontal; then
       tmux kill-session -t "$session_name" 2>/dev/null || true
       echo "Could not configure tmux session '$session_name'; partial session removed." >&2
@@ -285,11 +311,18 @@ cleanup() {
 }
 trap 'cleanup' INT TERM EXIT
 
-eval "$garage_app_cleanup"
 set -m
-npm run dev:agent &
+(
+  eval "$garage_app_cleanup"
+  eval "$searxng_agent_cleanup"
+  exec npm run dev:agent
+) &
 AGENT_PID=$!
-npm run dev:client &
+(
+  eval "$garage_app_cleanup"
+  eval "$searxng_client_cleanup"
+  exec npm run dev:client
+) &
 CLIENT_PID=$!
 
 set +e

@@ -82,8 +82,22 @@ function fixture(options: {
 
   executable(resolve(root, 'bin/docker'), `
 echo "$*" >> "$MOCK_LOG/docker"
-if [[ "\${HANG_DOCKER_COMMAND:-}" == "$1" ]] ||
-  { [[ "\${HANG_DOCKER_COMMAND:-}" == ps ]] && [[ "$*" == *" ps -q garage" ]]; }; then
+docker_command="$1"
+docker_service=''
+if [[ "$1" == compose ]] && [[ "$*" == *" ps -q garage" ]]; then
+  docker_command=ps
+  docker_service=garage
+elif [[ "$1" == compose ]] && [[ "$*" == *" ps -q searxng" ]]; then
+  docker_command=ps
+  docker_service=searxng
+elif [[ "$1" == inspect ]]; then
+  case "\${*: -1}" in
+    garage-id) docker_service=garage ;;
+    searxng-id) docker_service=searxng ;;
+  esac
+fi
+if [[ "\${HANG_DOCKER_COMMAND:-}" == "$docker_command" ]] &&
+  [[ "\${HANG_DOCKER_SERVICE:-garage}" == "$docker_service" ]]; then
   printf '%s\\n' "$BASHPID" > "$MOCK_LOG/orphan-group"
   (
     if [[ "\${TERM_RESISTANT_DOCKER_DESCENDANT:-0}" == 1 ]]; then trap '' TERM; fi
@@ -101,18 +115,29 @@ if [[ "$1" == compose ]]; then
     if [[ "\${GARAGE_RUNNING:-1}" == 1 ]]; then printf 'garage-id\\n'; fi
     exit 0
   fi
-  if [[ "$*" == *" up "* ]]; then exit 0; fi
+  if [[ "$*" == *" ps -q searxng" ]]; then
+    if [[ "\${SEARXNG_RUNNING:-1}" == 1 ]]; then printf 'searxng-id\\n'; fi
+    exit 0
+  fi
+  if [[ "$*" == *" up "* ]]; then
+    touch "$MOCK_LOG/start-\${*: -1}"
+    exit 0
+  fi
 fi
 if [[ "$1" == inspect ]]; then
-  if [[ "\${DOCKER_HEALTH_ON_SECOND:-0}" == 1 ]]; then
+  health_name="\${docker_service^^}_DOCKER_HEALTH"
+  health="\${!health_name:-\${DOCKER_HEALTH:-healthy}}"
+  second_name="\${docker_service^^}_HEALTH_ON_SECOND"
+  if [[ "\${!second_name:-0}" == 1 ]]; then
     count=0
-    if [[ -f "$MOCK_LOG/inspect-count" ]]; then count="$(<"$MOCK_LOG/inspect-count")"; fi
+    count_file="$MOCK_LOG/inspect-count-$docker_service"
+    if [[ -f "$count_file" ]]; then count="$(<"$count_file")"; fi
     count=$((count + 1))
-    printf '%s' "$count" > "$MOCK_LOG/inspect-count"
-    if ((count < 2)); then printf 'starting\\n'; else printf 'healthy\\n'; fi
-  else
-    printf '%s\\n' "\${DOCKER_HEALTH:-healthy}"
+    printf '%s' "$count" > "$count_file"
+    if ((count < 2)); then health=starting; else health=healthy; fi
   fi
+  printf 'inspect %s %s\\n' "$docker_service" "$health" >> "$MOCK_LOG/timeline"
+  printf '%s\\n' "$health"
 fi
 `);
 
@@ -160,7 +185,8 @@ wait
     executable(resolve(root, 'bin/npm'), `
 role="\${*: -1}"
 role="\${role/:/_}"
-env | grep '^GARAGE_' | sort > "$MOCK_LOG/env-$role"
+printf 'npm %s\\n' "$role" >> "$MOCK_LOG/timeline"
+env | grep -E '^(GARAGE|SEARXNG)_' | sort > "$MOCK_LOG/env-$role"
 touch "$MOCK_LOG/ready-$role"
 for _ in {1..100}; do
   if [[ -f "$MOCK_LOG/ready-dev_agent" && -f "$MOCK_LOG/ready-dev_client" ]]; then exit 0; fi
@@ -598,18 +624,27 @@ describe('development launcher', () => {
     expect(existsSync(resolve(root, 'storage/.env.local'))).toBe(false);
   });
 
-  it('validates generated Compose config before inspecting or starting Garage', () => {
+  it('validates generated Compose config before inspecting or starting either service', () => {
     const root = fixture({ tmux: true });
     const success = runDev(root);
     const successCalls = readFileSync(resolve(root, 'mock-log/docker'), 'utf8').split('\n');
     const configIndex = successCalls.findIndex((call) => call.includes('config --quiet'));
-    const psIndex = successCalls.findIndex((call) => call.includes('ps -q garage'));
-    const upIndex = successCalls.findIndex((call) => call.includes(' up '));
+    const garagePsIndex = successCalls.findIndex((call) => call.includes('ps -q garage'));
+    const searxngPsIndex = successCalls.findIndex((call) => call.includes('ps -q searxng'));
+    const garageUpIndex = successCalls.findIndex((call) => call.includes(' up ') && call.endsWith('garage'));
+    const searxngUpIndex = successCalls.findIndex((call) => call.includes(' up ') && call.endsWith('searxng'));
 
     expect(success.status, success.stderr).toBe(0);
     expect(configIndex).toBeGreaterThan(-1);
-    expect(configIndex).toBeLessThan(psIndex);
-    expect(configIndex).toBeLessThan(upIndex);
+    for (const serviceIndex of [garagePsIndex, searxngPsIndex, garageUpIndex, searxngUpIndex]) {
+      expect(configIndex).toBeLessThan(serviceIndex);
+    }
+    expect(successCalls).toContain('compose --env-file storage/.env.local ps -q garage');
+    expect(successCalls).toContain('compose --env-file storage/.env.local ps -q searxng');
+    expect(successCalls.join('\n')).toMatch(/compose .* up -d .*garage/);
+    expect(successCalls.join('\n')).toMatch(/compose .* up -d .*searxng/);
+    expect(success.stdout).toContain('Garage ready');
+    expect(success.stdout).toContain('SearXNG ready');
 
     const failingRoot = fixture();
     const secret = 'must-not-appear-in-output';
@@ -629,6 +664,7 @@ describe('development launcher', () => {
     expect(existsSync(resolve(failingRoot, 'storage/.garage/garage.toml'))).toBe(true);
     expect(failedCalls).toContain('config --quiet');
     expect(failedCalls).not.toContain('ps -q garage');
+    expect(failedCalls).not.toContain('ps -q searxng');
     expect(failedCalls).not.toContain(' up ');
     expect(`${failed.stdout}${failed.stderr}`).not.toContain(secret);
   });
@@ -650,6 +686,30 @@ describe('development launcher', () => {
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain(`Garage port conflict: ${port}`);
       expect(readFileSync(resolve(root, 'mock-log/docker'), 'utf8')).not.toContain(' up ');
+    } finally {
+      holder.kill();
+    }
+  });
+
+  it('reports an occupied SearXNG port before Compose startup', async () => {
+    const root = fixture();
+    const holder = spawn(process.execPath, [
+      '-e',
+      "const net=require('node:net');const s=net.createServer();s.listen(0,'127.0.0.1',()=>console.log(s.address().port));",
+    ], { stdio: ['ignore', 'pipe', 'inherit'] });
+    const port = await new Promise<number>((resolvePort, reject) => {
+      holder.once('error', reject);
+      holder.once('exit', (code) => reject(new Error(`Port holder exited early with ${code}`)));
+      holder.stdout.once('data', (data) => resolvePort(Number(String(data).trim())));
+    });
+
+    try {
+      const result = runDev(root, { CHEKKU_SEARXNG_PORTS: String(port), SEARXNG_RUNNING: '0' });
+      const calls = readFileSync(resolve(root, 'mock-log/docker'), 'utf8');
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(`SearXNG port conflict: ${port}`);
+      expect(calls).toContain('ps -q searxng');
+      expect(calls).not.toContain('up -d searxng');
     } finally {
       holder.kill();
     }
@@ -680,13 +740,13 @@ describe('development launcher', () => {
     const healthy = runDev(healthyRoot, {
       CHEKKU_READY_TIMEOUT_SECONDS: '030',
       CHEKKU_READY_INTERVAL_SECONDS: '099',
-      DOCKER_HEALTH_ON_SECOND: '1',
+      GARAGE_HEALTH_ON_SECOND: '1',
     });
 
     expect(healthy.status, healthy.stderr).toBe(0);
     expect(Date.now() - startedAt).toBeGreaterThanOrEqual(4_000);
     expect(Date.now() - startedAt).toBeLessThan(8_000);
-    expect(readFileSync(resolve(healthyRoot, 'mock-log/inspect-count'), 'utf8')).toBe('2');
+    expect(readFileSync(resolve(healthyRoot, 'mock-log/inspect-count-garage'), 'utf8')).toBe('2');
 
     const timeoutRoot = fixture();
     const timedOut = runDev(timeoutRoot, {
@@ -720,6 +780,62 @@ describe('development launcher', () => {
     expect(orphanCheck.status).toBe(0);
   });
 
+  it.each(['ps', 'inspect'])('bounds hanging SearXNG Docker %s process trees without orphans', (command) => {
+    const root = fixture();
+    const startedAt = Date.now();
+    const result = runDev(root, {
+      CHEKKU_NO_TMUX: '1',
+      CHEKKU_READY_TIMEOUT_SECONDS: '2',
+      HANG_DOCKER_COMMAND: command,
+      HANG_DOCKER_SERVICE: 'searxng',
+    });
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('Docker health command timed out before SearXNG became ready');
+    expect(elapsedMs).toBeLessThan(process.platform === 'win32' ? 5_000 : 3_500);
+    expect(existsSync(resolve(root, 'mock-log/orphan-finished'))).toBe(false);
+    const orphanPid = readFileSync(resolve(root, 'mock-log/orphan-pid'), 'utf8').trim();
+    const orphanCheck = run(root, ['-c', `! kill -0 ${orphanPid} 2>/dev/null`]);
+    expect(orphanCheck.status).toBe(0);
+  });
+
+  it('reports a bounded SearXNG health timeout without launching applications', async () => {
+    const root = fixture({ captureNpmEnv: true });
+    const resultPromise = runAsync(root, ['scripts/dev.sh'], {
+      CHEKKU_NO_TMUX: '1',
+      CHEKKU_READY_INTERVAL_SECONDS: '1',
+      CHEKKU_READY_TIMEOUT_SECONDS: '1',
+      SEARXNG_DOCKER_HEALTH: 'starting',
+    });
+    await waitForPath(resolve(root, 'mock-log/start-searxng'));
+    const startedAt = Date.now();
+    const result = await resultPromise;
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('SearXNG did not become healthy within 1 second.');
+    expect(Date.now() - startedAt).toBeLessThan(3_000);
+    expect(existsSync(resolve(root, 'mock-log/ready-dev_agent'))).toBe(false);
+    expect(existsSync(resolve(root, 'mock-log/ready-dev_client'))).toBe(false);
+  });
+
+  it('does not launch either application until both services are healthy', () => {
+    const root = fixture({ captureNpmEnv: true });
+    const result = runDev(root, {
+      CHEKKU_NO_TMUX: '1',
+      CHEKKU_READY_INTERVAL_SECONDS: '1',
+      SEARXNG_HEALTH_ON_SECOND: '1',
+    });
+    const timeline = readFileSync(resolve(root, 'mock-log/timeline'), 'utf8').trim().split('\n');
+    const healthyIndex = timeline.lastIndexOf('inspect searxng healthy');
+    const firstNpmIndex = timeline.findIndex((line) => line.startsWith('npm '));
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(timeline).toContain('inspect searxng starting');
+    expect(healthyIndex).toBeGreaterThan(-1);
+    expect(firstNpmIndex).toBeGreaterThan(healthyIndex);
+  });
+
   it('waits for KILL cleanup when a Docker descendant ignores TERM', () => {
     const root = fixture();
     const result = runDev(root, {
@@ -743,13 +859,25 @@ describe('development launcher', () => {
     }
   });
 
-  it('launches application processes with exactly five Garage variables', () => {
+  it('isolates exact Garage and SearXNG variables by application role', () => {
     const root = fixture({ captureNpmEnv: true });
     const result = runDev(root, {
       CHEKKU_NO_TMUX: '1',
       GARAGE_UNRELATED: 'must-not-reach-apps',
+      SEARXNG_SECRET: 'must-not-reach-apps',
+      SEARXNG_CONFIG_HASH: 'must-not-reach-apps',
+      SEARXNG_UNRELATED: 'must-not-reach-apps',
     });
-    const expectedNames = [
+    const agentNames = [
+      'GARAGE_ACCESS_KEY_ID',
+      'GARAGE_BUCKET',
+      'GARAGE_ENDPOINT',
+      'GARAGE_REGION',
+      'GARAGE_SECRET_ACCESS_KEY',
+      'SEARXNG_API_KEY',
+      'SEARXNG_BASE_URL',
+    ];
+    const clientNames = [
       'GARAGE_ACCESS_KEY_ID',
       'GARAGE_BUCKET',
       'GARAGE_ENDPOINT',
@@ -757,14 +885,19 @@ describe('development launcher', () => {
       'GARAGE_SECRET_ACCESS_KEY',
     ];
     const storageValues = parse(readFileSync(resolve(root, 'storage/.env.local')));
+    const searxngValues = parse(readFileSync(resolve(root, 'searxng/.env.local')));
+    const expectedValues = { ...storageValues, ...searxngValues };
 
     expect(result.status, result.stderr).toBe(0);
-    for (const role of ['dev_agent', 'dev_client']) {
+    for (const [role, expectedNames] of [
+      ['dev_agent', agentNames],
+      ['dev_client', clientNames],
+    ] as const) {
       const lines = readFileSync(resolve(root, `mock-log/env-${role}`), 'utf8').trim().split('\n');
       expect(lines.map((line) => line.slice(0, line.indexOf('=')))).toEqual(expectedNames);
       for (const line of lines) {
         const separator = line.indexOf('=');
-        expect(line.slice(separator + 1)).toBe(storageValues[line.slice(0, separator)]);
+        expect(line.slice(separator + 1)).toBe(expectedValues[line.slice(0, separator)]);
       }
     }
   });
@@ -781,8 +914,12 @@ describe('development launcher', () => {
 
     expect(starts[0]).toContain('up -d garage');
     expect(starts[0]).not.toContain('--force-recreate');
-    expect(starts[1]).toContain('up -d --force-recreate garage');
-  });
+    expect(starts[1]).toContain('up -d searxng');
+    expect(starts[1]).not.toContain('--force-recreate');
+    expect(starts[2]).toContain('up -d --force-recreate garage');
+    expect(starts[3]).toContain('up -d searxng');
+    expect(starts[3]).not.toContain('--force-recreate');
+  }, 10_000);
 
   it('removes partially-created tmux session after pane failure', () => {
     const root = fixture({ tmux: true });
