@@ -73,10 +73,48 @@ See [Architecture](docs/ARCHITECTURE.md) for the runtime boundaries and data flo
 
 - **Node.js 22.22 or newer**
 - **npm 10 or newer**
+- **Docker Engine with Docker Compose** for local Garage object storage
 - An API key for an OpenAI-compatible endpoint
 - A Chromium-compatible environment for browser-agent workflows
 
 > The repository pins Node.js 22.22 in `.nvmrc` so local development and CI use the same supported runtime.
+
+### Install Docker Compose
+
+Chekku's local launcher uses Docker Compose to run Garage object storage.
+
+**Windows 10/11**
+
+Run PowerShell as Administrator:
+
+```powershell
+wsl --install
+```
+
+Restart Windows after WSL installation, then install Docker Desktop:
+
+```powershell
+winget install --exact --id Docker.DockerDesktop
+```
+
+Launch Docker Desktop from the Start menu, accept its agreement, and wait until the Docker engine reports that it is running. Then verify Docker Compose is available:
+
+```powershell
+docker compose version
+```
+
+Docker Desktop uses the WSL 2 backend by default. Ubuntu hosts do not need WSL.
+
+**Ubuntu with Docker Engine installed**
+
+If Docker Engine was installed from Docker's official APT repository, install the Compose plugin:
+
+```bash
+sudo apt-get update && sudo apt-get install -y docker-compose-plugin
+docker compose version
+```
+
+If Docker Engine is not installed, follow Docker's official Ubuntu installation guide first.
 
 ## Quick start
 
@@ -85,6 +123,8 @@ See [Architecture](docs/ARCHITECTURE.md) for the runtime boundaries and data flo
 ```bash
 npm ci
 ```
+
+Run `npm ci` from the repository root after the initial clone and after every `git pull`. It replaces stale workspace dependencies with the exact versions in `package-lock.json`. If Mastra exits with an error such as `Invalid Version: ^1.14.0`, rerun `npm ci` before restarting the launcher.
 
 ### 2. Configure the Mastra server
 
