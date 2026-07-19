@@ -35,6 +35,7 @@ const validAgentEnv = [
 ].join('\n');
 const invalidSearxngAssignmentError = 'SearXNG application environment contains an invalid assignment.';
 const leakedSearxngValueError = 'SearXNG service-only values must not appear in agent environment.';
+const invalidSearxngLocalStateError = 'Invalid SearXNG local environment state.\n';
 const bom = '\uFEFF';
 const nbsp = '\u00A0';
 const verticalTab = '\u000B';
@@ -63,6 +64,17 @@ function storageEnv(values: Record<string, string>): string {
     'GARAGE_METRICS_TOKEN=metrics-token',
     '',
   ].join('\n');
+}
+
+function searxngEnv(overrides: Partial<Record<string, string>> = {}): string {
+  const values = {
+    SEARXNG_SECRET: 'A'.repeat(43),
+    SEARXNG_CONFIG_HASH: 'b'.repeat(64),
+    SEARXNG_BASE_URL: 'http://127.0.0.1:8888',
+    SEARXNG_API_KEY: '',
+    ...overrides,
+  };
+  return Object.entries(values).map(([name, value]) => `${name}=${value}\n`).join('');
 }
 
 function fixture(options: {
@@ -465,6 +477,72 @@ describe('storage environment generation', () => {
 });
 
 describe('SearXNG environment generation', () => {
+  it('treats existing local state as data without executing commands or injecting environment', () => {
+    const root = fixture();
+    expect(run(root, ['scripts/searxng-env.sh']).status).toBe(0);
+    const localPath = resolve(root, 'searxng/.env.local');
+    const generatedPath = resolve(root, 'agent/.env.development');
+    const generatedContent = readFileSync(generatedPath, 'utf8');
+    const commandMarker = resolve(root, 'mock-log/command-executed');
+    const environmentMarker = resolve(root, 'mock-log/environment-injected');
+    const preloadPath = resolve(root, 'inject.cjs');
+    writeFileSync(preloadPath, [
+      "const { writeFileSync } = require('node:fs');",
+      `writeFileSync(${JSON.stringify(environmentMarker)}, 'injected');`,
+      '',
+    ].join('\n'));
+    const privateValue = 'private-local-state-value';
+    const maliciousContent = [
+      `NODE_OPTIONS=--require=${preloadPath.replaceAll('\\', '/')}`,
+      `SEARXNG_SECRET=$(touch ${shellValue(commandMarker.replaceAll('\\', '/'))})`,
+      `SEARXNG_CONFIG_HASH=${'c'.repeat(64)}`,
+      'SEARXNG_BASE_URL=http://127.0.0.1:8888',
+      'SEARXNG_API_KEY=',
+      `UNRELATED=${privateValue}`,
+      '',
+    ].join('\n');
+    writeFileSync(localPath, maliciousContent);
+
+    const result = run(root, ['scripts/searxng-env.sh']);
+
+    expect(result.status).not.toBe(0);
+    expect(existsSync(commandMarker)).toBe(false);
+    expect(existsSync(environmentMarker)).toBe(false);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toBe(invalidSearxngLocalStateError);
+    expect(result.stderr).not.toContain(privateValue);
+    expect(readFileSync(localPath, 'utf8')).toBe(maliciousContent);
+    expect(readFileSync(generatedPath, 'utf8')).toBe(generatedContent);
+  });
+
+  it.each([
+    ['missing key', searxngEnv().replace('SEARXNG_API_KEY=\n', '')],
+    ['duplicate key', `${searxngEnv()}SEARXNG_CONFIG_HASH=${'d'.repeat(64)}\n`],
+    ['extra key', `${searxngEnv()}NODE_OPTIONS=--trace-warnings\n`],
+    ['command syntax', searxngEnv({ SEARXNG_SECRET: '$(touch command-marker)' })],
+    ['comment', `${searxngEnv()}# local state\n`],
+    ['reordered keys', searxngEnv().split('\n').slice(0, 4).reverse().join('\n') + '\n'],
+    ['invalid secret', searxngEnv({ SEARXNG_SECRET: 'not-a-secret' })],
+    ['invalid hash', searxngEnv({ SEARXNG_CONFIG_HASH: 'not-a-hash' })],
+    ['nonlocal URL', searxngEnv({ SEARXNG_BASE_URL: 'https://search.example.test' })],
+    ['nonempty API key', searxngEnv({ SEARXNG_API_KEY: 'private-api-key' })],
+  ])('rejects %s in existing local state without changing generated state', (_case, content) => {
+    const root = fixture();
+    expect(run(root, ['scripts/searxng-env.sh']).status).toBe(0);
+    const localPath = resolve(root, 'searxng/.env.local');
+    const generatedPath = resolve(root, 'agent/.env.development');
+    const generatedContent = readFileSync(generatedPath, 'utf8');
+    writeFileSync(localPath, content);
+
+    const result = run(root, ['scripts/searxng-env.sh']);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toBe(invalidSearxngLocalStateError);
+    expect(readFileSync(localPath, 'utf8')).toBe(content);
+    expect(readFileSync(generatedPath, 'utf8')).toBe(generatedContent);
+  });
+
   it('keeps a private stable secret and updates the tracked settings hash', () => {
     const root = fixture({
       agentEnv: [

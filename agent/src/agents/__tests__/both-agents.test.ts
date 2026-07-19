@@ -36,7 +36,7 @@ describe('qa-web-agent (browser QA)', () => {
 });
 
 describe('pm-agent (weekly report analysis)', () => {
-  it('has built-in identity, memory, and only PM report tools', async () => {
+  it('has built-in identity, memory, and PM report plus search tools', async () => {
     expect(pmAgent.id).toBe('pm-agent');
     expect(pmAgent.name).toBe('PM Agent');
     expect(await pmAgent.getMemory()).toBeDefined();

@@ -12,10 +12,6 @@ unset SEARXNG_SECRET SEARXNG_CONFIG_HASH SEARXNG_BASE_URL SEARXNG_API_KEY
 ENV_FILE_EXISTED=0
 if [[ -f "$ENV_FILE" ]]; then
   ENV_FILE_EXISTED=1
-  set -a
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-  set +a
 fi
 
 render_searxng_env() (
@@ -29,32 +25,52 @@ const { chmodSync, linkSync, readFileSync, writeFileSync } = require('node:fs');
 const { createHash, randomBytes } = require('node:crypto');
 
 const [settingsPath, outputPath, envPath, envFileExisted] = process.argv.slice(2);
-const settings = readFileSync(settingsPath, 'utf8');
-const existingSecret = process.env.SEARXNG_SECRET;
-if (envFileExisted === '1' && existingSecret === undefined) {
-  throw new Error('Missing SEARXNG_SECRET in searxng/.env.local');
-}
-if (existingSecret !== undefined && !/^[A-Za-z0-9_-]{43}$/.test(existingSecret)) {
-  throw new Error('Invalid SEARXNG_SECRET in searxng/.env.local');
-}
+const names = ['SEARXNG_SECRET', 'SEARXNG_CONFIG_HASH', 'SEARXNG_BASE_URL', 'SEARXNG_API_KEY'];
+const invalidStateMessage = 'Invalid SearXNG local environment state.';
 
-const secret = existingSecret ?? randomBytes(32).toString('base64url');
-const configHash = createHash('sha256').update(settings).digest('hex');
-writeFileSync(outputPath, [
-  `SEARXNG_SECRET=${secret}`,
-  `SEARXNG_CONFIG_HASH=${configHash}`,
-  'SEARXNG_BASE_URL=http://127.0.0.1:8888',
-  'SEARXNG_API_KEY=',
-  '',
-].join('\n'), { mode: 0o600 });
-
-if (envFileExisted === '0') {
-  try {
-    linkSync(outputPath, envPath);
-    chmodSync(envPath, 0o600);
-  } catch (error) {
-    if (error?.code !== 'EEXIST') throw error;
+const parseState = (content) => {
+  const lines = content.split('\n');
+  if (lines.pop() !== '' || lines.length !== names.length) throw new Error(invalidStateMessage);
+  const values = {};
+  for (let index = 0; index < names.length; index += 1) {
+    const prefix = `${names[index]}=`;
+    if (!lines[index].startsWith(prefix)) throw new Error(invalidStateMessage);
+    values[names[index]] = lines[index].slice(prefix.length);
   }
+  if (!/^[A-Za-z0-9_-]{43}$/.test(values.SEARXNG_SECRET) ||
+      !/^[a-f0-9]{64}$/.test(values.SEARXNG_CONFIG_HASH) ||
+      values.SEARXNG_BASE_URL !== 'http://127.0.0.1:8888' ||
+      values.SEARXNG_API_KEY !== '') {
+    throw new Error(invalidStateMessage);
+  }
+  return values;
+};
+
+try {
+  const settings = readFileSync(settingsPath, 'utf8');
+  const existing = envFileExisted === '1' ? parseState(readFileSync(envPath, 'utf8')) : undefined;
+  const secret = existing?.SEARXNG_SECRET ?? randomBytes(32).toString('base64url');
+  const configHash = createHash('sha256').update(settings).digest('hex');
+  writeFileSync(outputPath, [
+    `SEARXNG_SECRET=${secret}`,
+    `SEARXNG_CONFIG_HASH=${configHash}`,
+    'SEARXNG_BASE_URL=http://127.0.0.1:8888',
+    'SEARXNG_API_KEY=',
+    '',
+  ].join('\n'), { mode: 0o600 });
+
+  if (envFileExisted === '0') {
+    try {
+      linkSync(outputPath, envPath);
+      chmodSync(envPath, 0o600);
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+    }
+  }
+} catch (error) {
+  if (error?.message !== invalidStateMessage) throw error;
+  process.stderr.write(`${invalidStateMessage}\n`);
+  process.exitCode = 1;
 }
 NODE
 
@@ -72,10 +88,51 @@ NODE
 
 render_searxng_env
 
-set -a
-# shellcheck disable=SC1090
-source "$ENV_FILE"
-set +a
+load_searxng_env() {
+  local parsed
+  if ! parsed="$(node - "$ENV_FILE" <<'NODE'
+const { readFileSync } = require('node:fs');
+
+const [envPath] = process.argv.slice(2);
+const names = ['SEARXNG_SECRET', 'SEARXNG_CONFIG_HASH', 'SEARXNG_BASE_URL', 'SEARXNG_API_KEY'];
+const invalidStateMessage = 'Invalid SearXNG local environment state.';
+
+try {
+  const lines = readFileSync(envPath, 'utf8').split('\n');
+  if (lines.pop() !== '' || lines.length !== names.length) throw new Error(invalidStateMessage);
+  const values = {};
+  for (let index = 0; index < names.length; index += 1) {
+    const prefix = `${names[index]}=`;
+    if (!lines[index].startsWith(prefix)) throw new Error(invalidStateMessage);
+    values[names[index]] = lines[index].slice(prefix.length);
+  }
+  if (!/^[A-Za-z0-9_-]{43}$/.test(values.SEARXNG_SECRET) ||
+      !/^[a-f0-9]{64}$/.test(values.SEARXNG_CONFIG_HASH) ||
+      values.SEARXNG_BASE_URL !== 'http://127.0.0.1:8888' ||
+      values.SEARXNG_API_KEY !== '') {
+    throw new Error(invalidStateMessage);
+  }
+  process.stdout.write([
+    values.SEARXNG_SECRET,
+    values.SEARXNG_CONFIG_HASH,
+    values.SEARXNG_BASE_URL,
+  ].join('\t'));
+} catch (error) {
+  if (error?.message !== invalidStateMessage) throw error;
+  process.stderr.write(`${invalidStateMessage}\n`);
+  process.exitCode = 1;
+}
+NODE
+)"; then
+    return 1
+  fi
+
+  IFS=$'\t' read -r SEARXNG_SECRET SEARXNG_CONFIG_HASH SEARXNG_BASE_URL <<< "$parsed"
+  SEARXNG_API_KEY=''
+  export SEARXNG_SECRET SEARXNG_CONFIG_HASH SEARXNG_BASE_URL SEARXNG_API_KEY
+}
+
+load_searxng_env
 
 render_agent_env() (
   local agent_env_source agent_env_tmp
