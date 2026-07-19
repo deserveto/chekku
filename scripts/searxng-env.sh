@@ -102,9 +102,7 @@ const leakedValueError = 'SearXNG service-only values must not appear in agent e
 
 const hasClosingQuote = (value, quote) => {
   for (let index = 0; index < value.length; index += 1) {
-    if (value[index] === '\\') {
-      index += 1;
-    } else if (value[index] === quote) {
+    if (value[index] === quote && value[index - 1] !== '\\') {
       return true;
     }
   }

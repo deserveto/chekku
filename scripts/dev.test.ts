@@ -475,6 +475,46 @@ exec ${shellValue(realNode)} "$@"
     expect(result.stdout + result.stderr).not.toContain('stale-backtick-continuation');
   });
 
+  it.each([
+    {
+      quoteStyle: 'single quote',
+      start: "SEARXNG_BASE_URL='stale\\\\'escaped-delimiter",
+      continuation: "single-double-slash-continuation'",
+      marker: 'single-double-slash-continuation',
+    },
+    {
+      quoteStyle: 'double quote',
+      start: 'SEARXNG_BASE_URL="stale\\\\"escaped-delimiter',
+      continuation: 'double-double-slash-continuation"',
+      marker: 'double-double-slash-continuation',
+    },
+    {
+      quoteStyle: 'backtick',
+      start: 'SEARXNG_API_KEY=`stale\\\\`escaped-delimiter',
+      continuation: 'backtick-double-slash-continuation`',
+      marker: 'backtick-double-slash-continuation',
+    },
+  ])('treats a $quoteStyle delimiter after two backslashes as escaped', ({ start, continuation, marker }) => {
+    const root = fixture({
+      agentEnv: [
+        validAgentEnv.trimEnd(),
+        start,
+        continuation,
+        'UNRELATED=preserved-after-double-slash-value',
+        '',
+      ].join('\n'),
+    });
+    expect(run(root, ['scripts/storage-env.sh']).status).toBe(0);
+
+    const result = run(root, ['scripts/searxng-env.sh']);
+    const generated = readFileSync(resolve(root, 'agent/.env.development'), 'utf8');
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(generated.includes(marker)).toBe(false);
+    expect(generated).toContain('UNRELATED=preserved-after-double-slash-value');
+    expect((result.stdout + result.stderr).includes(marker)).toBe(false);
+  });
+
   it('rejects an unterminated target assignment without changing generated state', () => {
     const root = fixture();
     expect(run(root, ['scripts/storage-env.sh']).status).toBe(0);
