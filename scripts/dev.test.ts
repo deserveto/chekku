@@ -35,6 +35,10 @@ const validAgentEnv = [
 ].join('\n');
 const invalidSearxngAssignmentError = 'SearXNG application environment contains an invalid assignment.';
 const leakedSearxngValueError = 'SearXNG service-only values must not appear in agent environment.';
+const bom = '\uFEFF';
+const nbsp = '\u00A0';
+const verticalTab = '\u000B';
+const formFeed = '\u000C';
 
 function executable(path: string, body: string): void {
   writeFileSync(path, `#!/usr/bin/env bash\nset -euo pipefail\n${body}`);
@@ -327,6 +331,8 @@ describe('storage environment generation', () => {
       'NON-GARAGE.KEY: preserved-colon-value',
       'OTHER.DOTTED="preserved-multiline-first',
       'preserved-multiline-second"',
+      `${nbsp}NON-GARAGE.NBSP${nbsp}=${nbsp}preserved-nbsp-value`,
+      `${verticalTab}NON-GARAGE.VT:${formFeed}preserved-vt-value`,
     ].join('\r\n');
     const root = fixture({
       agentEnv: [
@@ -342,6 +348,9 @@ describe('storage environment generation', () => {
         'GARAGE_UNRELATED.ALT=stale-unrelated-dot',
         'GARAGE_COLON.ALT: "stale-colon-first',
         'stale-colon-second"',
+        `${bom}GARAGE_BOM.SECRET=stale-bom-value`,
+        `${nbsp}GARAGE_NBSP.SECRET${nbsp}=${nbsp}stale-nbsp-value`,
+        `${verticalTab}GARAGE_VT.SECRET:${formFeed}stale-vt-value`,
         preserved,
         'UNRELATED=preserved',
         '',
@@ -350,8 +359,14 @@ describe('storage environment generation', () => {
 
     const result = run(root, ['scripts/storage-env.sh']);
     const generated = readFileSync(resolve(root, 'agent/.env.development'), 'utf8');
+    const sourceNames = prefixedAssignmentNames(readFileSync(resolve(root, 'agent/.env'), 'utf8'));
 
     expect(result.status, result.stderr).toBe(0);
+    expect(sourceNames).toEqual(expect.arrayContaining([
+      'GARAGE_BOM.SECRET',
+      'GARAGE_NBSP.SECRET',
+      'GARAGE_VT.SECRET',
+    ]));
     expect(prefixedAssignmentNames(generated).filter((name) => name.startsWith('GARAGE_'))).toEqual([
       'GARAGE_ACCESS_KEY_ID',
       'GARAGE_BUCKET',
@@ -368,6 +383,8 @@ describe('storage environment generation', () => {
   it.each([
     ['equals', 'GARAGE_UNRELATED="'],
     ['colon', 'GARAGE_UNRELATED.ALT: "'],
+    ['BOM/NBSP equals', `${bom}GARAGE_BOM.ALT${nbsp}=${nbsp}"`],
+    ['vertical-tab colon', `${verticalTab}GARAGE_VT.ALT:${formFeed}"`],
   ])('rejects malformed Garage-prefixed %s assignments without leaking or changing generated state', (
     _operator,
     assignment,
@@ -558,6 +575,11 @@ exec ${shellValue(realNode)} "$@"
         'SEARXNG_UNRELATED: stale-unrelated-colon',
         'SEARXNG_COLON.ALT: "stale-colon-first',
         'stale-colon-continuation"',
+        `${bom}SEARXNG_BOM.SECRET=stale-searxng-bom`,
+        `${nbsp}SEARXNG_NBSP.SECRET${nbsp}=${nbsp}stale-searxng-nbsp`,
+        `${verticalTab}SEARXNG_VT.SECRET:${formFeed}stale-searxng-vt`,
+        `${nbsp}NON-SEARXNG.NBSP${nbsp}=${nbsp}preserved-searxng-nbsp`,
+        `${verticalTab}NON-SEARXNG.VT:${formFeed}preserved-searxng-vt`,
         'NON-SEARXNG.KEY: preserved-searxng-colon',
         'UNRELATED=preserved',
         '',
@@ -568,8 +590,14 @@ exec ${shellValue(realNode)} "$@"
     const result = run(root, ['scripts/searxng-env.sh']);
     const generated = readFileSync(resolve(root, 'agent/.env.development'), 'utf8');
     const values = parse(generated);
+    const sourceNames = prefixedAssignmentNames(readFileSync(resolve(root, 'agent/.env'), 'utf8'));
 
     expect(result.status, result.stderr).toBe(0);
+    expect(sourceNames).toEqual(expect.arrayContaining([
+      'SEARXNG_BOM.SECRET',
+      'SEARXNG_NBSP.SECRET',
+      'SEARXNG_VT.SECRET',
+    ]));
     expect(values.SEARXNG_BASE_URL).toBe('http://127.0.0.1:8888');
     expect(values.SEARXNG_API_KEY).toBe('');
     expect(generated.match(/^SEARXNG_BASE_URL=/gm)).toHaveLength(1);
@@ -582,6 +610,11 @@ exec ${shellValue(realNode)} "$@"
     expect(generated.includes('stale-secret-dot')).toBe(false);
     expect(generated.includes('stale-unrelated-colon')).toBe(false);
     expect(generated.includes('stale-colon-continuation')).toBe(false);
+    expect(generated.includes('stale-searxng-bom')).toBe(false);
+    expect(generated.includes('stale-searxng-nbsp')).toBe(false);
+    expect(generated.includes('stale-searxng-vt')).toBe(false);
+    expect(generated).toContain(`${nbsp}NON-SEARXNG.NBSP${nbsp}=${nbsp}preserved-searxng-nbsp`);
+    expect(generated).toContain(`${verticalTab}NON-SEARXNG.VT:${formFeed}preserved-searxng-vt`);
     expect(generated).toContain('NON-SEARXNG.KEY: preserved-searxng-colon');
     expect(generated).toContain('UNRELATED=preserved');
     expect(result.stdout + result.stderr).not.toContain('stale-base-continuation');
@@ -657,6 +690,8 @@ exec ${shellValue(realNode)} "$@"
     ['SEARXNG_API_KEY', '='],
     ['SEARXNG_UNRELATED', '='],
     ['SEARXNG_UNRELATED.ALT', ': '],
+    [`${bom}SEARXNG_BOM.ALT`, `${nbsp}=${nbsp}`],
+    [`${verticalTab}SEARXNG_VT.ALT`, `:${formFeed}`],
   ])(
     'rejects an unterminated $0 assignment without changing generated state',
     (assignmentName, operator) => {
@@ -964,6 +999,9 @@ describe('development launcher', () => {
       'garage-rpc-hyphen-value',
       'garage-unrelated-dot-value',
       'garage-colon-continuation',
+      'garage-bom-value',
+      'garage-nbsp-value',
+      'garage-vt-value',
       'searxng-secret-first',
       'searxng-secret-continuation',
       'searxng-config-value',
@@ -971,6 +1009,9 @@ describe('development launcher', () => {
       'searxng-secret-dot-value',
       'searxng-unrelated-colon-value',
       'searxng-colon-continuation',
+      'searxng-bom-value',
+      'searxng-nbsp-value',
+      'searxng-vt-value',
     ];
     const root = fixture({
       captureNpmEnv: true,
@@ -986,6 +1027,9 @@ describe('development launcher', () => {
         'GARAGE_UNRELATED.ALT=garage-unrelated-dot-value',
         'GARAGE_COLON.ALT: "garage-colon-first',
         'garage-colon-continuation"',
+        `${bom}GARAGE_BOM.SECRET=garage-bom-value`,
+        `${nbsp}GARAGE_NBSP.SECRET${nbsp}=${nbsp}garage-nbsp-value`,
+        `${verticalTab}GARAGE_VT.SECRET:${formFeed}garage-vt-value`,
         'SEARXNG_BASE_URL=https://stale-searxng.example.test',
         'SEARXNG_API_KEY=stale-api-key',
         'SEARXNG_SECRET="searxng-secret-first',
@@ -996,6 +1040,11 @@ describe('development launcher', () => {
         'SEARXNG_UNRELATED: searxng-unrelated-colon-value',
         'SEARXNG_COLON.ALT: "searxng-colon-first',
         'searxng-colon-continuation"',
+        `${bom}SEARXNG_BOM.SECRET=searxng-bom-value`,
+        `${nbsp}SEARXNG_NBSP.SECRET${nbsp}=${nbsp}searxng-nbsp-value`,
+        `${verticalTab}SEARXNG_VT.SECRET:${formFeed}searxng-vt-value`,
+        `${nbsp}NON-SERVICE.NBSP${nbsp}=${nbsp}preserved-end-to-end-nbsp`,
+        `${verticalTab}NON-SERVICE.VT:${formFeed}preserved-end-to-end-vt`,
         'NON-SERVICE.KEY: preserved-colon-value',
         'UNRELATED=preserved-end-to-end',
         '',
@@ -1017,6 +1066,8 @@ describe('development launcher', () => {
     const generated = readFileSync(resolve(root, 'agent/.env.development'), 'utf8');
     expect(prefixedAssignmentNames(generated)).toEqual(expectedAgentNames);
     expect(generated).toContain('NON-SERVICE.KEY: preserved-colon-value');
+    expect(generated).toContain(`${nbsp}NON-SERVICE.NBSP${nbsp}=${nbsp}preserved-end-to-end-nbsp`);
+    expect(generated).toContain(`${verticalTab}NON-SERVICE.VT:${formFeed}preserved-end-to-end-vt`);
     expect(generated).toContain('UNRELATED=preserved-end-to-end');
 
     const result = runDev(root, { CHEKKU_NO_TMUX: '1', RELOAD_AGENT_ENV: '1' });

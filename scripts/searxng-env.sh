@@ -95,7 +95,7 @@ const { parse } = require('dotenv');
 const [sourcePath, outputPath] = process.argv.slice(2);
 const searxngKeys = ['SEARXNG_BASE_URL', 'SEARXNG_API_KEY'];
 const assignmentPattern = new RegExp(
-  '^[ \\t]*(?:export[ \\t]+)?([\\w.-]+)(?:[ \\t]*=[ \\t]*|:[ \\t]+)(.*)$',
+  '^[^\\S\\r\\n]*(?:export[^\\S\\r\\n]+)?([\\w.-]+)(?:[^\\S\\r\\n]*=[^\\S\\r\\n]*|:[^\\S\\r\\n]+)(.*)$',
 );
 const invalidAssignmentError = 'SearXNG application environment contains an invalid assignment.';
 const leakedValueError = 'SearXNG service-only values must not appear in agent environment.';

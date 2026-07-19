@@ -64,7 +64,7 @@ const garageKeys = [
   'GARAGE_SECRET_ACCESS_KEY',
 ];
 const assignmentPattern = new RegExp(
-  '^[ \\t]*(?:export[ \\t]+)?([\\w.-]+)(?:[ \\t]*=[ \\t]*|:[ \\t]+)(.*)$',
+  '^[^\\S\\r\\n]*(?:export[^\\S\\r\\n]+)?([\\w.-]+)(?:[^\\S\\r\\n]*=[^\\S\\r\\n]*|:[^\\S\\r\\n]+)(.*)$',
 );
 const invalidAssignmentError = 'Garage application environment contains an invalid assignment.';
 
