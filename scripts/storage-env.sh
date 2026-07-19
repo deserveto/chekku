@@ -63,11 +63,46 @@ const garageKeys = [
   'GARAGE_ACCESS_KEY_ID',
   'GARAGE_SECRET_ACCESS_KEY',
 ];
-const keyPattern = new RegExp(
-  `^[ \\t]*(?:export[ \\t]+)?(?:${garageKeys.join('|')})[ \\t]*=.*(?:\\r?\\n|$)`,
-  'gm',
+const assignmentPattern = new RegExp(
+  '^[ \\t]*(?:export[ \\t]+)?GARAGE_[A-Za-z0-9_]*[ \\t]*=[ \\t]*(.*)$',
 );
-const source = readFileSync(sourcePath, 'utf8').replace(keyPattern, '');
+const invalidAssignmentError = 'Garage application environment contains an invalid assignment.';
+
+const hasClosingQuote = (value, quote) => {
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] === quote && value[index - 1] !== '\\') {
+      return true;
+    }
+  }
+  return false;
+};
+
+const removeAssignments = (input) => {
+  const lines = input.match(/[^\r\n]*(?:\r\n|\n|$)/g)?.filter(Boolean) ?? [];
+  const kept = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const content = lines[index].replace(/\r?\n$/, '');
+    const assignment = content.match(assignmentPattern);
+    if (!assignment) {
+      kept.push(lines[index]);
+      continue;
+    }
+
+    const value = assignment[1].trimStart();
+    const quote = value[0];
+    if (quote === "'" || quote === '"' || quote === '`') {
+      let remainder = value.slice(1);
+      while (!hasClosingQuote(remainder, quote) && index + 1 < lines.length) {
+        index += 1;
+        remainder += lines[index];
+      }
+      if (!hasClosingQuote(remainder, quote)) throw new Error(invalidAssignmentError);
+    }
+  }
+  return kept.join('');
+};
+
+const source = removeAssignments(readFileSync(sourcePath, 'utf8'));
 
 const serialize = (name, value) => {
   if (/[\r\n]/.test(value)) {

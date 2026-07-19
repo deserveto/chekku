@@ -34,7 +34,7 @@ source "$ROOT/scripts/storage-env.sh"
 source "$ROOT/scripts/searxng-env.sh"
 
 if ! docker compose --env-file storage/.env.local config --quiet >/dev/null 2>&1; then
-  echo "Garage Compose configuration is invalid. Check compose.yaml and generated Garage configuration." >&2
+  echo "Local services Compose configuration is invalid. Check compose.yaml and generated service configuration." >&2
   exit 1
 fi
 
