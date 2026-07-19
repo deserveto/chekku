@@ -16,7 +16,7 @@ The launcher provisions local Garage and SearXNG configuration, waits for both s
 - Mastra on `http://localhost:4111`;
 - Next.js on `http://localhost:3000`.
 
-It generates and exports these application values to both server processes; do not copy generated credentials into tracked files:
+It generates and exports these five Garage application values to both the Mastra process and the Next.js server boundary; do not copy generated credentials into tracked files:
 
 ```text
 GARAGE_ENDPOINT
@@ -24,11 +24,16 @@ GARAGE_REGION
 GARAGE_BUCKET
 GARAGE_ACCESS_KEY_ID
 GARAGE_SECRET_ACCESS_KEY
+```
+
+For search, the launcher exports only these two application values to the Mastra process:
+
+```text
 SEARXNG_BASE_URL
 SEARXNG_API_KEY
 ```
 
-Only `SEARXNG_BASE_URL` and optional `SEARXNG_API_KEY` are SearXNG application configuration. Local `scripts/searxng-env.sh` also creates `searxng/.env.local` with a generated `SEARXNG_SECRET` and configuration hash for Docker Compose. Those values are private local service state: they are not copied to the agent or client application environments and must not be committed, logged, pasted, or configured as application variables.
+The Next.js client process receives zero `SEARXNG_*` values. Only `SEARXNG_BASE_URL` and optional `SEARXNG_API_KEY` are SearXNG application configuration. Local `scripts/searxng-env.sh` also creates `searxng/.env.local` with a generated `SEARXNG_SECRET` and configuration hash for Docker Compose. Those values are private local service state: they are not copied to the agent or client application environments and must not be committed, logged, pasted, or configured as application variables.
 
 ## Environment files
 

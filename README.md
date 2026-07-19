@@ -58,8 +58,13 @@ Next.js client :3000
 PM Agent / selected stored agent
   -> search_web
   -> fixed in-process SearXNG MCP/client
-  -> SearXNG :8888
+  -> server-owned SearXNG endpoint (Mastra-only configuration)
+       local: http://127.0.0.1:8888
+       external: configured HTTP(S) SearXNG service
   -> configured external search engines
+
+SearXNG endpoint and bearer configuration never enter browser code,
+model input, or stored-agent records.
 
 PM report tools / Next.js report service / Garage MCP
   -> @chekku/storage
