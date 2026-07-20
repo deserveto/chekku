@@ -67,6 +67,10 @@ describe('requested UI structure', () => {
   });
   it('offers only the whitelisted Garage and SearXNG MCP capabilities', () => {
     expect(agentBuilder).toContain('STUDIO_MCP_CLIENT_IDS.map');
+    expect(agentBuilder).toMatch(
+      /satisfies Record<\s*\(typeof STUDIO_MCP_CLIENT_IDS\)\[number\]/,
+    );
+    expect(agentBuilder).not.toContain('const MCP_META: Record<string');
     expect(agentBuilder).toContain(
       'Create, read, list, replace, and delete agent-isolated text objects in Garage.',
     );

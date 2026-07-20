@@ -71,7 +71,7 @@ const TOOL_META: Record<string, { title: string; description: string; icon: stri
   },
 };
 
-const MCP_META: Record<string, { title: string; description: string; icon: string }> = {
+const MCP_META = {
   garage: {
     title: 'Garage',
     description: 'Create, read, list, replace, and delete agent-isolated text objects in Garage.',
@@ -82,7 +82,10 @@ const MCP_META: Record<string, { title: string; description: string; icon: strin
     description: 'Search the web through the server-owned SearXNG instance and return result snippets.',
     icon: 'S',
   },
-};
+} satisfies Record<
+  (typeof STUDIO_MCP_CLIENT_IDS)[number],
+  { title: string; description: string; icon: string }
+>;
 
 function titleForTool(id: string): string {
   return TOOL_META[id]?.title ?? id;
