@@ -8,12 +8,14 @@ import { requestIdInjector, requestLogger } from '../config/middleware.js';
 import { mainAgent } from '../agents/main-agent.js';
 import { pmAgent } from '../agents/pm-agent.js';
 import { qaWebAgent } from '../agents/qa-web-agent.js';
+import { qaAndroidAgent } from '../agents/qa-android-agent.js';
 import {
   socialMediaAgent,
   registerSocialSlashCommands,
 } from '../agents/social-media-agent.js';
 import { OpenAICompatibleGateway } from './gateways/openai-compatible.js';
 import { garageMcpServer } from './mcp/garage-mcp-server.js';
+import { searxngMcpServer } from './mcp/searxng-mcp-server.js';
 import { healthRoute } from './routes/health.js';
 import { modelsRoute } from './routes/models.js';
 import { storedAgentTools } from './tools/registry.js';
@@ -28,9 +30,12 @@ const storage = new LibSQLStore({
 });
 
 export const mastra = new Mastra({
-  agents: { mainAgent, pmAgent, qaWebAgent, socialMediaAgent },
+  agents: { mainAgent, pmAgent, qaWebAgent, qaAndroidAgent, socialMediaAgent },
   workflows: { weeklySocialDrafts },
-  mcpServers: { garage: garageMcpServer },
+  mcpServers: {
+    garage: garageMcpServer,
+    searxng: searxngMcpServer,
+  },
   tools: storedAgentTools,
   storage,
   editor: new MastraEditor({ source: 'db' }),

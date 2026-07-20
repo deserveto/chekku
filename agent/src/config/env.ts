@@ -18,9 +18,19 @@ const envSchema = z.object({
   LLM_DISPLAY_NAME: z.string().default('OpenAI-compatible endpoint'),
   LLM_MODELS: z.string().default(''),
 
+  SEARXNG_BASE_URL: z.string().default(''),
+  SEARXNG_API_KEY: z.string().default(''),
+
   CHEKKU_DEFAULT_AGENT_ID: z.string().default('main-agent'),
   CHEKKU_LOCAL_USER_ID: z.string().default('local-user'),
   BROWSER_HEADLESS: z.enum(['true', 'false']).default('true'),
+
+  MAESTRO_ENABLED: z.enum(['true', 'false']).default('false'),
+  MAESTRO_COMMAND: z.string().default('maestro'),
+  MAESTRO_WORKSPACE: z.string().default('../maestro'),
+  MAESTRO_ARTIFACT_DIR: z.string().default('../artifacts/maestro'),
+  MAESTRO_TIMEOUT_MS: z.coerce.number().int().min(1).default(120000),
+  ADB_PATH: z.string().default('adb'),
 
   GARAGE_ENDPOINT: optionalUrl.default(''),
   GARAGE_REGION: z.string().default(''),

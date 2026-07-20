@@ -3,6 +3,29 @@ import { describe, expect, it } from 'vitest';
 import { loadEnv } from './env.js';
 
 describe('env config', () => {
+  it('uses empty server-owned SearXNG defaults', () => {
+    const value = loadEnv({});
+    expect(value.SEARXNG_BASE_URL).toBe('');
+    expect(value.SEARXNG_API_KEY).toBe('');
+  });
+
+  it('accepts only the two SearXNG application values', () => {
+    const value = loadEnv({
+      SEARXNG_BASE_URL: 'https://search.example.test/private/',
+      SEARXNG_API_KEY: 'search-secret',
+      SEARXNG_SECRET: 'must-be-ignored',
+    });
+    expect(value.SEARXNG_BASE_URL).toBe('https://search.example.test/private/');
+    expect(value.SEARXNG_API_KEY).toBe('search-secret');
+    expect(value).not.toHaveProperty('SEARXNG_SECRET');
+  });
+
+  it('defers SearXNG URL validation to the optional search capability', () => {
+    const value = loadEnv({ SEARXNG_BASE_URL: 'not-a-url' });
+
+    expect(value.SEARXNG_BASE_URL).toBe('not-a-url');
+  });
+
   it('uses neutral OpenAI-compatible defaults', () => {
     const value = loadEnv({});
 
@@ -64,5 +87,35 @@ describe('env config', () => {
     expect(() => loadEnv({ LLM_BASE_URL: 'not-a-url' })).toThrow();
     expect(() => loadEnv({ GARAGE_ENDPOINT: 'not-a-url' })).toThrow();
     expect(() => loadEnv({ LOG_LEVEL: 'trace' })).toThrow();
+  });
+
+  it('applies Maestro defaults (disabled by default)', () => {
+    const value = loadEnv({});
+
+    expect(value.MAESTRO_ENABLED).toBe('false');
+    expect(value.MAESTRO_COMMAND).toBe('maestro');
+    expect(value.MAESTRO_WORKSPACE).toBe('../maestro');
+    expect(value.MAESTRO_ARTIFACT_DIR).toBe('../artifacts/maestro');
+    expect(value.MAESTRO_TIMEOUT_MS).toBe(120000);
+    expect(value.ADB_PATH).toBe('adb');
+  });
+
+  it('accepts Maestro overrides and rejects invalid enabled flags', () => {
+    const value = loadEnv({
+      MAESTRO_ENABLED: 'true',
+      MAESTRO_COMMAND: '/usr/local/bin/maestro',
+      MAESTRO_WORKSPACE: '/abs/maestro',
+      MAESTRO_ARTIFACT_DIR: '/abs/artifacts/maestro',
+      MAESTRO_TIMEOUT_MS: '60000',
+      ADB_PATH: '/usr/local/bin/adb',
+    });
+
+    expect(value.MAESTRO_ENABLED).toBe('true');
+    expect(value.MAESTRO_COMMAND).toBe('/usr/local/bin/maestro');
+    expect(value.MAESTRO_TIMEOUT_MS).toBe(60000);
+    expect(value.ADB_PATH).toBe('/usr/local/bin/adb');
+
+    expect(() => loadEnv({ MAESTRO_ENABLED: 'yes' })).toThrow();
+    expect(() => loadEnv({ MAESTRO_TIMEOUT_MS: '0' })).toThrow();
   });
 });

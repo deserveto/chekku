@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { mainAgent } from '../main-agent.js';
 import { pmAgent } from '../pm-agent.js';
 import { qaWebAgent } from '../qa-web-agent.js';
+import { qaAndroidAgent } from '../qa-android-agent.js';
+import { socialMediaAgent } from '../social-media-agent.js';
 
 describe('main-agent (general Chekku Assistant)', () => {
   it('has id main-agent', () => {
@@ -36,7 +38,7 @@ describe('qa-web-agent (browser QA)', () => {
 });
 
 describe('pm-agent (weekly report analysis)', () => {
-  it('has built-in identity, memory, and only PM report tools', async () => {
+  it('has built-in identity, memory, and PM report plus search tools', async () => {
     expect(pmAgent.id).toBe('pm-agent');
     expect(pmAgent.name).toBe('PM Agent');
     expect(await pmAgent.getMemory()).toBeDefined();
@@ -45,6 +47,7 @@ describe('pm-agent (weekly report analysis)', () => {
     expect(Object.keys(tools).sort()).toEqual([
       'list_pm_reports_from_garage',
       'save_pm_report_to_garage',
+      'search_web',
       'view_pm_report_from_garage',
     ]);
     expect(await pmAgent.getDefaultOptions()).toMatchObject({ maxSteps: 12 });
@@ -120,4 +123,29 @@ it('qa-web-agent has Mastra memory for browser context', async () => {
   const memory = await qaWebAgent.getMemory();
 
   expect(memory).toBeDefined();
+});
+
+describe('qa-android-agent (Maestro Android QA)', () => {
+  it('has id qa-android-agent and name QA Android Agent', () => {
+    expect(qaAndroidAgent.id).toBe('qa-android-agent');
+    expect(qaAndroidAgent.name).toBe('QA Android Agent');
+  });
+
+  it('has Mastra memory', async () => {
+    expect(await qaAndroidAgent.getMemory()).toBeDefined();
+  });
+
+  it('binds run_maestro_flow, calculator, and current-time tools', async () => {
+    const tools = await qaAndroidAgent.listTools();
+    expect(Object.keys(tools).sort()).toEqual(
+      expect.arrayContaining(['calculatorTool', 'getCurrentTimeTool', 'run_maestro_flow']),
+    );
+  });
+});
+
+describe('agent differentiation (all five agents)', () => {
+  it('has mutually distinct ids', () => {
+    const ids = [mainAgent.id, pmAgent.id, qaWebAgent.id, qaAndroidAgent.id, socialMediaAgent.id];
+    expect(new Set(ids).size).toBe(ids.length);
+  });
 });

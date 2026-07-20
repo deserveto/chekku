@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ApiRoute } from '@mastra/core/server';
 import { healthRoute } from '../mastra/routes/health.js';
 import { garageMcpServer } from '../mastra/mcp/garage-mcp-server.js';
+import { searxngMcpServer } from '../mastra/mcp/searxng-mcp-server.js';
 import { mastra } from '../mastra/index.js';
 
 async function json(response: unknown): Promise<unknown> {
@@ -26,11 +27,13 @@ describe('agent server routes', () => {
     expect(Object.keys(mastra.listAgents()).sort()).toEqual([
       'mainAgent',
       'pmAgent',
+      'qaAndroidAgent',
       'qaWebAgent',
       'socialMediaAgent',
     ]);
     expect(mastra.listMCPServers()).toEqual({
       garage: garageMcpServer,
+      searxng: searxngMcpServer,
     });
 
     const server = mastra.getServer();

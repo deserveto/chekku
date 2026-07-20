@@ -73,4 +73,29 @@ describe('agent-scoped memory threads', () => {
     expect(threadUpdate).not.toHaveBeenCalled();
     expect(threadDelete).not.toHaveBeenCalled();
   });
+
+  it('returns an empty list when the thread does not exist yet (upstream 404 status)', async () => {
+    threadListMessages.mockRejectedValueOnce(
+      Object.assign(new Error('Request failed with 404'), { status: 404 }),
+    );
+    await expect(
+      listThreadMessages('main-agent', 'main-agent-local-user-a', 'local-user'),
+    ).resolves.toEqual([]);
+  });
+
+  it('returns an empty list when the upstream reports not-found via message', async () => {
+    threadListMessages.mockRejectedValueOnce(new Error('Thread not found'));
+    await expect(
+      listThreadMessages('main-agent', 'main-agent-local-user-a', 'local-user'),
+    ).resolves.toEqual([]);
+  });
+
+  it('re-throws errors that are not thread-not-found', async () => {
+    threadListMessages.mockRejectedValueOnce(
+      Object.assign(new Error('Server error'), { status: 500 }),
+    );
+    await expect(
+      listThreadMessages('main-agent', 'main-agent-local-user-a', 'local-user'),
+    ).rejects.toThrow('Server error');
+  });
 });

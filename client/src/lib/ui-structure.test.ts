@@ -14,6 +14,10 @@ const chatStudio = readFileSync(
   new URL('../components/chat/chat-studio.tsx', import.meta.url),
   'utf8',
 );
+const agentCatalogSource = readFileSync(
+  new URL('../components/agents/agent-catalog-page.tsx', import.meta.url),
+  'utf8',
+);
 const agentBuilder = readFileSync(
   new URL('../components/agents/agent-builder-page.tsx', import.meta.url),
   'utf8',
@@ -65,18 +69,25 @@ describe('requested UI structure', () => {
     expect(rule).not.toContain('position: sticky');
     expect(rule).not.toContain('backdrop-filter');
   });
-  it('offers only the whitelisted Garage MCP capability', () => {
+  it('offers only the whitelisted Garage and SearXNG MCP capabilities', () => {
     expect(agentBuilder).toContain('STUDIO_MCP_CLIENT_IDS.map');
+    expect(agentBuilder).toMatch(
+      /satisfies Record<\s*\(typeof STUDIO_MCP_CLIENT_IDS\)\[number\]/,
+    );
+    expect(agentBuilder).not.toContain('const MCP_META: Record<string');
     expect(agentBuilder).toContain(
       'Create, read, list, replace, and delete agent-isolated text objects in Garage.',
     );
+    expect(agentBuilder).toContain(
+      'Search the web through the server-owned SearXNG instance and return result snippets.',
+    );
     expect(agentBuilder).toContain("set('mcpClients', toggle(values.mcpClients, mcpClientId))");
     expect(agentBuilder).not.toMatch(
-      /mcpUrl|mcpCommand|mcpPackage|mcpCredentials/,
+      /mcpUrl|mcpCommand|mcpPackage|mcpCredentials|SEARXNG_BASE_URL|SEARXNG_API_KEY/,
     );
   });
 
-  it('preserves Garage selection through detail hydration and model migration', () => {
+  it('preserves Garage, SearXNG, or both selections through detail hydration and model migration', () => {
     expect(storedAgents).toContain('mcpClients: readMcpClientIds(record.mcpClients)');
     expect(storedAgents).toContain('mcpClients: detail.mcpClients');
   });
@@ -102,5 +113,9 @@ describe('requested UI structure', () => {
   it('reserves the PM built-in id in the shared identity set', () => {
     expect(types).toContain("export const PM_AGENT_ID = 'pm-agent'");
     expect(types).toMatch(/RESERVED_AGENT_IDS[\s\S]*PM_AGENT_ID/);
+  });
+
+  it('renders an Android glyph for qa-android-agent in the catalog', () => {
+    expect(agentCatalogSource).toContain("agent.id === 'qa-android-agent' ? '▷'");
   });
 });

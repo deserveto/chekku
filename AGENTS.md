@@ -23,9 +23,11 @@ Read these first:
 5. `storage/src/index.ts` — shared generic object-storage and PM report APIs.
 6. `client/src/server/pm-reports.ts` — authenticated server-only PM report boundary.
 7. `agent/src/mastra/mcp/garage-mcp-server.ts` — built-in generic Garage MCP capability.
-8. `agent/src/mastra/gateways/openai-compatible.ts` — final model transport.
-9. `docs/ARCHITECTURE.md` — runtime structure and data flow.
-10. `docs/OPERATIONS.md` — environment and troubleshooting.
+8. `agent/src/mastra/mcp/searxng-mcp-server.ts` — built-in fixed SearXNG MCP capability.
+9. `agent/src/mastra/searxng/client.ts` — bounded SearXNG transport and output normalization.
+10. `agent/src/mastra/gateways/openai-compatible.ts` — final model transport.
+11. `docs/ARCHITECTURE.md` — runtime structure and data flow.
+12. `docs/OPERATIONS.md` — environment and troubleshooting.
 
 ## Required commands
 
@@ -71,8 +73,9 @@ A task is not complete until affected tests pass. Before finalizing any reposito
 - Garage MCP and server-side code share `@chekku/storage`; browser components must never import it or access Garage directly.
 - PM report persistence composes the generic contract in `storage/src/pm-reports.ts`; it must not add PM semantics to Garage MCP.
 - Garage application configuration uses only `GARAGE_ENDPOINT`, `GARAGE_REGION`, `GARAGE_BUCKET`, `GARAGE_ACCESS_KEY_ID`, and `GARAGE_SECRET_ACCESS_KEY`.
-- Generated `storage/.env.local`, `storage/.garage/`, and `agent/.env.development` stay ignored. Never expose their secrets in logs, docs, errors, or commits.
+- Generated `storage/.env.local`, `storage/.garage/`, `searxng/.env.local`, and `agent/.env.development` stay ignored. Never expose their secrets in logs, errors, or commits; documentation may identify internal service state by variable name only.
 - Conversation history uses Mastra Memory, not custom conversation tables.
+- Every agent must bound its context to prevent overflow using all three helpers from `agent/src/mastra/processors/context-limit.ts`: `createAgentMemory()` (sets `lastMessages`), `createAgentContextLimiter()` (a `TokenLimiterProcessor`) in `inputProcessors`, and `createCharBudgetGuard()` (a `processLLMRequest` backstop) wired LAST in `inputProcessors` (after the gateway compatibility processor where present). Never use bare `new Memory()` — tokenx (the `TokenLimiterProcessor` estimator) under-counts dense tool output, notably base64 screenshots (empirically ~1.67× drift vs real BPE), so heavy multi-step turns can exceed the real model window even when the estimate says they fit; the char-budget guard is what actually prevents overflow within a single multi-step turn.
 - A thread ID must use this format:
 
 ```text
@@ -109,10 +112,24 @@ LLM_MODELS
 
 ### QA Web Agent
 
-- `qa-web-agent` must keep `memory: new Memory()` because browser context processing requires active Memory context.
+- `qa-web-agent` must keep `memory: createAgentMemory()` with `createAgentContextLimiter()` and `createCharBudgetGuard()` wired into `inputProcessors` (guard last, after the gateway compatibility processor), because browser context processing requires active Memory context.
 - Keep the gateway compatibility processor unless tests prove it is no longer needed.
-- Browser actions that submit forms, purchase, publish, delete, or cause external consequences require approval.
+- No tool requires approval; browser actions (form submit, purchase, publish, delete) run directly.
 - Do not add endpoint-specific discovery tools to the QA agent. Model discovery belongs in the gateway and `/models` route.
+
+### QA Android Agent
+
+- Keep `qa-android-agent` code-defined with Mastra Memory and the gateway compatibility processor.
+- Bind a trusted, env-gated `MCPClient` to `maestro mcp` privately on this agent only; do not add it to the global `mcpServers` (which stays fixed to `garage`).
+- Expose only the explicit Maestro tool allowlist (`list_devices`, `inspect_screen`, `take_screenshot`, `cheat_sheet`, `run`); never expose `run_flow_files`, cloud tools, or `open_maestro_viewer`. Never auto-attach every tool from `listTools()`.
+- No tool requires approval; `maestro_run` (flow execution, incl. inline/generated YAML) and the curated `run_maestro_flow` run directly. There are no granular single-action tools.
+- A read-only `current_app` tool (adb-backed via `ADB_PATH`) returns the foreground app's package so the agent can self-serve the `appId` instead of asking; it never mutates the device.
+- On Windows, route the Maestro `.bat`/`.cmd` command through `cmd.exe /c` (Node blocks direct `.bat` spawn since CVE-2024-27980).
+- The curated flow runner accepts logical `{ suite, flow }` names only; reject absolute paths, `..`, backslashes, caller-supplied extensions, and non-regular files; resolve real-path containment after symlinks.
+- Run flows via `execFile` with an argv array (never a shell string), `--format junit --output` and `--test-output-dir` into `artifacts/maestro/<runId>/`, with `MAESTRO_TIMEOUT_MS`, bounded output, and child cleanup.
+- Never report a test Passed unless Maestro exited 0.
+- `MAESTRO_ENABLED` defaults to `false`; the server boots normally without Maestro.
+- A failed Maestro MCP load (bad command, crashed subprocess, timeout, protocol error) is logged once with a `[qa-android-agent]` prefix and cached as empty for the lifetime of the server process; an operator must restart the agent server to retry.
 
 ### Social Media Agent
 
@@ -120,7 +137,7 @@ LLM_MODELS
 - Preserve `/help`, `/roles`, `/role`, and `/switch` registration after `AgentChannels` initialization.
 - Telegram uses `TELEGRAM_BOT_TOKEN`, `TELEGRAM_MODE`, optional `TELEGRAM_BOT_USERNAME`, and optional `TELEGRAM_WEBHOOK_SECRET_TOKEN` only.
 - Email uses server-only `RESEND_API_KEY` and `RESEND_FROM_EMAIL`; never expose either to browser code.
-- Preserve approval flow for outbound email and consequential channel actions.
+- Outbound email and channel actions run directly (no approval gate).
 - The scheduled `weekly-social-drafts` workflow drafts through `socialMediaAgent.generate(..., { instructions })` and pins the role via `buildInstructionsForRole('instagram-writer')`. The workflow runs outside any chat channel, so the role must not be resolved from channel `requestContext`. Telegram is not part of the scheduled flow.
 
 ### Client proxy and identity
@@ -142,12 +159,28 @@ LLM_MODELS
 - Derive identity only from trusted `context.agent.agentId`; reject missing context before storage access and never accept agent IDs in tool input.
 - Physical keys use `agents/<base64url-agent-id>/<validated-relative-key>`. Expose relative keys only.
 - Enforce 512 UTF-8-byte relative keys, 262,144 UTF-8-byte text, and 100-key public lists with a `truncated` flag.
-- Keep create conditional. Require approval for replace and delete. Preserve accurate MCP annotations.
+- Keep create conditional. Replace and delete run directly (no approval gate). Preserve accurate MCP annotations.
 - Return fixed actionable storage errors without credentials, endpoints, headers, raw provider responses, or request IDs.
+
+### SearXNG MCP
+
+- Register the built-in server as `mcpServers: { searxng: searxngMcpServer }` with fixed MCP ID `searxng` and exactly one tool, `search_web`. Reject runtime registry mutation and arbitrary MCP URLs, commands, packages, headers, environment values, credentials, and tool overrides.
+- PM Agent consumes the reusable `search_web` tool directly. Stored-agent SearXNG selection persists only `mcpClients: { searxng: { tools: {} } }` and hydrates the fixed in-process MCP server.
+- Application configuration uses only server-owned `SEARXNG_BASE_URL` and optional `SEARXNG_API_KEY`. Keep endpoint and bearer token out of stored records, browser code, model input, tool output, logs, and safe errors.
+- Keep local SearXNG service credentials and config hash private in generated `searxng/.env.local`; they are service-only state, not application configuration.
+- `search_web` accepts a trimmed non-empty query of at most 1,024 UTF-8 bytes; `maxResults` is 1-20 (default 10), `page` is 1-5 (default 1), categories contain at most 5 unique values, engines contain at most 10 unique values, `safeSearch` is 0, 1, or 2, and `timeRange` is `day`, `month`, or `year`.
+- Send requests only to fixed `GET {SEARXNG_BASE_URL}/config` and `POST {SEARXNG_BASE_URL}/search` paths. Use `/config` only to validate optional language, category, and engine targeting. Reject redirects and share one 12-second deadline across capability validation and search.
+- POST exactly fixed form fields `q`, `format=json`, and `pageno`, plus only approved optional fields `language`, `categories`, `engines`, `time_range`, and `safesearch`. Never forward arbitrary model-provided form fields.
+- Treat `maxResults` as a local deterministic slice after response normalization; do not send it upstream. Issue exactly one search request for the requested `page` and never paginate automatically.
+- Accept JSON only and stop reading upstream bodies above 2 MiB. Return at most 20 results and 131,072 UTF-8 bytes total. Per result, allow only HTTP(S) URL up to 2,048 bytes, title up to 512, snippet up to 4,096, at most 8 unique engine names of 128 each, optional category up to 128, and optional finite numeric score. Include a date only when the upstream published date parses validly, normalized to ISO `publishedAt`; omit invalid dates. Return at most 5 answers of 2,048 bytes, 10 corrections of 512, and 10 suggestions of 512, with `truncated` marking omitted or shortened data.
+- Return fixed actionable configuration, availability, timeout, format, size, response, targeting, and input errors. Never expose endpoint URLs, bearer tokens, search queries, upstream bodies, diagnostics, headers, or request IDs.
+- Preserve MCP annotations `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: true`, and `openWorldHint: true`; search requires no approval. This capability returns result metadata and snippets only and never downloads result pages.
+- Web Reader and PM competitive-analysis behavior remain deferred to separate independently reviewed work. Do not promise page reading or a five-product analysis from this search foundation.
+- Keep Garage MCP unchanged at exactly its five generic object tools. SearXNG tools must never enter the Garage registry.
 
 ### PM reports
 
-- Keep `pm-agent` code-defined and protected, with `memory: new Memory()` and tools `save_pm_report_to_garage`, `list_pm_reports_from_garage`, and `view_pm_report_from_garage` registered only on that agent.
+- Keep `pm-agent` code-defined and protected, with `memory: createAgentMemory()` plus `createAgentContextLimiter()` and `createCharBudgetGuard()` in `inputProcessors`, and tools `save_pm_report_to_garage`, `list_pm_reports_from_garage`, and `view_pm_report_from_garage` registered only on that agent.
 - Bind every PM tool and server-side report operation to fixed namespace `pm-agent`; never accept namespace or agent identity from model, route, browser, or local user input.
 - Persist and expose only relative `pm-reports/<reportId>/...` metadata keys. Never leak physical `agents/<base64url-agent-id>/...` prefixes.
 - Do not migrate or fall back to old global development report objects.
@@ -190,9 +223,9 @@ Add regression tests for behavior changes, especially:
 - thread ID creation and ownership;
 - proxy URL validation and method support;
 - sidebar and route structure;
-- shared Garage storage, namespace isolation, PM reports/APIs/pages/tables, social posts/APIs/pages/tables, scheduled workflow topic selection and orchestration, MCP hydration, and launcher structure;
+- shared Garage storage, namespace isolation, PM reports/APIs/pages/tables, social posts/APIs/pages/tables, fixed Garage and SearXNG MCP hydration, bounded SearXNG search, scheduled workflow topic selection and orchestration, and launcher structure;
 - QA agent Memory and browser integration.
-- Social agent roles, Telegram slash registration, email approval behavior, and the scheduled social-drafts workflow.
+- Social agent roles, Telegram slash registration, email delivery behavior, and the scheduled social-drafts workflow.
 
 Tests use Vitest. Keep tests alongside the relevant module or in the existing `__tests__` folder. Do not add a second test runner for new tests.
 
@@ -212,7 +245,7 @@ The root `README.md` is the public onboarding document. `docs/ARCHITECTURE.md` d
 
 ## Files that must not be committed
 
-- `.env` and `.env.local` files containing secrets;
+- `.env` and `.env.local` files containing secrets, including `searxng/.env.local`;
 - `node_modules/`, `.next/`, `.mastra/`, `dist/`, coverage, and TypeScript build info;
 - `mastra.db`, WAL, SHM, SQLite, or other local database files;
 - browser recordings, Playwright output, screenshots used only for local debugging;

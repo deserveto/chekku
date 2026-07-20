@@ -25,7 +25,59 @@ function request(method: string, path: string, body?: unknown): NextRequest {
   });
 }
 
-const mutationRoute = (method: string) => ({ POST, PATCH, PUT })[method as 'POST' | 'PATCH' | 'PUT'];
+type MutationMethod = 'POST' | 'PATCH' | 'PUT';
+
+const mutationRoutes = { POST, PATCH, PUT } as const;
+const mutationCases = [
+  ['normalized', 'POST', ['stored', 'agents']],
+  ['normalized', 'PATCH', ['stored', 'agents', 'demo']],
+  ['normalized', 'PUT', ['stored', 'agents', 'demo']],
+  ['aliased', 'POST', ['api', 'stored', 'agents']],
+  ['aliased', 'PATCH', ['api', 'stored', 'agents', 'demo']],
+  ['aliased', 'PUT', ['api', 'stored', 'agents', 'demo']],
+] as const satisfies readonly (readonly [string, MutationMethod, readonly string[]])[];
+const allowedMcpBodies = [
+  ['absent', { id: 'plain' }],
+  ['Garage', { mcpClients: { garage: { tools: {} } } }],
+  ['SearXNG', { mcpClients: { searxng: { tools: {} } } }],
+  ['Garage and SearXNG', {
+    mcpClients: {
+      garage: { tools: {} },
+      searxng: { tools: {} },
+    },
+  }],
+] as const;
+const rejectedMcpBodies = [
+  ['empty map', { mcpClients: {} }],
+  ['null map', { mcpClients: null }],
+  ['array map', { mcpClients: [] }],
+  ['unknown id', { mcpClients: { unknown: { tools: {} } } }],
+  ['prototype-named id', JSON.parse('{"mcpClients":{"__proto__":{"tools":{}}}}')],
+  ['URL', { mcpClients: { searxng: { url: 'https://evil.test' } } }],
+  ['command and args', { mcpClients: { searxng: { command: 'npx', args: ['evil'] } } }],
+  ['package', { mcpClients: { searxng: { package: 'evil-package' } } }],
+  ['environment', { mcpClients: { searxng: { tools: {}, env: { TOKEN: 'secret' } } } }],
+  ['credentials', { mcpClients: { searxng: { tools: {}, credentials: { token: 'secret' } } } }],
+  ['headers', { mcpClients: { searxng: { tools: {}, headers: { Authorization: 'secret' } } } }],
+  ['tool override', { mcpClients: { searxng: { tools: { search_web: {} } } } }],
+  ['extra client', {
+    mcpClients: {
+      garage: { tools: {} },
+      searxng: { tools: {} },
+      extra: {},
+    },
+  }],
+  ['null client', { mcpClients: { searxng: null } }],
+  ['array client', { mcpClients: { searxng: [] } }],
+  ['null tools', { mcpClients: { searxng: { tools: null } } }],
+  ['array tools', { mcpClients: { searxng: { tools: [] } } }],
+  ['extra value field', { mcpClients: { searxng: { tools: {}, extra: true } } }],
+] as const;
+
+const allowedCases = mutationCases.flatMap(([shape, method, path]) =>
+  allowedMcpBodies.map(([selection, body]) => [shape, method, path, selection, body] as const));
+const rejectedCases = mutationCases.flatMap(([shape, method, path]) =>
+  rejectedMcpBodies.map(([attack, body]) => [shape, method, path, attack, body] as const));
 
 describe('agent proxy', () => {
   beforeEach(() => {
@@ -33,76 +85,43 @@ describe('agent proxy', () => {
     process.env.AGENT_URL = 'http://agent.internal:4111';
   });
 
-  it.each([
-    ['POST', ['stored', 'agents'], { mcpClients: {} }],
-    ['POST', ['stored', 'agents'], { mcpClients: { evil: { url: 'https://example.test/mcp' } } }],
-    ['PATCH', ['stored', 'agents', 'demo'], { mcpClients: { garage: { url: 'https://example.test/mcp' } } }],
-    ['PATCH', ['stored', 'agents', 'demo'], { mcpClients: { garage: { command: 'npx', args: ['evil'] } } }],
-    ['PATCH', ['stored', 'agents', 'demo'], { mcpClients: { garage: { tools: {}, env: { API_KEY: 'secret' } } } }],
-  ])('rejects noncanonical MCP config on %s /%s', async (method, path, body) => {
+  it.each(rejectedCases)('rejects %s %s /%s MCP %s', async (_shape, method, path, _attack, body) => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
-    const route = method === 'POST' ? POST : PATCH;
 
-    const response = await route(request(method, path.join('/'), body), context(path));
+    const response = await mutationRoutes[method](
+      request(method, path.join('/'), body),
+      context([...path]),
+    );
 
     expect(response.status).toBe(400);
     await expect(response.text()).resolves.toBe('Invalid stored-agent MCP configuration.');
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('forwards absent and canonical stored-agent MCP configuration', async () => {
-    const fetchMock = vi.fn(async () => new Response('streamed', {
-      status: 201,
-      headers: { 'content-type': 'text/event-stream' },
-    }));
-    vi.stubGlobal('fetch', fetchMock);
-
-    const absent = await POST(request('POST', 'stored/agents', { id: 'plain' }), context(['stored', 'agents']));
-    const canonical = await PATCH(request('PATCH', 'stored/agents/demo', {
-      mcpClients: { garage: { tools: {} } },
-    }), context(['stored', 'agents', 'demo']));
-
-    expect(absent.status).toBe(201);
-    await expect(absent.text()).resolves.toBe('streamed');
-    expect(canonical.status).toBe(201);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
-
-  it.each([
-    ['POST', ['api', 'stored', 'agents'], { mcpClients: { evil: { url: 'https://example.test/mcp' } } }],
-    ['PATCH', ['api', 'stored', 'agents', 'demo'], { mcpClients: { garage: { command: 'npx', args: ['evil'] } } }],
-    ['PUT', ['api', 'stored', 'agents', 'demo'], { mcpClients: { garage: { tools: {}, env: { API_KEY: 'secret' } } } }],
-  ])('rejects noncanonical MCP config on aliased %s /%s', async (method, path, body) => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
-
-    const response = await mutationRoute(method)(request(method, path.join('/'), body), context(path));
-
-    expect(response.status).toBe(400);
-    await expect(response.text()).resolves.toBe('Invalid stored-agent MCP configuration.');
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ['POST', ['api', 'stored', 'agents']],
-    ['PATCH', ['api', 'stored', 'agents', 'demo']],
-    ['PUT', ['api', 'stored', 'agents', 'demo']],
-  ])('forwards exact Garage config on aliased %s /%s', async (method, path) => {
+  it.each(allowedCases)('forwards %s %s /%s with %s MCP selection', async (
+    _shape,
+    method,
+    path,
+    _selection,
+    body,
+  ) => {
     const fetchMock = vi.fn(async () => new Response('streamed', {
       status: 200,
       headers: { 'content-type': 'text/event-stream' },
     }));
     vi.stubGlobal('fetch', fetchMock);
 
-    const response = await mutationRoute(method)(request(method, path.join('/'), {
-      mcpClients: { garage: { tools: {} } },
-    }), context(path));
+    const response = await mutationRoutes[method](
+      request(method, path.join('/'), body),
+      context([...path]),
+    );
 
     expect(response.status).toBe(200);
     await expect(response.text()).resolves.toBe('streamed');
+    const upstreamPath = path[0] === 'api' ? path : ['api', ...path];
     expect(fetchMock).toHaveBeenCalledWith(
-      `http://agent.internal:4111/${path.join('/')}`,
+      `http://agent.internal:4111/${upstreamPath.join('/')}`,
       expect.objectContaining({ method }),
     );
   });

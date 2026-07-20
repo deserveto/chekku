@@ -10,6 +10,7 @@ storage/.env.local
 storage/.garage/
 storage/.garage-data/
 storage/.garage-meta/
+searxng/.env.local
 
 # Build output and caches
 .next/
@@ -17,6 +18,7 @@ out/
 build/
 dist/
 .mastra/
+agent/src/mastra/public/
 .turbo/
 .cache/
 coverage/
@@ -36,6 +38,7 @@ playwright-report/
 test-results/
 .nyc_output/
 *.log
+artifacts/
 
 # Local tooling and editors
 .vscode/
