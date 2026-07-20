@@ -27,6 +27,7 @@ describe('agent server routes', () => {
     expect(Object.keys(mastra.listAgents()).sort()).toEqual([
       'mainAgent',
       'pmAgent',
+      'qaAndroidAgent',
       'qaWebAgent',
       'socialMediaAgent',
     ]);

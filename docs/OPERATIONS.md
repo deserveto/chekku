@@ -183,7 +183,7 @@ docker compose --env-file storage/.env.local --env-file searxng/.env.local down
 
 Do not commit or paste contents from `storage/.env.local`, `storage/.garage/`, `searxng/.env.local`, or generated `agent/.env.development`. Removing Garage volumes destroys local agent objects and is intentionally not part of normal reset instructions; removing SearXNG cache is also unnecessary for application reset.
 
-Garage MCP validates relative keys before access, limits keys to 512 UTF-8 bytes, limits text to 262,144 UTF-8 bytes, and returns at most 100 list entries. Physical objects are isolated under `agents/<base64url-agent-id>/`; tool callers see relative keys only. Replace and delete require user approval.
+Garage MCP validates relative keys before access, limits keys to 512 UTF-8 bytes, limits text to 262,144 UTF-8 bytes, and returns at most 100 list entries. Physical objects are isolated under `agents/<base64url-agent-id>/`; tool callers see relative keys only. Replace and delete run directly (no approval gate).
 
 Garage v2.3.0 does not process destination `If-Match`/`If-None-Match` headers for PUT or DELETE. The adapter serializes same-key mutations in one process and performs an immediate existence check; it also sends `If-None-Match` on create for S3 providers that support it. This prevents stale races among calls through one adapter instance, but an external writer can still race a Garage mutation. Do not claim cross-process compare-and-swap semantics until the pinned Garage release supports those conditions.
 
@@ -220,7 +220,7 @@ PM report tools are not exposed by Garage MCP. Generic stored-agent Garage acces
 BROWSER_HEADLESS=true
 ```
 
-Set it to `false` during local debugging when a visible browser is useful. The QA Web Agent keeps Memory enabled and may request approval for interactive browser actions.
+Set it to `false` during local debugging when a visible browser is useful. The QA Web Agent keeps Memory enabled and runs browser actions directly (no approval gate).
 
 Browser automation can fail when a site:
 
@@ -230,6 +230,37 @@ Browser automation can fail when a site:
 - uses unsupported browser features.
 
 Report the blocker rather than bypassing access controls.
+
+## Android QA (qa-android-agent)
+
+```dotenv
+MAESTRO_ENABLED=false
+MAESTRO_COMMAND=maestro
+MAESTRO_WORKSPACE=../maestro
+MAESTRO_ARTIFACT_DIR=../artifacts/maestro
+MAESTRO_TIMEOUT_MS=120000
+ADB_PATH=adb
+```
+
+Chekku, the Maestro CLI, ADB, and an Android emulator or physical device must be reachable on the same machine. Confirm with `adb devices` before enabling.
+
+`MAESTRO_ENABLED` defaults to `false`; the server boots normally without Maestro installed. Set it to `true` only on a machine with Maestro, ADB, and a device.
+
+Under the local dev server (`mastra dev`), the process cwd is `agent/src/mastra/public/` (not the agent workspace), and Mastra loads `agent/.env.development` rather than `agent/.env`. Put `MAESTRO_*` values in `agent/.env.development` for local dev, and use absolute paths for `MAESTRO_WORKSPACE` and `MAESTRO_ARTIFACT_DIR` (e.g. `MAESTRO_WORKSPACE=C:\dev\chekku\maestro`). The `../maestro` default is resolved relative to that `public/` cwd, so it would otherwise land flows and artifacts under `agent/src/maestro/` instead of the repo root.
+
+The agent exposes an allowlisted subset of the built-in `maestro mcp` tools: `list_devices`, `inspect_screen`, `take_screenshot`, `cheat_sheet`, and `run`. `run_flow_files`, the cloud tools, and `open_maestro_viewer` are never attached. No tool requires approval — `maestro_run` (which executes flows, including inline/generated YAML) and the curated `run_maestro_flow` runner execute directly. There are no granular single-action tools — every device interaction (tap/input/back/launch) goes through `maestro_run` as inline YAML.
+
+On Windows the Maestro command is typically a `.bat`/`.cmd`; the agent routes it through `cmd.exe /c` automatically (Node refuses to spawn `.bat` directly). If `MAESTRO_COMMAND` is on PATH as a plain executable, no wrapping is needed.
+
+`run_maestro_flow` accepts logical names only (`{ suite: 'smoke', flow: 'login' }`), resolves them under `MAESTRO_WORKSPACE`, rejects traversal/absolute paths/backslashes, and writes JUnit reports and artifacts to `MAESTRO_ARTIFACT_DIR/<runId>/`. It never reports Passed unless Maestro exits 0.
+
+The read-only `current_app` tool runs `adb shell dumpsys activity activities` (via `ADB_PATH`, default `adb`) and returns the foreground app's package name, so the agent can determine the `appId` itself instead of asking.
+
+Common failures:
+
+- **Maestro MCP reports missing tools / connection refused** — confirm `maestro mcp` starts manually and `MAESTRO_ENABLED=true` after restart.
+- **No device** — the agent returns a Blocked result; start an emulator or connect a device and re-run.
+- **Flow not found** — confirm the logical name maps to `<workspace>/<suite>/<flow>.yaml` and that the file is a regular file inside the workspace.
 
 ## Telegram channel (social-media-agent)
 
@@ -253,7 +284,7 @@ RESEND_API_KEY=
 RESEND_FROM_EMAIL=Chekku <onboarding@resend.dev>
 ```
 
-Get a key at [resend.com](https://resend.com). The default `onboarding@resend.dev` sender can only deliver to the account owner; production should use a Resend-verified domain in `RESEND_FROM_EMAIL`. Every delivery requires approval. The tool fails with a clear error when `RESEND_API_KEY` is missing.
+Get a key at [resend.com](https://resend.com). The default `onboarding@resend.dev` sender can only deliver to the account owner; production should use a Resend-verified domain in `RESEND_FROM_EMAIL`. Deliveries run directly (no approval gate). The tool fails with a clear error when `RESEND_API_KEY` is missing.
 
 ## Common failures
 
@@ -397,7 +428,7 @@ npm run build
 git diff --check
 ```
 
-The test suite covers model routing, model discovery, prompt normalization, all four built-in agents, Telegram roles and slash commands, email approval flow, PM tools and repositories, report APIs/pages and accessible tables, stored-agent payloads and fixed Garage/SearXNG hydration, bounded search transport and safe errors, stored-model migration, thread ownership, proxy paths, UI structure, namespaced storage, Garage adapter safety, and launcher behavior.
+The test suite covers model routing, model discovery, prompt normalization, all five built-in agents, Telegram roles and slash commands, email delivery, PM tools and repositories, report APIs/pages and accessible tables, stored-agent payloads and fixed Garage/SearXNG hydration, bounded search transport and safe errors, stored-model migration, thread ownership, proxy paths, UI structure, namespaced storage, Garage adapter safety, Maestro flow runner, char-budget guard, and launcher behavior.
 
 ## Production notes
 
@@ -409,6 +440,6 @@ Before deploying beyond local development:
 - restrict `WEB_URL` to the deployed client origin;
 - configure an authenticated server-to-server hop if the Mastra service is exposed separately;
 - configure `SEARXNG_BASE_URL` and optional `SEARXNG_API_KEY` only in the agent service or deployment secret manager; keep the endpoint private or protect it with a reverse proxy;
-- review browser approval and network policies;
+- review browser and network policies;
 - if the social-media-agent is enabled, set `TELEGRAM_MODE=webhook` with a public URL and `TELEGRAM_WEBHOOK_SECRET_TOKEN`, and provision a Resend-verified sender for the send-email tool;
 - add rate limits, audit logging, and backup procedures appropriate to the environment.

@@ -2,9 +2,9 @@ import { Agent, type AgentConfig, type ToolsInput } from '@mastra/core/agent';
 import type { ChannelHandler } from '@mastra/core/channels';
 import { createTelegramAdapter } from '@chat-adapter/telegram';
 import type { Channel, Chat, Message, Thread } from 'chat';
-import { Memory } from '@mastra/memory';
 
 import { gatewayCompatibilityProcessor } from '../mastra/processors/gateway-compatibility.js';
+import { createAgentContextLimiter, createAgentMemory, createCharBudgetGuard } from '../mastra/processors/context-limit.js';
 import { getCurrentTimeTool } from '../mastra/tools/get-current-time.js';
 import { sendEmailTool } from '../mastra/tools/send-email.js';
 import { getServerModel } from '../providers/model.js';
@@ -322,7 +322,7 @@ const socialMediaAgentConfig: AgentConfig<string, ToolsInput, undefined, Provide
     'Generic, role-switchable social media assistant. Drafts, repurposes, and plans posts for X, Instagram, LinkedIn, and TikTok. Reachable over Telegram when TELEGRAM_BOT_TOKEN is configured.',
   model: () => getServerModel(),
   requestContextSchema: providerContextSchema,
-  memory: new Memory(),
+  memory: createAgentMemory(),
   tools: { getCurrentTimeTool, sendEmailTool },
   // Channels are only wired when Telegram is configured, so the agent (and the
   // server) boot fine without TELEGRAM_BOT_TOKEN. With no adapter there is no
@@ -339,7 +339,7 @@ const socialMediaAgentConfig: AgentConfig<string, ToolsInput, undefined, Provide
         },
       }
     : {}),
-  inputProcessors: [gatewayCompatibilityProcessor],
+  inputProcessors: [createAgentContextLimiter(), gatewayCompatibilityProcessor, createCharBudgetGuard()],
   instructions: ({ requestContext }) =>
     buildInstructions(getActiveRole(extractResourceId(requestContext))),
 };

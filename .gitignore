@@ -18,6 +18,7 @@ out/
 build/
 dist/
 .mastra/
+agent/src/mastra/public/
 .turbo/
 .cache/
 coverage/
@@ -37,6 +38,7 @@ playwright-report/
 test-results/
 .nyc_output/
 *.log
+artifacts/
 
 # Local tooling and editors
 .vscode/

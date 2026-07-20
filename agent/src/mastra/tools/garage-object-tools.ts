@@ -122,7 +122,6 @@ export function createReplaceTextObjectTool(root: ObjectStorage = createLazyGara
     description: 'Replace an existing UTF-8 text object in the current agent storage namespace.',
     inputSchema: writeInputSchema,
     outputSchema: writeOutputSchema,
-    requireApproval: true,
     mcp: { annotations: destructiveAnnotations },
     execute: async ({ key, text }, context) => {
       const storage = storageForAgent(root, context);
@@ -138,7 +137,6 @@ export function createDeleteObjectTool(root: ObjectStorage = createLazyGarageObj
     description: 'Delete an existing object from the current agent storage namespace.',
     inputSchema: keyInputSchema,
     outputSchema: z.object({ key: z.string(), deleted: z.literal(true) }).strict(),
-    requireApproval: true,
     mcp: { annotations: destructiveAnnotations },
     execute: async ({ key }, context) => {
       await storageForAgent(root, context).delete(key);

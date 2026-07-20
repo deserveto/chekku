@@ -88,4 +88,34 @@ describe('env config', () => {
     expect(() => loadEnv({ GARAGE_ENDPOINT: 'not-a-url' })).toThrow();
     expect(() => loadEnv({ LOG_LEVEL: 'trace' })).toThrow();
   });
+
+  it('applies Maestro defaults (disabled by default)', () => {
+    const value = loadEnv({});
+
+    expect(value.MAESTRO_ENABLED).toBe('false');
+    expect(value.MAESTRO_COMMAND).toBe('maestro');
+    expect(value.MAESTRO_WORKSPACE).toBe('../maestro');
+    expect(value.MAESTRO_ARTIFACT_DIR).toBe('../artifacts/maestro');
+    expect(value.MAESTRO_TIMEOUT_MS).toBe(120000);
+    expect(value.ADB_PATH).toBe('adb');
+  });
+
+  it('accepts Maestro overrides and rejects invalid enabled flags', () => {
+    const value = loadEnv({
+      MAESTRO_ENABLED: 'true',
+      MAESTRO_COMMAND: '/usr/local/bin/maestro',
+      MAESTRO_WORKSPACE: '/abs/maestro',
+      MAESTRO_ARTIFACT_DIR: '/abs/artifacts/maestro',
+      MAESTRO_TIMEOUT_MS: '60000',
+      ADB_PATH: '/usr/local/bin/adb',
+    });
+
+    expect(value.MAESTRO_ENABLED).toBe('true');
+    expect(value.MAESTRO_COMMAND).toBe('/usr/local/bin/maestro');
+    expect(value.MAESTRO_TIMEOUT_MS).toBe(60000);
+    expect(value.ADB_PATH).toBe('/usr/local/bin/adb');
+
+    expect(() => loadEnv({ MAESTRO_ENABLED: 'yes' })).toThrow();
+    expect(() => loadEnv({ MAESTRO_TIMEOUT_MS: '0' })).toThrow();
+  });
 });
