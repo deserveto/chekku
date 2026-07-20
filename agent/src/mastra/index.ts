@@ -19,6 +19,7 @@ import { searxngMcpServer } from './mcp/searxng-mcp-server.js';
 import { healthRoute } from './routes/health.js';
 import { modelsRoute } from './routes/models.js';
 import { storedAgentTools } from './tools/registry.js';
+import { weeklySocialDrafts } from './workflows/weekly-social-drafts.js';
 
 const storage = new LibSQLStore({
   id: 'chekku-storage',
@@ -30,6 +31,7 @@ const storage = new LibSQLStore({
 
 export const mastra = new Mastra({
   agents: { mainAgent, pmAgent, qaWebAgent, qaAndroidAgent, socialMediaAgent },
+  workflows: { weeklySocialDrafts },
   mcpServers: {
     garage: garageMcpServer,
     searxng: searxngMcpServer,

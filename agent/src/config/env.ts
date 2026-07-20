@@ -37,6 +37,11 @@ const envSchema = z.object({
   GARAGE_BUCKET: z.string().default(''),
   GARAGE_ACCESS_KEY_ID: z.string().default(''),
   GARAGE_SECRET_ACCESS_KEY: z.string().default(''),
+
+  // Recipient of the weekly social-draft review email (scheduled workflow).
+  // Required per environment — there is no default. When unset, the workflow
+  // still drafts and saves posts but skips the email step.
+  SOCIAL_DRAFT_REVIEW_EMAIL: z.string().default(''),
 });
 
 export type Env = z.infer<typeof envSchema>;

@@ -12,7 +12,7 @@
 
 </div>
 
-Chekku provides a focused interface for managing agents, creating agent-specific conversations, searching the web through SearXNG, analyzing engineering weekly reports, publishing social-media drafts through Telegram, and running browser-assisted QA through a provider-neutral OpenAI-compatible model gateway. Three npm workspaces provide the Next.js client, Mastra server, and shared Garage/S3 object-storage package. LibSQL remains the local source of truth for agents and conversations; Garage stores generic agent objects and PM report artifacts.
+Chekku provides a focused interface for managing agents, creating agent-specific conversations, searching the web through SearXNG, analyzing engineering weekly reports, publishing social-media drafts through Telegram and a weekly scheduled workflow, and running browser-assisted QA through a provider-neutral OpenAI-compatible model gateway. Three npm workspaces provide the Next.js client, Mastra server, and shared Garage/S3 object-storage package. LibSQL remains the local source of truth for agents and conversations; Garage stores generic agent objects, PM report artifacts, and scheduled social-post drafts.
 
 ## Highlights
 
@@ -25,6 +25,7 @@ Chekku provides a focused interface for managing agents, creating agent-specific
 - **PM Agent reports** — analyze weekly reports, save risk reviews in Garage, and browse linked report details.
 - **SearXNG search** — fixed read-only `search_web` capability for PM Agent and selectable stored agents, with server-owned endpoint configuration and bounded result snippets.
 - **Social media agent** — role-switchable content assistant reachable over Telegram (X, Instagram, LinkedIn, TikTok roles).
+- **Scheduled social drafts** — a weekly Monday 09:00 Asia/Jakarta workflow drafts two Instagram posts from awareness days and evergreen pillars, saves them to Garage, and emails a review link.
 - **Hosted-vLLM compatibility** — final prompt normalization keeps system messages at the beginning.
 - **Local-first storage** — agent definitions, versions, memory, and threads live in LibSQL.
 - **Same-origin client traffic** — browser requests go through the Next.js proxy instead of calling the Mastra server directly.
@@ -50,6 +51,7 @@ Next.js client :3000
   │     ├── Mastra Memory + LibSQLStore                               │
   │     ├── calculator + current-time + email tools                   │
   │     ├── Chat SDK + Telegram adapter                               │
+  │     ├── weekly-social-drafts scheduled workflow                   │
   │     ├── Garage MCP + SearXNG MCP (optional stored-agent           │
   │     │   capabilities) ────────────────────────────────────────────┤
   │     └── OpenAI-compatible gateway                                 │
@@ -58,14 +60,15 @@ Next.js client :3000
   │     Rafiqspace LLM / LiteLLM / vLLM /                             │
   │     compatible endpoint                                           │
   └── /reports/* + /api/storage/pm-reports/*                          │
+        /social-posts/* + /api/storage/social-posts/*                  │
           |                                                           │
           v                                                           │
-      client/src/server/pm-reports.ts ────────────────────────────────┤
-                                                                      v
-                                                           @chekku/storage
-                                                                      |
-                                                                      v
-                                                           Garage/S3 bucket
+      client/src/server/pm-reports.ts and social-posts.ts ─────────────┤
+                                                                       v
+                                                            @chekku/storage
+                                                                       |
+                                                                       v
+                                                            Garage/S3 bucket
 
 PM Agent / selected stored agent
   -> search_web
