@@ -12,7 +12,7 @@
 
 </div>
 
-Chekku provides a focused interface for managing agents, creating agent-specific conversations, analyzing engineering weekly reports, publishing social-media drafts through Telegram, and running browser-assisted QA through a provider-neutral OpenAI-compatible model gateway. Three npm workspaces provide the Next.js client, Mastra server, and shared Garage/S3 object-storage package. LibSQL remains the local source of truth for agents and conversations; Garage stores generic agent objects and PM report artifacts.
+Chekku provides a focused interface for managing agents, creating agent-specific conversations, analyzing engineering weekly reports, publishing social-media drafts through Telegram and a weekly scheduled workflow, and running browser-assisted QA through a provider-neutral OpenAI-compatible model gateway. Three npm workspaces provide the Next.js client, Mastra server, and shared Garage/S3 object-storage package. LibSQL remains the local source of truth for agents and conversations; Garage stores generic agent objects, PM report artifacts, and scheduled social-post drafts.
 
 ## Highlights
 
@@ -23,6 +23,7 @@ Chekku provides a focused interface for managing agents, creating agent-specific
 - **Browser QA agent** — navigate and inspect live websites using Mastra Agent Browser.
 - **PM Agent reports** — analyze weekly reports, save risk reviews in Garage, and browse linked report details.
 - **Social media agent** — role-switchable content assistant reachable over Telegram (X, Instagram, LinkedIn, TikTok roles).
+- **Scheduled social drafts** — a weekly Monday 09:00 Asia/Jakarta workflow drafts two Instagram posts from awareness days and evergreen pillars, saves them to Garage, and emails a review link.
 - **Hosted-vLLM compatibility** — final prompt normalization keeps system messages at the beginning.
 - **Local-first storage** — agent definitions, versions, memory, and threads live in LibSQL.
 - **Same-origin client traffic** — browser requests go through the Next.js proxy instead of calling the Mastra server directly.
@@ -47,6 +48,8 @@ Next.js client :3000
   │     ├── Mastra Memory                             │
   │     ├── calculator + current-time + email tools   │
   │     ├── Chat SDK + Telegram adapter               │
+  │     ├── weekly-social-drafts scheduled            │
+  │     │   workflow                                   │
   │     ├── Garage MCP (optional stored-agent          │
   │     │   capability) ───────────────────────────────┤
   │     └── OpenAI-compatible gateway                 │
@@ -55,9 +58,10 @@ Next.js client :3000
   │     Rafiqspace LLM / LiteLLM / vLLM /             │
   │     compatible endpoint                           │
   └── /reports/* + /api/storage/pm-reports/*          │
+        /social-posts/* + /api/storage/social-posts/* │
           │                                           │
           ▼                                           │
-      client/src/server/pm-reports.ts ────────────────┤
+      client/src/server/{pm,social}-reports.ts ───────┤
                                                       ▼
                                            @chekku/storage
                                                       │

@@ -28,3 +28,18 @@ export {
   type PmReportStatus,
   type SavePmReportInput,
 } from './pm-reports.ts';
+export {
+  SOCIAL_MEDIA_AGENT_ID,
+  buildSocialPostMetadata,
+  createPostId,
+  createSocialPostStorage,
+  getSocialPost,
+  listSocialPosts,
+  parseSocialPostTimestamp,
+  type BuiltSocialPost,
+  type SocialPlatform,
+  type SocialPostMetadata,
+  type SocialPostMetadataInput,
+  type SocialPostReadResult,
+  type SocialPostStatus,
+} from './social-posts.ts';

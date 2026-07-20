@@ -115,7 +115,7 @@ Workflows are registered on the `Mastra` instance through its `workflows` field 
 
 The scheduler runs on the long-lived `mastra` host process (`mastra dev` / `mastra start`), so scheduled fires work without extra setup. Evented runs require a storage adapter that supports concurrent updates; Chekku uses `LibSQLStore`, which satisfies this.
 
-`daily-task` is a daily 09:00 Asia/Jakarta placeholder: a single heartbeat step that proves the scheduler fires. The step body is intentionally trivial and is swapped for a real task when one is wired in.
+`weekly-social-drafts` fires every Monday at 09:00 Asia/Jakarta and produces exactly two Instagram drafts in one run. It resolves up to two fixed-date awareness days in the current Jakarta week, fills remaining slots from a deterministic evergreen-pillar rotation, drafts each caption through `socialMediaAgent.generate(..., { instructions })` with the `instagram-writer` role pinned (the workflow runs outside any chat channel, so the role cannot come from channel context), persists each draft through the existing Garage MCP `create_text_object` tool with `agentId` pinned to `social-media-agent`, and emails a review link to `SOCIAL_DRAFT_REVIEW_EMAIL`. Email delivery failure is recorded without failing the run, so drafts remain saved. Stage 1 uses the hardcoded awareness-day calendar; Stage 2 will augment topic selection with SearXNG research without changing voice, storage, or notification.
 
 ## Model gateway
 
@@ -215,6 +215,24 @@ Generated IDs and every repository, tool, and public detail boundary use canonic
 
 The list tool returns newest-first structured reports and presentation-only `reportUrl` and `reportsMarkdown` fields. Neither field enters persisted metadata, save output, view output, or repository types. `reportsMarkdown` is deterministic GFM with columns `Report`, `Created`, `Risk`, and `Status`; PM Agent returns it unchanged. Valid timestamps render to minute precision in UTC, while invalid stored text is preserved with Markdown-safe escaping.
 
+## Social post storage
+
+`storage/src/social-posts.ts` adds domain behavior above the generic storage contract without changing Garage MCP. It exposes only pure canonical helpers (`buildSocialPostMetadata`, `createPostId`, `keysFor`, parse helpers) and read helpers (`listSocialPosts`, `getSocialPost`, `createSocialPostStorage`) — no write helper that takes an `ObjectStorage`. The scheduled `weekly-social-drafts` workflow writes through the existing Garage MCP `create_text_object` tool; the client/server read path calls `listSocialPosts` / `getSocialPost` via `createSocialPostStorage()` over the same root storage.
+
+The workflow invokes the MCP tool with a trusted context that pins `agentId` to `social-media-agent`, so the tool's namespace derivation lands writes in the same physical namespace the read path reads from. The workflow never calls `@chekku/storage` write APIs directly and never accepts namespace from tool input.
+
+Each post stores three logical objects:
+
+```text
+social-posts/<postId>/post.md
+social-posts/<postId>/brief.md
+social-posts/<postId>/metadata.json
+```
+
+`post.md` is the drafted caption, `brief.md` is the deterministic topic brief that generated it, and `metadata.json` is written last so partial saves never become list entries. Metadata retains only relative keys; physical `agents/<base64url(social-media-agent)>/...` keys remain inside the namespaced adapter.
+
+Generated IDs and every repository, workflow, and public detail boundary use canonical form `smp_YYYYMMDDHHMMSS_<8 lowercase hex>` and enforce `^smp_[0-9]{14}_[0-9a-f]{8}$`. Noncanonical metadata is skipped during listing; there is no compatibility fallback. Social-post semantics stay outside Garage MCP; no social-post tool is registered on the generic five-tool MCP server.
+
 ## Conversation ownership
 
 Every thread is owned by an agent and resource:
@@ -242,7 +260,9 @@ Garage access remains server-side through two explicit paths. Chat tool calls pa
 
 `client/src/server/pm-reports.ts` is a separate server-only boundary for report pages and APIs. It requires the same server identity seam before storage access, validates public report IDs before reads, fixes the namespace to `pm-agent`, and maps provider failures to safe 400, 403, 404, or 503 responses. OIDC may replace `CHEKKU_LOCAL_USER_ID` later without changing namespace or report-access semantics.
 
-Chat report links use URL-encoded relative `/reports/<reportId>` URLs and render in a new tab with `rel="noreferrer"`. GFM tables are wrapped in labeled, keyboard-focusable horizontal-scroll regions with visible focus outlines. `/reports` uses the same accessibility pattern for its server-rendered list table, preventing narrow layouts from compressing report columns.
+`client/src/server/social-posts.ts` mirrors that boundary for the social-post review UI. It fixes the namespace to `social-media-agent`, validates `smp_...` IDs before reads, requires the same identity seam, and maps provider failures to the same safe responses. Social-post pages and `/api/storage/social-posts/*` execute in the Next.js server and never import `@chekku/storage` from browser code.
+
+Chat report links use URL-encoded relative `/reports/<reportId>` URLs and render in a new tab with `rel="noreferrer"`. GFM tables are wrapped in labeled, keyboard-focusable horizontal-scroll regions with visible focus outlines. `/reports` and `/social-posts` use the same accessibility pattern for their server-rendered list tables, preventing narrow layouts from compressing columns.
 
 ## Public routes
 
@@ -256,9 +276,13 @@ Chat report links use URL-encoded relative `/reports/<reportId>` URLs and render
 - `/chat/[threadId]` redirects legacy thread URLs to the canonical route.
 - `/reports` lists PM reports newest first.
 - `/reports/[reportId]` renders analysis, metadata, and original input.
+- `/social-posts` lists scheduled Instagram drafts newest first.
+- `/social-posts/[postId]` renders caption, metadata, and brief.
 - `/api/agent/[...path]` proxies Mastra HTTP requests.
 - `GET /api/storage/pm-reports` returns report metadata after identity validation.
 - `GET /api/storage/pm-reports/[reportId]` returns one report after identity and ID validation.
+- `GET /api/storage/social-posts` returns post metadata after identity validation.
+- `GET /api/storage/social-posts/[postId]` returns one post after identity and ID validation.
 
 ### Mastra custom routes
 
