@@ -3,7 +3,7 @@ import type { Tool } from '@mastra/core/tools';
 
 import { gatewayCompatibilityProcessor } from '../mastra/processors/gateway-compatibility.js';
 import { createAgentContextLimiter, createAgentMemory, createCharBudgetGuard } from '../mastra/processors/context-limit.js';
-import { filterMaestroTools, createMaestroMcpClient } from '../mastra/maestro/mcp-client.js';
+import { filterMaestroTools, createMaestroMcpClient, type CreateMaestroMcpClientOptions } from '../mastra/maestro/mcp-client.js';
 import { calculatorTool } from '../mastra/tools/calculator.js';
 import { currentAppTool } from '../mastra/tools/current-app.js';
 import { getCurrentTimeTool } from '../mastra/tools/get-current-time.js';
@@ -12,23 +12,46 @@ import { getServerModel } from '../providers/model.js';
 import { providerContextSchema, type ProviderContext } from './context.js';
 import { env } from '../config/env.js';
 
-let maestroClient: ReturnType<typeof createMaestroMcpClient> | undefined;
+type MaestroClientLike = { listTools(): Promise<unknown> };
+type MaestroClientFactory = (options: CreateMaestroMcpClientOptions) => MaestroClientLike;
+
+interface MaestroLoadDeps {
+  createClient?: MaestroClientFactory;
+}
+
+let maestroClient: MaestroClientLike | undefined;
 let cachedMaestroTools: ToolsInput | undefined;
 
-async function loadMaestroMcpTools(): Promise<ToolsInput> {
+export async function loadMaestroMcpTools({ createClient = createMaestroMcpClient }: MaestroLoadDeps = {}): Promise<ToolsInput> {
   if (env.MAESTRO_ENABLED !== 'true') return {};
   if (cachedMaestroTools) return cachedMaestroTools;
   try {
-    maestroClient ??= createMaestroMcpClient({
+    maestroClient ??= createClient({
       command: env.MAESTRO_COMMAND,
       timeoutMs: env.MAESTRO_TIMEOUT_MS,
     });
     const all = (await maestroClient.listTools()) as Record<string, Tool>;
     cachedMaestroTools = filterMaestroTools(all);
     return cachedMaestroTools;
-  } catch {
-    return {};
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const cause = error instanceof Error && error.cause instanceof Error ? error.cause : undefined;
+    const stack = error instanceof Error && error.stack ? error.stack : undefined;
+    const lines = [`[qa-android-agent] Maestro MCP load failed: ${message}`];
+    if (cause) {
+      lines.push(`Caused by: ${cause.message}`);
+      if (cause.stack) lines.push(cause.stack);
+    }
+    if (stack) lines.push(stack);
+    console.error(lines.join('\n'));
+    cachedMaestroTools = {};
+    return cachedMaestroTools;
   }
+}
+
+export function __resetMaestroCache(): void {
+  maestroClient = undefined;
+  cachedMaestroTools = undefined;
 }
 
 const instructions = `You are QA Android Agent, a careful mobile QA delegate that drives Android applications through Maestro.

@@ -145,6 +145,8 @@ const TRUNCATION_MARKER = '…[truncated to fit model context budget]';
 
 type StringHandle = { len: number; get(): string; set(value: string): void };
 
+const PROTOCOL_FIELDS = new Set(['role', 'type', 'toolCallId', 'toolName', 'id', 'name']);
+
 function collectStringHandles(root: unknown, out: StringHandle[]): void {
   if (root == null || typeof root !== 'object') return;
   if (typeof root === 'string') return;
@@ -171,6 +173,7 @@ function collectStringHandles(root: unknown, out: StringHandle[]): void {
   for (const key of Object.keys(root as Record<string, unknown>)) {
     const value = (root as Record<string, unknown>)[key];
     if (typeof value === 'string') {
+      if (PROTOCOL_FIELDS.has(key)) continue;
       const owner = root as Record<string, unknown>;
       out.push({
         len: value.length,

@@ -226,6 +226,28 @@ describe('char-budget guard (estimator-independent backstop)', () => {
     expect(totalChars).toBeLessThanOrEqual(budget);
     expect(result.at(-1)).toEqual(user('latest'));
   });
+
+  it('protects protocol fields like toolCallId from truncation even when they are among the longest strings', () => {
+    const longId = 'call_'.padEnd(100, 'x'); // 100 chars, past the 41-char stop threshold
+    const hugeText = 'h'.repeat(500);
+    const prompt: CharBudgetPrompt = [
+      sys('s'),
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: hugeText },
+          { type: 'tool-call', toolCallId: longId, toolName: 'inspect', input: {} },
+        ],
+      },
+    ];
+    const result = prunePromptToCharBudget(prompt, 100);
+
+    const parts = result[1].content as Array<{ type: string; toolCallId?: string; text?: string }>;
+    const toolCallPart = parts.find((p) => p.type === 'tool-call');
+    const textPart = parts.find((p) => p.type === 'text');
+    expect(toolCallPart?.toolCallId).toBe(longId);
+    expect(textPart?.text?.length).toBeLessThan(hugeText.length);
+  });
 });
 
 function messageChars(m: AnyMsg): number {

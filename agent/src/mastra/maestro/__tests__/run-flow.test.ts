@@ -87,8 +87,10 @@ describe('runMaestroFlow', () => {
     expect(result.timedOut).toBe(true);
   });
 
-  it('truncates output beyond the bounded limit', async () => {
-    const huge = 'x'.repeat(MAX_OUTPUT_CHARS + 50);
+  it('preserves both head and tail when truncating output beyond the bounded limit', async () => {
+    const head = 'HEAD'.repeat(10);
+    const tail = 'TAIL'.repeat(10);
+    const huge = head + 'x'.repeat(MAX_OUTPUT_CHARS + 50) + tail;
     const result = await runMaestroFlow(
       { suite: 'smoke', flow: 'login' },
       {
@@ -103,8 +105,30 @@ describe('runMaestroFlow', () => {
       },
     );
 
-    expect(result.stdout.length).toBe(MAX_OUTPUT_CHARS);
-    expect(result.stdout.endsWith('…')).toBe(true);
+    expect(result.stdout.length).toBe(MAX_OUTPUT_CHARS - 1);
+    expect(result.stdout.startsWith(head)).toBe(true);
+    expect(result.stdout.endsWith(tail)).toBe(true);
+    expect(result.stdout.includes('…')).toBe(true);
+  });
+
+  it('preserves the failure/stack tail sentinel on output beyond the bounded limit', async () => {
+    const sentinel = 'FAILURE_STACK_TRACE_SENTINEL';
+    const huge = 'x'.repeat(MAX_OUTPUT_CHARS + 100) + sentinel;
+    const result = await runMaestroFlow(
+      { suite: 'smoke', flow: 'login' },
+      {
+        command: 'maestro',
+        workspaceAbs: WORKSPACE,
+        artifactDirAbs: ARTIFACTS,
+        timeoutMs: 120000,
+        now: () => new Date('2026-07-17T00:00:00Z'),
+        random: () => 'deadbeef',
+        exec: async () => ({ code: 1, stdout: huge, stderr: '', timedOut: false }),
+        ...passingDeps(),
+      },
+    );
+
+    expect(result.stdout).toContain(sentinel);
   });
 
   it('rejects when the flow file is missing', async () => {

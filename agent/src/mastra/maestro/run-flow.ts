@@ -54,7 +54,8 @@ export interface RunFlowResult {
 
 function boundOutput(value: string): string {
   if (value.length <= MAX_OUTPUT_CHARS) return value;
-  return `${value.slice(0, MAX_OUTPUT_CHARS - 1)}…`;
+  const half = Math.floor((MAX_OUTPUT_CHARS - 1) / 2);
+  return `${value.slice(0, half)}…${value.slice(-half)}`;
 }
 
 export async function runMaestroFlow(

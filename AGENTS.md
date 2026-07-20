@@ -73,7 +73,7 @@ A task is not complete until affected tests pass. Before finalizing any reposito
 - Garage application configuration uses only `GARAGE_ENDPOINT`, `GARAGE_REGION`, `GARAGE_BUCKET`, `GARAGE_ACCESS_KEY_ID`, and `GARAGE_SECRET_ACCESS_KEY`.
 - Generated `storage/.env.local`, `storage/.garage/`, and `agent/.env.development` stay ignored. Never expose their secrets in logs, docs, errors, or commits.
 - Conversation history uses Mastra Memory, not custom conversation tables.
-- Every agent must bound its context to prevent overflow: use `createAgentMemory()` (sets `lastMessages`) and add `createAgentContextLimiter()` (a `TokenLimiterProcessor`) to `inputProcessors`, both from `agent/src/mastra/processors/context-limit.ts`. Never use bare `new Memory()` — large tool outputs (screen/HTML dumps) can exceed the model window across turns or within a single multi-step turn; the token limiter prunes both.
+- Every agent must bound its context to prevent overflow using all three helpers from `agent/src/mastra/processors/context-limit.ts`: `createAgentMemory()` (sets `lastMessages`), `createAgentContextLimiter()` (a `TokenLimiterProcessor`) in `inputProcessors`, and `createCharBudgetGuard()` (a `processLLMRequest` backstop) wired LAST in `inputProcessors` (after the gateway compatibility processor where present). Never use bare `new Memory()` — tokenx (the `TokenLimiterProcessor` estimator) under-counts dense tool output, notably base64 screenshots (empirically ~1.67× drift vs real BPE), so heavy multi-step turns can exceed the real model window even when the estimate says they fit; the char-budget guard is what actually prevents overflow within a single multi-step turn.
 - A thread ID must use this format:
 
 ```text
@@ -110,7 +110,7 @@ LLM_MODELS
 
 ### QA Web Agent
 
-- `qa-web-agent` must keep `memory: new Memory()` because browser context processing requires active Memory context.
+- `qa-web-agent` must keep `memory: createAgentMemory()` with `createAgentContextLimiter()` and `createCharBudgetGuard()` wired into `inputProcessors` (guard last, after the gateway compatibility processor), because browser context processing requires active Memory context.
 - Keep the gateway compatibility processor unless tests prove it is no longer needed.
 - No tool requires approval; browser actions (form submit, purchase, publish, delete) run directly.
 - Do not add endpoint-specific discovery tools to the QA agent. Model discovery belongs in the gateway and `/models` route.
@@ -127,6 +127,7 @@ LLM_MODELS
 - Run flows via `execFile` with an argv array (never a shell string), `--format junit --output` and `--test-output-dir` into `artifacts/maestro/<runId>/`, with `MAESTRO_TIMEOUT_MS`, bounded output, and child cleanup.
 - Never report a test Passed unless Maestro exited 0.
 - `MAESTRO_ENABLED` defaults to `false`; the server boots normally without Maestro.
+- A failed Maestro MCP load (bad command, crashed subprocess, timeout, protocol error) is logged once with a `[qa-android-agent]` prefix and cached as empty for the lifetime of the server process; an operator must restart the agent server to retry.
 
 ### Social Media Agent
 
@@ -159,7 +160,7 @@ LLM_MODELS
 
 ### PM reports
 
-- Keep `pm-agent` code-defined and protected, with `memory: new Memory()` and tools `save_pm_report_to_garage`, `list_pm_reports_from_garage`, and `view_pm_report_from_garage` registered only on that agent.
+- Keep `pm-agent` code-defined and protected, with `memory: createAgentMemory()` plus `createAgentContextLimiter()` and `createCharBudgetGuard()` in `inputProcessors`, and tools `save_pm_report_to_garage`, `list_pm_reports_from_garage`, and `view_pm_report_from_garage` registered only on that agent.
 - Bind every PM tool and server-side report operation to fixed namespace `pm-agent`; never accept namespace or agent identity from model, route, browser, or local user input.
 - Persist and expose only relative `pm-reports/<reportId>/...` metadata keys. Never leak physical `agents/<base64url-agent-id>/...` prefixes.
 - Do not migrate or fall back to old global development report objects.
