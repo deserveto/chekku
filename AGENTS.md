@@ -138,16 +138,18 @@ LLM_MODELS
 - Telegram uses `TELEGRAM_BOT_TOKEN`, `TELEGRAM_MODE`, optional `TELEGRAM_BOT_USERNAME`, and optional `TELEGRAM_WEBHOOK_SECRET_TOKEN` only.
 - Email uses server-only `RESEND_API_KEY` and `RESEND_FROM_EMAIL`; never expose either to browser code.
 - Outbound email and channel actions run directly (no approval gate).
+- The scheduled `weekly-social-drafts` workflow drafts through `socialMediaAgent.generate(..., { instructions })` and pins the role via `buildInstructionsForRole('instagram-writer')`. The workflow runs outside any chat channel, so the role must not be resolved from channel `requestContext`. Telegram is not part of the scheduled flow.
 
 ### Client proxy and identity
 
-- Browser-to-Mastra agent-service requests target the Next.js origin and pass through `/api/agent/*`. PM report pages stay under `/reports/*`, and PM report storage APIs stay under `/api/storage/pm-reports/*` in the Next.js server.
+- Browser-to-Mastra agent-service requests target the Next.js origin and pass through `/api/agent/*`. PM report pages stay under `/reports/*`, and PM report storage APIs stay under `/api/storage/pm-reports/*` in the Next.js server. Social post pages stay under `/social-posts/*`, and social post storage APIs stay under `/api/storage/social-posts/*`.
 - The proxy must continue supporting `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, and `HEAD`.
 - Validate upstream paths with `client/src/server/proxy-url.ts`.
 - `CHEKKU_LOCAL_USER_ID` is a temporary local identity seam. Replace it with OIDC later without changing thread-ownership semantics.
 - `AGENT_SERVICE_TOKEN`, when used, is server-only.
 - `/api/storage/pm-reports` and `/api/storage/pm-reports/[reportId]` require the server identity seam and return safe bounded errors.
-- `/reports` and `/reports/[reportId]` use `client/src/server/pm-reports.ts`; browser modules never import `@chekku/storage`.
+- `/api/storage/social-posts` and `/api/storage/social-posts/[postId]` require the same server identity seam and return safe bounded errors.
+- `/reports` and `/reports/[reportId]` use `client/src/server/pm-reports.ts`; `/social-posts` and `/social-posts/[postId]` use `client/src/server/social-posts.ts`; browser modules never import `@chekku/storage`.
 
 ### Garage MCP
 
@@ -188,6 +190,17 @@ LLM_MODELS
 - Keep chat and report-list tables horizontally scrollable, keyboard focusable, labeled as regions, and visibly outlined on focus.
 - Preserve generic Garage MCP at exactly five generic tools. PM report tools must never enter its registry.
 - Garage v2.3 external writers can race checked mutations; do not claim cross-process conditional-write guarantees.
+
+### Social post drafts
+
+- The scheduled `weekly-social-drafts` workflow is the only writer of social posts. It binds storage to fixed namespace `social-media-agent`; never accept namespace or agent identity from model, route, browser, or local user input.
+- Workflow writes go through the existing Garage MCP `create_text_object` tool with a trusted context that pins `agentId` to `social-media-agent`. The workflow must not call `@chekku/storage` write APIs directly or bypass the MCP tool's namespace derivation.
+- `@chekku/storage` exposes only pure canonical helpers for social posts (`buildSocialPostMetadata`, `createPostId`, parse helpers) plus read helpers used by client/server (`listSocialPosts`, `getSocialPost`, `createSocialPostStorage`); it must not expose a social-post write helper that takes an `ObjectStorage`.
+- Persist and expose only relative `social-posts/<postId>/...` metadata keys. Never leak physical `agents/<base64url-agent-id>/...` prefixes.
+- Canonical post IDs use `smp_YYYYMMDDHHMMSS_<8 lowercase hex>`; repository, workflow, and public read boundaries enforce `^smp_[0-9]{14}_[0-9a-f]{8}$`, and lists skip noncanonical metadata.
+- Stage 1 topic selection uses the hardcoded fixed-date awareness calendar plus evergreen pillars; movable feasts are excluded for deterministic scheduling. Stage 2 may add SearXNG research without changing voice, storage, or notification.
+- Stage 1 only creates objects; it does not replace or delete. Email delivery failure is recorded, not fatal — saved drafts remain readable.
+- Social-post tools must never enter the generic Garage MCP registry.
 ## Coding conventions
 
 - Use TypeScript strict mode and explicit types at external boundaries.
@@ -210,9 +223,9 @@ Add regression tests for behavior changes, especially:
 - thread ID creation and ownership;
 - proxy URL validation and method support;
 - sidebar and route structure;
-- shared Garage storage, namespace isolation, PM reports/APIs/pages/tables, fixed Garage and SearXNG MCP hydration, bounded SearXNG search, and launcher structure;
+- shared Garage storage, namespace isolation, PM reports/APIs/pages/tables, social posts/APIs/pages/tables, fixed Garage and SearXNG MCP hydration, bounded SearXNG search, scheduled workflow topic selection and orchestration, and launcher structure;
 - QA agent Memory and browser integration.
-- Social agent roles, Telegram slash registration, and email delivery behavior.
+- Social agent roles, Telegram slash registration, email delivery behavior, and the scheduled social-drafts workflow.
 
 Tests use Vitest. Keep tests alongside the relevant module or in the existing `__tests__` folder. Do not add a second test runner for new tests.
 

@@ -311,6 +311,17 @@ How you work:
 - You draft and plan only. Do not claim to publish; publishing happens in a later phase.`;
 }
 
+/**
+ * Build the agent instructions for an explicit role id. Used by the scheduled
+ * social-drafts workflow, which runs outside any chat channel and therefore
+ * cannot rely on the role resolved from channel `requestContext`. Passing the
+ * result via `agent.generate(messages, { instructions })` overrides the agent's
+ * default (general-role) instructions with the requested role's voice.
+ */
+export function buildInstructionsForRole(roleId: string): string {
+  return buildInstructions(getRole(roleId));
+}
+
 // ---------------------------------------------------------------------------
 // Agent
 // ---------------------------------------------------------------------------

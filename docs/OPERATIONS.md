@@ -286,6 +286,22 @@ RESEND_FROM_EMAIL=Chekku <onboarding@resend.dev>
 
 Get a key at [resend.com](https://resend.com). The default `onboarding@resend.dev` sender can only deliver to the account owner; production should use a Resend-verified domain in `RESEND_FROM_EMAIL`. Deliveries run directly (no approval gate). The tool fails with a clear error when `RESEND_API_KEY` is missing.
 
+## Scheduled social drafts (weekly-social-drafts workflow)
+
+```dotenv
+SOCIAL_DRAFT_REVIEW_EMAIL=social-reviewer@example.com
+```
+
+The `weekly-social-drafts` workflow fires every Monday at 09:00 Asia/Jakarta via Mastra's built-in scheduler (no separate registration). One run produces exactly two Instagram drafts: up to two fixed-date awareness days in the current Jakarta week, filled out by a deterministic evergreen-pillar rotation. Each caption is drafted through `social-media-agent` with the `instagram-writer` role pinned, then saved to the `social-media-agent` Garage namespace under `social-posts/<postId>/`. The run then emails a review link per draft to `SOCIAL_DRAFT_REVIEW_EMAIL`.
+
+`SOCIAL_DRAFT_REVIEW_EMAIL` must be set per environment — there is no default. When unset, the workflow still drafts and saves both posts but skips the email step, recording `emailSent: false` and `emailError: 'SOCIAL_DRAFT_REVIEW_EMAIL is not set...'` in the run output. The workflow also needs `RESEND_API_KEY` for delivery and the five `GARAGE_*` values for persistence. Other email delivery failures are recorded in the run output (`emailSent: false`, `emailError`) without failing the run; saved drafts remain readable at `/social-posts` and `/social-posts/[postId]`. Stage 1 uses the hardcoded awareness-day calendar in `agent/src/mastra/workflows/special-days.ts`; movable feasts are intentionally excluded for deterministic scheduling.
+
+Review interfaces:
+
+- `/social-posts` lists post id, created time, topic, special day, and status newest first.
+- `/social-posts/[postId]` renders caption, metadata, then the brief that generated it.
+- `GET /api/storage/social-posts` and `GET /api/storage/social-posts/[postId]` return bounded JSON after server identity validation.
+
 ## Common failures
 
 ### Local service startup fails

@@ -62,6 +62,7 @@ Thumbs.db
 # Local-only scratch files
 PROMPT.md
 DESIGN.md
+TASKS.md
 agent/test-client.js
 /after-fix-screenshot.png
 /webapp-screenshot.png
