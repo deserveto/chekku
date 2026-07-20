@@ -49,13 +49,25 @@ const outputSchema = z.object({
   truncated: z.boolean(),
 }).strict();
 
+function createDefaultSearchClient(): SearxngSearchClient {
+  let client: SearxngSearchClient | undefined;
+  const getClient = (): SearxngSearchClient => {
+    client ??= createSearxngSearchClient({
+      config: parseSearxngConfiguration({
+        baseUrl: env.SEARXNG_BASE_URL,
+        apiKey: env.SEARXNG_API_KEY,
+      }),
+    });
+    return client;
+  };
+
+  return {
+    search: (input, signal) => getClient().search(input, signal),
+  };
+}
+
 export function createSearchWebTool(
-  client: SearxngSearchClient = createSearxngSearchClient({
-    config: parseSearxngConfiguration({
-      baseUrl: env.SEARXNG_BASE_URL,
-      apiKey: env.SEARXNG_API_KEY,
-    }),
-  }),
+  client: SearxngSearchClient = createDefaultSearchClient(),
 ) {
   const tool = createTool({
     id: 'search_web',

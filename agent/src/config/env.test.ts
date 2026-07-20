@@ -20,6 +20,12 @@ describe('env config', () => {
     expect(value).not.toHaveProperty('SEARXNG_SECRET');
   });
 
+  it('defers SearXNG URL validation to the optional search capability', () => {
+    const value = loadEnv({ SEARXNG_BASE_URL: 'not-a-url' });
+
+    expect(value.SEARXNG_BASE_URL).toBe('not-a-url');
+  });
+
   it('uses neutral OpenAI-compatible defaults', () => {
     const value = loadEnv({});
 
