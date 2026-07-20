@@ -180,6 +180,27 @@ describe('runWeeklySocialDrafts', () => {
     expect(weeklySocialDraftsOutputSchema.safeParse(result).success).toBe(true);
   });
 
+  it('skips the email step and records a clear error when recipient is unset', async () => {
+    const fakes = buildFakes();
+    const result = await runWeeklySocialDrafts({
+      now: () => FIXED_NOW,
+      selectTopics: () => TOPICS,
+      webUrl: 'http://localhost:3000',
+      reviewEmailTo: '', // simulates SOCIAL_DRAFT_REVIEW_EMAIL being unset
+      ...fakes,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.posts).toHaveLength(2);
+    // Drafts are still saved before the email step is evaluated.
+    expect(fakes.createText).toHaveBeenCalledTimes(6);
+    // Email was skipped — Resend was never called.
+    expect(fakes.sendEmail).not.toHaveBeenCalled();
+    expect(result.emailSent).toBe(false);
+    expect(result.emailError).toContain('SOCIAL_DRAFT_REVIEW_EMAIL is not set');
+    expect(weeklySocialDraftsOutputSchema.safeParse(result).success).toBe(true);
+  });
+
   it('wires the default topic selector through (1 special + 1 evergreen for Independence week)', async () => {
     const fakes = buildFakes();
     const result = await runWeeklySocialDrafts({

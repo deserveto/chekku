@@ -261,16 +261,24 @@ export async function runWeeklySocialDrafts(
   const email = renderReviewEmail(posts, { weekStart });
   let emailSent = false;
   let emailError: string | undefined;
-  try {
-    await sendEmail({
-      to: reviewEmailTo,
-      subject: email.subject,
-      html: email.html,
-      text: email.text,
-    });
-    emailSent = true;
-  } catch (error) {
-    emailError = error instanceof Error ? error.message : String(error);
+  // Skip the email step entirely when no recipient is configured — drafts are
+  // already saved, so the run is still a success. Recording an explicit error
+  // here avoids relying on Resend to surface a "missing to" failure and tells
+  // operators exactly which env var to set.
+  if (!reviewEmailTo || reviewEmailTo.trim().length === 0) {
+    emailError = 'SOCIAL_DRAFT_REVIEW_EMAIL is not set; skipping email delivery.';
+  } else {
+    try {
+      await sendEmail({
+        to: reviewEmailTo,
+        subject: email.subject,
+        html: email.html,
+        text: email.text,
+      });
+      emailSent = true;
+    } catch (error) {
+      emailError = error instanceof Error ? error.message : String(error);
+    }
   }
 
   return {

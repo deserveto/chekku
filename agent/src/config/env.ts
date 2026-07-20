@@ -29,7 +29,8 @@ const envSchema = z.object({
   GARAGE_SECRET_ACCESS_KEY: z.string().default(''),
 
   // Recipient of the weekly social-draft review email (scheduled workflow).
-  // Set in agent/.env; not defaulted here to keep real addresses out of source.
+  // Required per environment — there is no default. When unset, the workflow
+  // still drafts and saves posts but skips the email step.
   SOCIAL_DRAFT_REVIEW_EMAIL: z.string().default(''),
 });
 

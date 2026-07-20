@@ -61,7 +61,7 @@ Next.js client :3000
         /social-posts/* + /api/storage/social-posts/* │
           │                                           │
           ▼                                           │
-      client/src/server/{pm,social}-reports.ts ───────┤
+      client/src/server/pm-reports.ts and social-posts.ts ─┤
                                                       ▼
                                            @chekku/storage
                                                       │

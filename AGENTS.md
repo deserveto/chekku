@@ -162,7 +162,7 @@ LLM_MODELS
 
 - The scheduled `weekly-social-drafts` workflow is the only writer of social posts. It binds storage to fixed namespace `social-media-agent`; never accept namespace or agent identity from model, route, browser, or local user input.
 - Workflow writes go through the existing Garage MCP `create_text_object` tool with a trusted context that pins `agentId` to `social-media-agent`. The workflow must not call `@chekku/storage` write APIs directly or bypass the MCP tool's namespace derivation.
-- `@chekku/storage` exposes only pure canonical helpers for social posts (`buildSocialPostMetadata`, `createPostId`, `keysFor`, parse helpers) plus read helpers used by client/server (`listSocialPosts`, `getSocialPost`, `createSocialPostStorage`); it must not expose a social-post write helper that takes an `ObjectStorage`.
+- `@chekku/storage` exposes only pure canonical helpers for social posts (`buildSocialPostMetadata`, `createPostId`, parse helpers) plus read helpers used by client/server (`listSocialPosts`, `getSocialPost`, `createSocialPostStorage`); it must not expose a social-post write helper that takes an `ObjectStorage`.
 - Persist and expose only relative `social-posts/<postId>/...` metadata keys. Never leak physical `agents/<base64url-agent-id>/...` prefixes.
 - Canonical post IDs use `smp_YYYYMMDDHHMMSS_<8 lowercase hex>`; repository, workflow, and public read boundaries enforce `^smp_[0-9]{14}_[0-9a-f]{8}$`, and lists skip noncanonical metadata.
 - Stage 1 topic selection uses the hardcoded fixed-date awareness calendar plus evergreen pillars; movable feasts are excluded for deterministic scheduling. Stage 2 may add SearXNG research without changing voice, storage, or notification.
