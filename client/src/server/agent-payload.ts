@@ -4,7 +4,7 @@ export const STUDIO_TOOL_IDS = [
   'send-email',
 ] as const;
 export const STUDIO_DELEGATE_IDS = ['qa-web-agent'] as const;
-export const STUDIO_MCP_CLIENT_IDS = ['garage'] as const;
+export const STUDIO_MCP_CLIENT_IDS = ['garage', 'searxng'] as const;
 
 export interface AgentPayloadInput {
   id: string;

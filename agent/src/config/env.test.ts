@@ -3,6 +3,29 @@ import { describe, expect, it } from 'vitest';
 import { loadEnv } from './env.js';
 
 describe('env config', () => {
+  it('uses empty server-owned SearXNG defaults', () => {
+    const value = loadEnv({});
+    expect(value.SEARXNG_BASE_URL).toBe('');
+    expect(value.SEARXNG_API_KEY).toBe('');
+  });
+
+  it('accepts only the two SearXNG application values', () => {
+    const value = loadEnv({
+      SEARXNG_BASE_URL: 'https://search.example.test/private/',
+      SEARXNG_API_KEY: 'search-secret',
+      SEARXNG_SECRET: 'must-be-ignored',
+    });
+    expect(value.SEARXNG_BASE_URL).toBe('https://search.example.test/private/');
+    expect(value.SEARXNG_API_KEY).toBe('search-secret');
+    expect(value).not.toHaveProperty('SEARXNG_SECRET');
+  });
+
+  it('defers SearXNG URL validation to the optional search capability', () => {
+    const value = loadEnv({ SEARXNG_BASE_URL: 'not-a-url' });
+
+    expect(value.SEARXNG_BASE_URL).toBe('not-a-url');
+  });
+
   it('uses neutral OpenAI-compatible defaults', () => {
     const value = loadEnv({});
 

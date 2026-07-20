@@ -2,7 +2,7 @@
 
 ## Overview
 
-Chekku contains three npm workspaces: a Next.js client, a Mastra agent server, and the shared `@chekku/storage` package. The system is local-first, uses LibSQL for agent and conversation persistence, offers Garage-backed generic agent object storage plus PM report persistence, and connects to one server-owned OpenAI-compatible model endpoint.
+Chekku contains three npm workspaces: a Next.js client, a Mastra agent server, and the shared `@chekku/storage` package. The system is local-first, uses LibSQL for agent and conversation persistence, offers Garage-backed generic agent object storage plus PM report persistence, connects to one server-owned OpenAI-compatible model endpoint, and provides bounded web search through a server-owned SearXNG endpoint.
 
 ```text
 ┌────────────────────────────────────────────┐
@@ -30,7 +30,7 @@ Chekku contains three npm workspaces: a Next.js client, a Mastra agent server, a
 │                                            │        │
 │ Memory + LibSQLStore                       │        │
 │ Calculator + current-time + email tools    │        │
-│ Garage MCP                                 │        │
+│ Garage MCP + SearXNG MCP                   │        │
 │ Chat SDK + Telegram adapter                │        │
 │ Agent Browser                              │        │
 │ OpenAI-compatible custom gateway           │        │
@@ -48,9 +48,15 @@ Chekku contains three npm workspaces: a Next.js client, a Mastra agent server, a
 └────────────────────────────────────────────┘         │
                                                        ▼
 Next.js report service / Garage MCP ──► @chekku/storage
-                                            │
-                                            ▼
-                                  Garage/S3 `chekku-objects`
+                                             │
+                                             ▼
+                                   Garage/S3 `chekku-objects`
+
+PM Agent / selected stored agent
+  -> search_web
+  -> fixed in-process SearXNG MCP/client
+  -> server-owned SearXNG endpoint
+  -> configured external search engines
 ```
 
 ## Backend composition
@@ -60,6 +66,7 @@ Next.js report service / Garage MCP ──► @chekku/storage
 - `mainAgent`, `pmAgent`, `qaWebAgent`, `qaAndroidAgent`, and `socialMediaAgent`;
 - `storedAgentTools` (`calculatorTool`, `getCurrentTimeTool`, and `sendEmailTool`) for stored-agent hydration;
 - `garageMcpServer` for generic agent-isolated object storage;
+- `searxngMcpServer` for fixed read-only web search by selected stored agents;
 - `LibSQLStore`;
 - `MastraEditor` with database storage;
 - `OpenAICompatibleGateway`;
@@ -68,7 +75,7 @@ Next.js report service / Garage MCP ──► @chekku/storage
 
 Mastra provides the native agent, Memory, and editor APIs. Next.js separately provides `/reports/*` pages and `/api/storage/pm-reports/*` APIs through `client/src/server/pm-reports.ts`; those PM report storage interfaces are not Mastra APIs. Chekku does not maintain a parallel custom conversation or agent database.
 
-`storedAgentTools` is the instance-level registry that makes calculator, current-time, and email tools available during stored-agent hydration. PM report tools are attached directly to `pmAgent`; they are not members of `storedAgentTools` or `garageMcpServer`.
+`storedAgentTools` is the instance-level registry that makes calculator, current-time, and email tools available during stored-agent hydration. PM report tools and the reusable `search_web` tool are attached directly to `pmAgent`; PM report tools are not members of `storedAgentTools`, `garageMcpServer`, or `searxngMcpServer`.
 
 `socialMediaAgent` also wires a Telegram channel adapter. Once Mastra initializes the agent's `AgentChannels`, `index.ts` registers the agent's slash-command handlers (`/help`, `/roles`, `/role`, `/switch`) on the Chat SDK so Telegram-intercepted bot commands reach the role logic.
 
@@ -108,15 +115,19 @@ The active role is held in-memory keyed by `${platform}:${userId}`. The agent re
 
 ### PM Agent
 
-`pm-agent` is a protected code-defined agent with Memory. It analyzes engineering weekly reports, derives a 1-10 risk rating and matching status, and owns three code-defined tools: `save_pm_report_to_garage`, `list_pm_reports_from_garage`, and `view_pm_report_from_garage`.
+`pm-agent` is a protected code-defined agent with Memory. It analyzes engineering weekly reports, derives a 1-10 risk rating and matching status, owns three code-defined report tools (`save_pm_report_to_garage`, `list_pm_reports_from_garage`, and `view_pm_report_from_garage`), and receives the reusable `search_web` tool.
 
 These PM tools are registered only on PM Agent. They compose `@chekku/storage` through a fixed `pm-agent` namespace and are intentionally separate from generic Garage MCP. No model, route, browser request, or local identity can select the PM storage namespace.
+
+`search_web` adds bounded search metadata and snippets only. PM Agent instructions do not promise result-page reading, a Web Reader, or a five-product competitive analysis; those remain separate future changes requiring independent review.
 
 ### Stored agents
 
 Stored agents are created through the client and persisted by `@mastra/editor`. A stored record contains behavior, model selection, Memory configuration, tools, and delegate-agent references. It does not contain endpoint credentials.
 
 Selecting Garage persists the fixed editor shape `mcpClients: { garage: { tools: {} } }`. The Next.js proxy accepts only that built-in shape and rejects arbitrary MCP URLs, commands, packages, environment values, and credentials before forwarding stored-agent mutations.
+
+Selecting SearXNG persists the separate fixed shape `mcpClients: { searxng: { tools: {} } }`. Stored records never contain the SearXNG endpoint or bearer token. The proxy permits Garage, SearXNG, or both fixed shapes and rejects custom headers, tool overrides, and other connection configuration.
 
 When an older stored model no longer matches the current registry, the client migrates it to the configured gateway and canonical default before chat begins.
 
@@ -147,6 +158,25 @@ openai-compatible/gateway/{endpoint-native-model-id}
 ```
 
 Endpoint-native IDs may contain slashes and are preserved exactly.
+
+## SearXNG search
+
+`searxngMcpServer` has fixed ID `searxng` and an immutable registry containing exactly `search_web`. Stored agents use that MCP server; PM Agent binds the same reusable tool directly. Garage MCP remains an independent registry with exactly five generic object tools.
+
+Application configuration has two server-owned values:
+
+```text
+SEARXNG_BASE_URL
+SEARXNG_API_KEY
+```
+
+`SEARXNG_BASE_URL` may include a deployment path, but not credentials, query parameters, or a fragment. `SEARXNG_API_KEY` is optional and becomes an `Authorization: Bearer` header for an authenticated external reverse proxy. Neither value reaches stored-agent records, browser code, model-generated input, or tool output.
+
+The client sends only `GET {SEARXNG_BASE_URL}/config` and `POST {SEARXNG_BASE_URL}/search`. `/config` validates optional language, category, and engine targeting and is cached for five minutes. Search uses form-encoded fixed fields, requires JSON responses, rejects redirects, and shares one 12-second deadline across capability validation and search.
+
+Input is bounded to a trimmed non-empty query of at most 1,024 UTF-8 bytes, 1-20 results, pages 1-5, at most 5 unique categories and 10 unique engines, safe-search level 0-2, and time range `day`, `month`, or `year`. Upstream bodies stop at 2 MiB. Normalized output stops at 131,072 UTF-8 bytes and contains at most 20 HTTP(S) results, 5 answers, 10 corrections, and 10 suggestions. Result URLs are limited to 2,048 bytes, titles to 512, snippets to 4,096, categories to 128, and each result to 8 unique engine names of 128 bytes each. Answers are limited to 2,048 bytes each; corrections and suggestions are limited to 512 each. `truncated` reports omitted or shortened data.
+
+Errors use fixed configuration, availability, timeout, format, size, response, targeting, and input messages. They do not repeat endpoint URLs, bearer tokens, queries, upstream bodies, diagnostics, headers, or request IDs. MCP annotations mark search read-only, non-destructive, idempotent, and open-world; it does not require approval.
 
 ## System-message normalization
 
@@ -243,6 +273,8 @@ The current identity implementation is intentionally replaceable. Future OIDC mu
 
 Garage access remains server-side through two explicit paths. Chat tool calls pass through `/api/agent/*`, Mastra, and hydrated agent tools. Report pages and `/api/storage/pm-reports/*` execute in the Next.js server and call `client/src/server/pm-reports.ts` directly. Browser components neither import `@chekku/storage` nor make direct S3/Garage requests.
 
+SearXNG also remains server-side. Builder state carries only fixed capability selection; browser requests cannot set its endpoint, bearer token, headers, commands, packages, environment, or tool registry. Search requests run from the Mastra process through the fixed client.
+
 `client/src/server/pm-reports.ts` is a separate server-only boundary for report pages and APIs. It requires the same server identity seam before storage access, validates public report IDs before reads, fixes the namespace to `pm-agent`, and maps provider failures to safe 400, 403, 404, or 503 responses. OIDC may replace `CHEKKU_LOCAL_USER_ID` later without changing namespace or report-access semantics.
 
 Chat report links use URL-encoded relative `/reports/<reportId>` URLs and render in a new tab with `rel="noreferrer"`. GFM tables are wrapped in labeled, keyboard-focusable horizontal-scroll regions with visible focus outlines. `/reports` uses the same accessibility pattern for its server-rendered list table, preventing narrow layouts from compressing report columns.
@@ -275,6 +307,7 @@ Add future functionality through these boundaries:
 - code-defined agents in `agent/src/agents/`;
 - registered stored-agent tools in `agent/src/mastra/tools/`;
 - provider-neutral gateway behavior in `agent/src/mastra/gateways/`;
+- bounded search transport in `agent/src/mastra/searxng/`, without adding arbitrary page fetching;
 - server request context and future authentication seam;
 - routed client components and Mastra client helpers.
 

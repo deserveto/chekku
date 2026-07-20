@@ -18,6 +18,9 @@ const envSchema = z.object({
   LLM_DISPLAY_NAME: z.string().default('OpenAI-compatible endpoint'),
   LLM_MODELS: z.string().default(''),
 
+  SEARXNG_BASE_URL: z.string().default(''),
+  SEARXNG_API_KEY: z.string().default(''),
+
   CHEKKU_DEFAULT_AGENT_ID: z.string().default('main-agent'),
   CHEKKU_LOCAL_USER_ID: z.string().default('local-user'),
   BROWSER_HEADLESS: z.enum(['true', 'false']).default('true'),

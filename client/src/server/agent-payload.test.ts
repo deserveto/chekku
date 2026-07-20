@@ -3,10 +3,15 @@ import {
   migrateStoredModelId,
   readMcpClientIds,
   splitModelId,
+  STUDIO_MCP_CLIENT_IDS,
   toStoredAgentPayload,
 } from './agent-payload';
 
 describe('stored-agent payload', () => {
+  it('exposes only fixed MCP client ids', () => {
+    expect(STUDIO_MCP_CLIENT_IDS).toEqual(['garage', 'searxng']);
+  });
+
   it('preserves endpoint-native vendor prefixes', () => {
     expect(splitModelId('openai/gpt-4o')).toEqual({
       provider: 'openai-compatible',
@@ -25,6 +30,7 @@ describe('stored-agent payload', () => {
       agents: ['qa-web-agent', 'unknown'],
       mcpClients: [
         'garage',
+        'searxng',
         'unknown',
         'https://example.test/mcp',
         'npx arbitrary-package',
@@ -35,12 +41,22 @@ describe('stored-agent payload', () => {
       model: { provider: 'openai-compatible', name: 'gateway/model-a' },
       tools: { calculator: {}, 'send-email': {} },
       agents: { 'qa-web-agent': {} },
-      mcpClients: { garage: { tools: {} } },
+      mcpClients: {
+        garage: { tools: {} },
+        searxng: { tools: {} },
+      },
       memory: { options: { lastMessages: 20 } },
     });
   });
 
-  it('round-trips selected MCP client ids in the stored shape', () => {
+  it.each([
+    [['garage'], { garage: { tools: {} } }],
+    [['searxng'], { searxng: { tools: {} } }],
+    [['garage', 'searxng'], {
+      garage: { tools: {} },
+      searxng: { tools: {} },
+    }],
+  ])('serializes fixed MCP selection %j', (mcpClients, expected) => {
     const payload = toStoredAgentPayload({
       id: 'demo',
       name: 'Demo',
@@ -49,15 +65,12 @@ describe('stored-agent payload', () => {
       model: 'model-a',
       tools: [],
       agents: [],
-      mcpClients: ['garage'],
+      mcpClients,
       memoryEnabled: true,
     });
 
-    expect(payload.mcpClients).toEqual({ garage: { tools: {} } });
-    expect(readMcpClientIds({
-      ...payload.mcpClients,
-      unknown: { url: 'https://example.test/mcp' },
-    })).toEqual(['garage']);
+    expect(payload.mcpClients).toEqual(expected);
+    expect(readMcpClientIds(payload.mcpClients)).toEqual(mcpClients);
   });
 
   it('omits MCP configuration when no capability is selected', () => {

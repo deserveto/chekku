@@ -69,18 +69,25 @@ describe('requested UI structure', () => {
     expect(rule).not.toContain('position: sticky');
     expect(rule).not.toContain('backdrop-filter');
   });
-  it('offers only the whitelisted Garage MCP capability', () => {
+  it('offers only the whitelisted Garage and SearXNG MCP capabilities', () => {
     expect(agentBuilder).toContain('STUDIO_MCP_CLIENT_IDS.map');
+    expect(agentBuilder).toMatch(
+      /satisfies Record<\s*\(typeof STUDIO_MCP_CLIENT_IDS\)\[number\]/,
+    );
+    expect(agentBuilder).not.toContain('const MCP_META: Record<string');
     expect(agentBuilder).toContain(
       'Create, read, list, replace, and delete agent-isolated text objects in Garage.',
     );
+    expect(agentBuilder).toContain(
+      'Search the web through the server-owned SearXNG instance and return result snippets.',
+    );
     expect(agentBuilder).toContain("set('mcpClients', toggle(values.mcpClients, mcpClientId))");
     expect(agentBuilder).not.toMatch(
-      /mcpUrl|mcpCommand|mcpPackage|mcpCredentials/,
+      /mcpUrl|mcpCommand|mcpPackage|mcpCredentials|SEARXNG_BASE_URL|SEARXNG_API_KEY/,
     );
   });
 
-  it('preserves Garage selection through detail hydration and model migration', () => {
+  it('preserves Garage, SearXNG, or both selections through detail hydration and model migration', () => {
     expect(storedAgents).toContain('mcpClients: readMcpClientIds(record.mcpClients)');
     expect(storedAgents).toContain('mcpClients: detail.mcpClients');
   });
