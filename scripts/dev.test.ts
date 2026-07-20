@@ -13,13 +13,19 @@
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, resolve } from 'node:path';
-import { spawn, spawnSync, type SpawnSyncReturns } from 'node:child_process';
+import { execSync, spawn, spawnSync, type SpawnSyncReturns } from 'node:child_process';
 
 import { parse } from 'dotenv';
 import { afterEach, describe, expect, it } from 'vitest';
 
 const sourceRoot = resolve(import.meta.dirname, '..');
-const bash = process.platform === 'win32' ? 'C:\\Program Files\\Git\\bin\\bash.exe' : 'bash';
+// Resolve bash to an absolute path once at module load. On Linux, libuv
+// resolves a bare executable name against the CHILD process's PATH, not the
+// parent's. Tests that override PATH (e.g. to assert setup-env.sh aborts when
+// node is missing) would otherwise fail with ENOENT before bash ever runs.
+const bash = process.platform === 'win32'
+  ? 'C:\\Program Files\\Git\\bin\\bash.exe'
+  : execSync('command -v bash', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 const fixtures: string[] = [];
 
 const validAgentEnv = [
