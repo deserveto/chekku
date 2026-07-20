@@ -9,13 +9,14 @@ cp client/.env.example client/.env.local
 npm run dev:sh
 ```
 
-The launcher provisions local Garage configuration, waits for Garage health, then starts:
+The launcher provisions local Garage and SearXNG configuration, waits for both services to become healthy, then starts:
 
 - Garage S3 API on `http://127.0.0.1:3900`;
+- SearXNG on `http://127.0.0.1:8888`;
 - Mastra on `http://localhost:4111`;
 - Next.js on `http://localhost:3000`.
 
-It generates and exports these application values to both server processes; do not copy generated credentials into tracked files:
+It generates and exports these five Garage application values to both the Mastra process and the Next.js server boundary; do not copy generated credentials into tracked files:
 
 ```text
 GARAGE_ENDPOINT
@@ -24,6 +25,15 @@ GARAGE_BUCKET
 GARAGE_ACCESS_KEY_ID
 GARAGE_SECRET_ACCESS_KEY
 ```
+
+For search, the launcher exports only these two application values to the Mastra process:
+
+```text
+SEARXNG_BASE_URL
+SEARXNG_API_KEY
+```
+
+The Next.js client process receives zero `SEARXNG_*` values. Only `SEARXNG_BASE_URL` and optional `SEARXNG_API_KEY` are SearXNG application configuration. Local `scripts/searxng-env.sh` also creates `searxng/.env.local` with a generated `SEARXNG_SECRET` and configuration hash for Docker Compose. Those values are private local service state: they are not copied to the agent or client application environments and must not be committed, logged, pasted, or configured as application variables.
 
 ## Environment files
 
@@ -49,6 +59,15 @@ LLM_MODELS=qwen3.6-35b-a3b-fast,qwen3.6-35b-a3b
 
 `LLM_MODELS` is a fallback list. When the endpoint exposes `GET /models`, Chekku uses the discovered IDs.
 
+Local `npm run dev:sh` supplies SearXNG configuration to the agent process. To use an external SearXNG instance instead, start Mastra without local provisioning and set:
+
+```dotenv
+SEARXNG_BASE_URL=https://search.example.com/private-path
+SEARXNG_API_KEY=replace-with-server-only-reverse-proxy-token
+```
+
+The endpoint must use HTTP or HTTPS and must not contain URL credentials, query parameters, or a fragment. `SEARXNG_API_KEY` is optional; when present, Chekku sends it as a bearer token to fixed `/config` and `/search` paths. Keep both values server-side. An empty `SEARXNG_BASE_URL` leaves search unconfigured and makes `search_web` fail closed without preventing other agent features from starting.
+
 ### `client/.env.local`
 
 ```dotenv
@@ -65,6 +84,7 @@ AGENT_SERVICE_TOKEN=
 ```bash
 curl http://localhost:4111/healthz
 curl http://localhost:4111/models
+curl --fail http://127.0.0.1:8888/healthz
 ```
 
 A configured model payload resembles:
@@ -94,6 +114,40 @@ curl \
 
 Set `LLM_DEFAULT_MODEL` to an exact returned `id`, without adding Chekku's internal gateway prefix.
 
+## SearXNG search
+
+Local SearXNG runs pinned image `docker.io/searxng/searxng:2026.7.18-277d8469c`. Compose publishes container port `8080` only on loopback at `127.0.0.1:8888`; the container health check calls its internal `http://127.0.0.1:8080/healthz`. Tracked `searxng/settings.yml` enables JSON search with POST requests, safe-search level 1, page limit 5, a 5-second engine request timeout, and a 10-second maximum engine request timeout.
+
+Local startup creates or reuses private `searxng/.env.local` with mode `0600`, generates the service secret once, and recreates configuration when tracked settings change. Do not copy that file into `agent/.env`; the launcher writes only `SEARXNG_BASE_URL=http://127.0.0.1:8888` and empty `SEARXNG_API_KEY` to generated `agent/.env.development`, strips all SearXNG values from the client process, and does not print private values.
+
+`search_web` is search-only. It returns bounded titles, HTTP(S) URLs, snippets, source engines, optional category/score/published time, answers, corrections, and suggestions; it never downloads result-page content. Web Reader and PM competitive-analysis workflows remain deferred to separate independently reviewed work.
+
+Input and transport limits:
+
+- query: trimmed, non-empty, at most 1,024 UTF-8 bytes;
+- results: 1-20 requested, default 10; page: 1-5, default 1;
+- optional targeting: at most 5 unique categories and 10 unique engines, validated through fixed `GET /config`; language must be supported;
+- optional filters: safe search 0, 1, or 2; time range `day`, `month`, or `year`;
+- fixed search request: `POST /search`, JSON only, redirects rejected, one 12-second deadline across config and search;
+- upstream body: at most 2 MiB; normalized tool output: at most 131,072 UTF-8 bytes.
+
+Output limits:
+
+- at most 20 results; each HTTP(S) URL is at most 2,048 bytes, title 512, snippet 4,096, category 128, and list of source engines 8 unique names of 128 bytes each;
+- at most 5 answers of 2,048 bytes each;
+- at most 10 corrections and 10 suggestions of 512 bytes each;
+- `truncated: true` when upstream entries are invalid, omitted, shortened, or removed to fit limits.
+
+Errors are fixed and bounded for missing/invalid configuration, unavailable service, timeout, unsupported JSON, oversized or invalid responses, unsupported targeting, and invalid input. They do not disclose endpoint URLs, bearer tokens, search queries, upstream response bodies, diagnostics, headers, or request IDs.
+
+To stop local Garage and SearXNG safely while preserving their named volumes:
+
+```bash
+docker compose --env-file storage/.env.local --env-file searxng/.env.local down
+```
+
+Do not add `--volumes` or run `docker volume rm` during normal shutdown or application/database reset. SearXNG cache and all Garage objects remain available for the next startup.
+
 ## Storage
 
 The default storage URL is:
@@ -121,13 +175,13 @@ This removes stored agents and conversation history.
 
 ### Garage object storage
 
-Local Garage runs image `dxflrs/garage:v2.3.0` with persistent Docker volumes and generic bucket `chekku-objects`. Compose publishes only the S3 API at `127.0.0.1:3900`; RPC, admin, and metrics ports stay inside the Docker network. Stop application processes before changing credentials. To stop Garage without deleting its volumes:
+Local Garage runs image `dxflrs/garage:v2.3.0` with persistent Docker volumes and generic bucket `chekku-objects`. Compose publishes only the S3 API at `127.0.0.1:3900`; RPC, admin, and metrics ports stay inside the Docker network. Stop application processes before changing credentials. To stop local services without deleting their volumes:
 
 ```bash
-docker compose --env-file storage/.env.local down
+docker compose --env-file storage/.env.local --env-file searxng/.env.local down
 ```
 
-Do not commit or paste contents from `storage/.env.local`, `storage/.garage/`, or generated `agent/.env.development`. Removing Garage volumes destroys local agent objects and is intentionally not part of normal reset instructions.
+Do not commit or paste contents from `storage/.env.local`, `storage/.garage/`, `searxng/.env.local`, or generated `agent/.env.development`. Removing Garage volumes destroys local agent objects and is intentionally not part of normal reset instructions; removing SearXNG cache is also unnecessary for application reset.
 
 Garage MCP validates relative keys before access, limits keys to 512 UTF-8 bytes, limits text to 262,144 UTF-8 bytes, and returns at most 100 list entries. Physical objects are isolated under `agents/<base64url-agent-id>/`; tool callers see relative keys only. Replace and delete require user approval.
 
@@ -203,6 +257,36 @@ Get a key at [resend.com](https://resend.com). The default `onboarding@resend.de
 
 ## Common failures
 
+### Local service startup fails
+
+Run from repository root with Docker responsive and both loopback ports free:
+
+```bash
+docker compose version
+docker compose --env-file storage/.env.local --env-file searxng/.env.local ps garage searxng
+```
+
+`npm run dev:sh` reports whether Garage port `3900` or SearXNG port `8888` is occupied. Stop the conflicting process or container; do not edit the pinned Compose ports without a reviewed configuration change. If Compose configuration is invalid, remove no volumes: inspect tracked `compose.yaml`, `searxng/settings.yml`, and generated file permissions, then rerun the launcher.
+
+### Local service readiness times out
+
+Default readiness timeout is 30 seconds. First inspect health and logs without printing environment values:
+
+```bash
+docker compose --env-file storage/.env.local --env-file searxng/.env.local ps garage searxng
+docker compose --env-file storage/.env.local --env-file searxng/.env.local logs garage searxng
+```
+
+For a slow Docker host, retry with `CHEKKU_READY_TIMEOUT_SECONDS` set from 1 to 300. `CHEKKU_READY_INTERVAL_SECONDS` must be a positive integer and is capped at 5. These launcher settings do not change `search_web`'s fixed 12-second request deadline.
+
+### SearXNG search is not configured
+
+For local operation, rerun `npm run dev:sh` so the launcher injects loopback configuration into Mastra. For external operation, confirm `SEARXNG_BASE_URL` reaches only the agent process and restart it. Do not add endpoint configuration to stored-agent payloads or browser environment.
+
+### SearXNG search is unavailable or times out
+
+For local operation, call `curl --fail http://127.0.0.1:8888/healthz` and inspect the SearXNG service status. For external operation, verify the base URL, reverse-proxy bearer authentication, JSON support, fixed `/config` and `/search` routes, and upstream search-engine latency from the Mastra host. Do not expose the optional bearer or copy raw upstream responses into tickets.
+
 ### Garage MCP reports missing identity
 
 `Agent identity is required.` means execution did not include trusted `context.agent.agentId`. Do not add an agent ID to tool input. Ensure the tool runs through a hydrated Mastra agent with the built-in `garage` MCP server.
@@ -220,8 +304,8 @@ Confirm all five `GARAGE_*` application values are available to the agent proces
 Check Docker and local health without exposing environment values:
 
 ```bash
-docker compose --env-file storage/.env.local ps garage
-docker inspect --format '{{.State.Health.Status}}' "$(docker compose --env-file storage/.env.local ps -q garage)"
+docker compose --env-file storage/.env.local --env-file searxng/.env.local ps garage
+docker inspect --format '{{.State.Health.Status}}' "$(docker compose --env-file storage/.env.local --env-file searxng/.env.local ps -q garage)"
 ```
 
 ### Model access denied
@@ -313,7 +397,7 @@ npm run build
 git diff --check
 ```
 
-The test suite covers model routing, model discovery, prompt normalization, all four built-in agents, Telegram roles and slash commands, email approval flow, PM tools and repositories, report APIs/pages and accessible tables, stored-agent payloads and Garage hydration, stored-model migration, thread ownership, proxy paths, UI structure, namespaced storage, Garage adapter safety, and launcher behavior.
+The test suite covers model routing, model discovery, prompt normalization, all four built-in agents, Telegram roles and slash commands, email approval flow, PM tools and repositories, report APIs/pages and accessible tables, stored-agent payloads and fixed Garage/SearXNG hydration, bounded search transport and safe errors, stored-model migration, thread ownership, proxy paths, UI structure, namespaced storage, Garage adapter safety, and launcher behavior.
 
 ## Production notes
 
@@ -324,6 +408,7 @@ Before deploying beyond local development:
 - set a durable LibSQL-compatible database URL and token;
 - restrict `WEB_URL` to the deployed client origin;
 - configure an authenticated server-to-server hop if the Mastra service is exposed separately;
+- configure `SEARXNG_BASE_URL` and optional `SEARXNG_API_KEY` only in the agent service or deployment secret manager; keep the endpoint private or protect it with a reverse proxy;
 - review browser approval and network policies;
 - if the social-media-agent is enabled, set `TELEGRAM_MODE=webhook` with a public URL and `TELEGRAM_WEBHOOK_SECRET_TOKEN`, and provision a Resend-verified sender for the send-email tool;
 - add rate limits, audit logging, and backup procedures appropriate to the environment.

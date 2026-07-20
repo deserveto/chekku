@@ -10,6 +10,7 @@ storage/.env.local
 storage/.garage/
 storage/.garage-data/
 storage/.garage-meta/
+searxng/.env.local
 
 # Build output and caches
 .next/

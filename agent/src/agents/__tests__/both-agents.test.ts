@@ -36,7 +36,7 @@ describe('qa-web-agent (browser QA)', () => {
 });
 
 describe('pm-agent (weekly report analysis)', () => {
-  it('has built-in identity, memory, and only PM report tools', async () => {
+  it('has built-in identity, memory, and PM report plus search tools', async () => {
     expect(pmAgent.id).toBe('pm-agent');
     expect(pmAgent.name).toBe('PM Agent');
     expect(await pmAgent.getMemory()).toBeDefined();
@@ -45,6 +45,7 @@ describe('pm-agent (weekly report analysis)', () => {
     expect(Object.keys(tools).sort()).toEqual([
       'list_pm_reports_from_garage',
       'save_pm_report_to_garage',
+      'search_web',
       'view_pm_report_from_garage',
     ]);
     expect(await pmAgent.getDefaultOptions()).toMatchObject({ maxSteps: 12 });
