@@ -28,10 +28,34 @@ if ! docker compose version >/dev/null 2>&1; then
   exit 1
 fi
 
-# shellcheck disable=SC1091
-source "$ROOT/scripts/storage-env.sh"
-# shellcheck disable=SC1091
-source "$ROOT/scripts/searxng-env.sh"
+STORAGE_ENV_FILE="$ROOT/storage/.env.local"
+SEARXNG_ENV_FILE="$ROOT/searxng/.env.local"
+GARAGE_CONFIG_FILE="$ROOT/storage/.garage/garage.toml"
+GARAGE_APPLIED_HASH_FILE="$ROOT/storage/.garage/.applied-hash"
+
+for required_file in "$STORAGE_ENV_FILE" "$SEARXNG_ENV_FILE" "$GARAGE_CONFIG_FILE"; do
+  if [[ ! -f "$required_file" ]]; then
+    echo "Missing $(basename "$required_file"). Run scripts/setup-env.sh first." >&2
+    exit 1
+  fi
+done
+
+set -a
+# shellcheck disable=SC1090
+source "$STORAGE_ENV_FILE"
+# shellcheck disable=SC1090
+source "$SEARXNG_ENV_FILE"
+set +a
+
+TOML_HASH="$(sha256sum "$GARAGE_CONFIG_FILE" | cut -d' ' -f1)"
+APPLIED_HASH=""
+if [[ -f "$GARAGE_APPLIED_HASH_FILE" ]]; then
+  APPLIED_HASH="$(cat "$GARAGE_APPLIED_HASH_FILE")"
+fi
+export GARAGE_CONFIG_CHANGED=0
+if [[ "$TOML_HASH" != "$APPLIED_HASH" ]]; then
+  export GARAGE_CONFIG_CHANGED=1
+fi
 
 if ! docker compose --env-file storage/.env.local config --quiet >/dev/null 2>&1; then
   echo "Local services Compose configuration is invalid. Check compose.yaml and generated service configuration." >&2
@@ -237,6 +261,11 @@ ensure_service_ready() {
 
 ensure_service_ready garage Garage "${CHEKKU_GARAGE_PORTS:-3900}"
 
+if [[ "$GARAGE_CONFIG_CHANGED" == 1 ]]; then
+  printf '%s' "$TOML_HASH" > "$GARAGE_APPLIED_HASH_FILE"
+  chmod 600 "$GARAGE_APPLIED_HASH_FILE"
+fi
+
 printf 'Garage ready\n  endpoint: %s\n  region: %s\n  bucket: %s\n' \
   "$GARAGE_ENDPOINT" "$GARAGE_REGION" "$GARAGE_BUCKET"
 
@@ -256,11 +285,11 @@ NODE
 )"
   session_name="chekku-dev-$root_hash"
   if ! tmux has-session -t "$session_name" 2>/dev/null; then
-    if ! tmux new-session -d -s "$session_name" -c "$ROOT" "source scripts/storage-env.sh && source scripts/searxng-env.sh && $garage_app_cleanup && $searxng_agent_cleanup && exec npm run dev:agent"; then
+    if ! tmux new-session -d -s "$session_name" -c "$ROOT" "set -a && source storage/.env.local && source searxng/.env.local && set +a && $garage_app_cleanup && $searxng_agent_cleanup && exec npm run dev:agent"; then
       echo "Could not create tmux session '$session_name'." >&2
       exit 1
     fi
-    if ! tmux split-window -h -t "$session_name" -c "$ROOT" "source scripts/storage-env.sh && source scripts/searxng-env.sh && $garage_app_cleanup && $searxng_client_cleanup && exec npm run dev:client" ||
+    if ! tmux split-window -h -t "$session_name" -c "$ROOT" "set -a && source storage/.env.local && source searxng/.env.local && set +a && $garage_app_cleanup && $searxng_client_cleanup && exec npm run dev:client" ||
       ! tmux select-layout -t "$session_name" even-horizontal; then
       tmux kill-session -t "$session_name" 2>/dev/null || true
       echo "Could not configure tmux session '$session_name'; partial session removed." >&2

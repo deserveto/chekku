@@ -1,4 +1,4 @@
-import {
+﻿import {
   appendFileSync,
   chmodSync,
   copyFileSync,
@@ -42,6 +42,25 @@ const nbsp = '\u00A0';
 const verticalTab = '\u000B';
 const formFeed = '\u000C';
 
+// Storage and SearXNG keys whose values are actual secrets (random tokens/keys).
+// Public default values like GARAGE_REGION=garage are intentionally excluded so
+// that legitimate output (e.g. the file path storage/.garage/garage.toml) is not
+// flagged as a leak.
+const storageSecretKeyNames = new Set([
+  'GARAGE_ACCESS_KEY_ID',
+  'GARAGE_SECRET_ACCESS_KEY',
+  'GARAGE_RPC_SECRET',
+  'GARAGE_ADMIN_TOKEN',
+  'GARAGE_METRICS_TOKEN',
+]);
+const searxngSecretKeyNames = new Set([
+  'SEARXNG_SECRET',
+  'SEARXNG_CONFIG_HASH',
+]);
+function isSecretKeyName(name: string): boolean {
+  return storageSecretKeyNames.has(name) || searxngSecretKeyNames.has(name);
+}
+
 function executable(path: string, body: string): void {
   writeFileSync(path, `#!/usr/bin/env bash\nset -euo pipefail\n${body}`);
   chmodSync(path, 0o755);
@@ -84,20 +103,22 @@ function fixture(options: {
   agentEnv?: string | null;
   rejectedSleep?: string;
   captureNpmEnv?: boolean;
+  setupEnv?: boolean;
 } = {}): string {
   const root = mkdtempSync(resolve(tmpdir(), 'chekku-dev-'));
   fixtures.push(root);
-  for (const directory of ['scripts', 'storage', 'searxng', 'agent', 'bin']) {
+  for (const directory of ['scripts', 'storage', 'searxng', 'agent', 'client', 'bin']) {
     mkdirSync(resolve(root, directory));
   }
   for (const path of [
     'scripts/dev.sh',
-    'scripts/storage-env.sh',
-    'scripts/searxng-env.sh',
+    'scripts/setup-env.sh',
     'storage/garage.toml.template',
     'searxng/settings.yml',
     'compose.yaml',
     '.gitignore',
+    'agent/.env.example',
+    'client/.env.example',
   ]) {
     copyFileSync(resolve(sourceRoot, path), resolve(root, path));
   }
@@ -233,6 +254,10 @@ exit 1
 `);
   }
 
+  if (options.setupEnv !== false) {
+    runSetup(root, [], '');
+  }
+
   return root;
 }
 
@@ -293,646 +318,37 @@ function runDev(root: string, env: Record<string, string> = {}): SpawnSyncReturn
   return run(root, ['scripts/dev.sh'], env);
 }
 
+function runSetup(
+  root: string,
+  args: string[] = [],
+  stdin: string | null = null,
+  env: Record<string, string> = {},
+): SpawnSyncReturns<string> {
+  const log = resolve(root, 'mock-log');
+  mkdirSync(log, { recursive: true });
+  const path = env.PATH ?? `${resolve(root, 'bin')}${delimiter}${process.env.PATH ?? ''}`;
+  return spawnSync(bash, ['scripts/setup-env.sh', ...args], {
+    cwd: root,
+    encoding: 'utf8',
+    ...(stdin !== null ? { input: stdin } : {}),
+    timeout: 15_000,
+    env: {
+      ...process.env,
+      ...env,
+      MOCK_LOG: log,
+      NODE_PATH: resolve(sourceRoot, 'node_modules'),
+      PATH: path,
+    },
+  });
+}
+
 afterEach(() => {
   for (const root of fixtures.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-describe('storage environment generation', () => {
-  it('safely replaces stale Garage values with exactly five current application values', () => {
-    const root = fixture({
-      agentEnv: [
-        'NODE_ENV=development',
-        String.raw`LLM_API_KEY='key with spaces "quotes" C:\models literal\n # $token 雪'`,
-        ' export GARAGE_ENDPOINT = stale-endpoint',
-        '  GARAGE_REGION="stale region"',
-        '\tGARAGE_BUCKET \t= stale-bucket',
-        'export GARAGE_ACCESS_KEY_ID=stale-access-key',
-        'GARAGE_SECRET_ACCESS_KEY = stale-secret-key',
-        'UNRELATED = preserve-this-line',
-        'WEB_URL=http://localhost:3000',
-      ].join('\r\n'),
-    });
-    const garageValues = {
-      GARAGE_ENDPOINT: 'https://garage.example.test/object path?x=a=b&token=A+/==$cash#frag',
-      GARAGE_REGION: String.raw`region 'single' \`tick\` C:\path 雪`,
-      GARAGE_BUCKET: String.raw`bucket "double" C:\garage + / = $value 雪`,
-      GARAGE_ACCESS_KEY_ID: String.raw`GK+base64/==$value\nliteral`,
-      GARAGE_SECRET_ACCESS_KEY: String.raw`secret 'single' "double" C:\vault +/==$value 雪`,
-    };
-    writeFileSync(resolve(root, 'storage/.env.local'), storageEnv(garageValues));
-
-    const result = run(root, ['scripts/storage-env.sh']);
-    const generated = readFileSync(resolve(root, 'agent/.env.development'), 'utf8');
-    const values = parse(generated);
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(values.LLM_API_KEY).toBe(parse(readFileSync(resolve(root, 'agent/.env'))).LLM_API_KEY);
-    expect(generated).toContain('UNRELATED = preserve-this-line');
-    expect(values.WEB_URL).toBe('http://localhost:3000');
-    for (const [name, value] of Object.entries(garageValues)) {
-      expect(values[name]).toBe(value);
-      expect(generated.match(new RegExp(`^${name}=`, 'gm'))).toHaveLength(1);
-      expect(result.stdout).not.toContain(value);
-      expect(result.stderr).not.toContain(value);
-    }
-    expect(generated).not.toContain('stale-');
-    expect(generated).not.toMatch(/^GARAGE_(?:RPC_SECRET|ADMIN_TOKEN|METRICS_TOKEN)=/m);
-  });
-
-  it('removes every Garage-prefixed assignment including multiline values', () => {
-    const preserved = [
-      'NON-GARAGE.KEY: preserved-colon-value',
-      'OTHER.DOTTED="preserved-multiline-first',
-      'preserved-multiline-second"',
-      `${nbsp}NON-GARAGE.NBSP${nbsp}=${nbsp}preserved-nbsp-value`,
-      `${verticalTab}NON-GARAGE.VT:${formFeed}preserved-vt-value`,
-    ].join('\r\n');
-    const root = fixture({
-      agentEnv: [
-        validAgentEnv.trimEnd(),
-        'GARAGE_ENDPOINT="stale-endpoint-first',
-        'stale-endpoint-second"',
-        "export GARAGE_RPC_SECRET='stale-rpc-first",
-        "stale-rpc-second'",
-        'GARAGE_ADMIN_TOKEN=`stale-admin-first',
-        'stale-admin-second`',
-        'GARAGE_UNRELATED=stale-unrelated',
-        'GARAGE_RPC-SECRET=stale-rpc-hyphen',
-        'GARAGE_UNRELATED.ALT=stale-unrelated-dot',
-        'GARAGE_COLON.ALT: "stale-colon-first',
-        'stale-colon-second"',
-        `${bom}GARAGE_BOM.SECRET=stale-bom-value`,
-        `${nbsp}GARAGE_NBSP.SECRET${nbsp}=${nbsp}stale-nbsp-value`,
-        `${verticalTab}GARAGE_VT.SECRET:${formFeed}stale-vt-value`,
-        preserved,
-        'UNRELATED=preserved',
-        '',
-      ].join('\r\n'),
-    });
-
-    const result = run(root, ['scripts/storage-env.sh']);
-    const generated = readFileSync(resolve(root, 'agent/.env.development'), 'utf8');
-    const sourceNames = prefixedAssignmentNames(readFileSync(resolve(root, 'agent/.env'), 'utf8'));
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(sourceNames).toEqual(expect.arrayContaining([
-      'GARAGE_BOM.SECRET',
-      'GARAGE_NBSP.SECRET',
-      'GARAGE_VT.SECRET',
-    ]));
-    expect(prefixedAssignmentNames(generated).filter((name) => name.startsWith('GARAGE_'))).toEqual([
-      'GARAGE_ACCESS_KEY_ID',
-      'GARAGE_BUCKET',
-      'GARAGE_ENDPOINT',
-      'GARAGE_REGION',
-      'GARAGE_SECRET_ACCESS_KEY',
-    ]);
-    expect(generated).toContain(preserved);
-    expect(generated).toContain('UNRELATED=preserved');
-    expect(generated).not.toContain('stale-');
-    expect(result.stdout + result.stderr).not.toContain('stale-');
-  });
-
-  it.each([
-    ['equals', 'GARAGE_UNRELATED="'],
-    ['colon', 'GARAGE_UNRELATED.ALT: "'],
-    ['BOM/NBSP equals', `${bom}GARAGE_BOM.ALT${nbsp}=${nbsp}"`],
-    ['vertical-tab colon', `${verticalTab}GARAGE_VT.ALT:${formFeed}"`],
-  ])('rejects malformed Garage-prefixed %s assignments without leaking or changing generated state', (
-    _operator,
-    assignment,
-  ) => {
-    const root = fixture();
-    expect(run(root, ['scripts/storage-env.sh']).status).toBe(0);
-    const sourcePath = resolve(root, 'agent/.env');
-    const generatedPath = resolve(root, 'agent/.env.development');
-    const generatedContent = readFileSync(generatedPath, 'utf8');
-    const privateValue = 'private-garage-first';
-    const retainedValue = 'private-garage-retained';
-    appendFileSync(sourcePath, [
-      `${assignment}${privateValue}`,
-      retainedValue,
-      '',
-    ].join('\n'));
-    const sourceContent = readFileSync(sourcePath, 'utf8');
-
-    const result = run(root, ['scripts/storage-env.sh']);
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain('Garage application environment contains an invalid assignment.');
-    expect(result.stdout).toBe('');
-    expect(result.stderr).not.toContain(privateValue);
-    expect(result.stderr).not.toContain(retainedValue);
-    expect(readFileSync(sourcePath, 'utf8')).toBe(sourceContent);
-    expect(readFileSync(generatedPath, 'utf8')).toBe(generatedContent);
-  });
-
-  it('rejects line breaks with a key-specific error and no secret output', () => {
-    const root = fixture();
-    const unsafe = 'private first line\nprivate second line';
-    writeFileSync(resolve(root, 'storage/.env.local'), storageEnv({
-      GARAGE_ENDPOINT: 'http://garage.test:3900',
-      GARAGE_REGION: unsafe,
-      GARAGE_BUCKET: 'chekku-objects',
-      GARAGE_ACCESS_KEY_ID: 'access-key',
-      GARAGE_SECRET_ACCESS_KEY: 'secret-key',
-    }));
-
-    const result = run(root, ['scripts/storage-env.sh']);
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain('GARAGE_REGION must not contain CR or LF');
-    expect(`${result.stdout}${result.stderr}`).not.toContain(unsafe);
-  });
-
-  it('creates private stable random credentials and stable generated config', () => {
-    const root = fixture();
-    const first = run(root, ['scripts/storage-env.sh']);
-    const envPath = resolve(root, 'storage/.env.local');
-    const configPath = resolve(root, 'storage/.garage/garage.toml');
-    const envContent = readFileSync(envPath, 'utf8');
-    const configContent = readFileSync(configPath, 'utf8');
-    const configInode = statSync(configPath).ino;
-    const second = run(root, ['scripts/storage-env.sh']);
-
-    expect(first.status, first.stderr).toBe(0);
-    expect(second.status, second.stderr).toBe(0);
-    expect(parse(envContent).GARAGE_BUCKET).toBe('chekku-objects');
-    expect(parse(envContent).GARAGE_ACCESS_KEY_ID).toMatch(/^GK[A-F0-9]{24}$/);
-    expect(readFileSync(envPath, 'utf8')).toBe(envContent);
-    expect(readFileSync(configPath, 'utf8')).toBe(configContent);
-    expect(statSync(configPath).ino).toBe(configInode);
-    if (process.platform !== 'win32') {
-      expect(statSync(envPath).mode & 0o077).toBe(0);
-      expect(statSync(configPath).mode & 0o077).toBe(0);
-    }
-  });
-
-  it('removes stale generated agent environment when source disappears', () => {
-    const root = fixture();
-    expect(run(root, ['scripts/storage-env.sh']).status).toBe(0);
-    rmSync(resolve(root, 'agent/.env'));
-    expect(run(root, ['scripts/storage-env.sh']).status).toBe(0);
-    expect(existsSync(resolve(root, 'agent/.env.development'))).toBe(false);
-  });
-});
-
-describe('SearXNG environment generation', () => {
-  it('propagates render failure from chained source without changing state', () => {
-    const root = fixture();
-    expect(run(root, ['scripts/searxng-env.sh']).status).toBe(0);
-    const localPath = resolve(root, 'searxng/.env.local');
-    const generatedPath = resolve(root, 'agent/.env.development');
-    const generatedContent = readFileSync(generatedPath, 'utf8');
-    const successMarker = resolve(root, 'mock-log/chained-source-succeeded');
-    const privateValue = 'private-invalid-render-value';
-    const invalidContent = `${searxngEnv()}UNRELATED=${privateValue}\n`;
-    writeFileSync(localPath, invalidContent);
-
-    const result = run(root, ['-c', 'source scripts/searxng-env.sh && touch "$MOCK_LOG/chained-source-succeeded"']);
-
-    expect(result.status).not.toBe(0);
-    expect(existsSync(successMarker)).toBe(false);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toBe(invalidSearxngLocalStateError);
-    expect(result.stderr).not.toContain(privateValue);
-    expect(readFileSync(localPath, 'utf8')).toBe(invalidContent);
-    expect(readFileSync(generatedPath, 'utf8')).toBe(generatedContent);
-    expect(readdirSync(resolve(root, 'searxng')).filter((name) => name.includes('.tmp.'))).toEqual([]);
-    expect(readdirSync(resolve(root, 'agent')).filter((name) => name.includes('.tmp.'))).toEqual([]);
-  });
-
-  it('propagates post-render load failure from chained source without changing state', () => {
-    const root = fixture();
-    expect(run(root, ['scripts/searxng-env.sh']).status).toBe(0);
-    const localPath = resolve(root, 'searxng/.env.local');
-    const generatedPath = resolve(root, 'agent/.env.development');
-    const localContent = readFileSync(localPath, 'utf8');
-    const generatedContent = readFileSync(generatedPath, 'utf8');
-    const successMarker = resolve(root, 'mock-log/chained-source-succeeded');
-    const privateValue = 'private-invalid-load-value';
-    writeFileSync(resolve(root, 'mock-log/invalid-load-state'), `${privateValue}\n`);
-    const realNode = process.execPath.replaceAll('\\', '/');
-    executable(resolve(root, 'bin/node'), `
-if [[ "$1" == - ]]; then
-  count=0
-  if [[ -f "$MOCK_LOG/searxng-node-count" ]]; then count="$(<"$MOCK_LOG/searxng-node-count")"; fi
-  count=$((count + 1))
-  printf '%s' "$count" > "$MOCK_LOG/searxng-node-count"
-  if ((count == 2)); then exec ${shellValue(realNode)} "$1" "$MOCK_LOG/invalid-load-state"; fi
-fi
-exec ${shellValue(realNode)} "$@"
-`);
-
-    const result = run(root, ['-c', 'source scripts/searxng-env.sh && touch "$MOCK_LOG/chained-source-succeeded"']);
-
-    expect(result.status).not.toBe(0);
-    expect(existsSync(successMarker)).toBe(false);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toBe(invalidSearxngLocalStateError);
-    expect(result.stderr).not.toContain(privateValue);
-    expect(readFileSync(localPath, 'utf8')).toBe(localContent);
-    expect(readFileSync(generatedPath, 'utf8')).toBe(generatedContent);
-    expect(readdirSync(resolve(root, 'searxng')).filter((name) => name.includes('.tmp.'))).toEqual([]);
-    expect(readdirSync(resolve(root, 'agent')).filter((name) => name.includes('.tmp.'))).toEqual([]);
-  });
-
-  it('propagates agent render failure from chained source without changing state', () => {
-    const root = fixture();
-    expect(run(root, ['scripts/searxng-env.sh']).status).toBe(0);
-    const localPath = resolve(root, 'searxng/.env.local');
-    const generatedPath = resolve(root, 'agent/.env.development');
-    const localContent = readFileSync(localPath, 'utf8');
-    const privateValue = 'private-invalid-agent-value';
-    appendFileSync(generatedPath, `SEARXNG_UNRELATED="${privateValue}\n`);
-    const generatedContent = readFileSync(generatedPath, 'utf8');
-    const successMarker = resolve(root, 'mock-log/chained-source-succeeded');
-
-    const result = run(root, ['-c', 'source scripts/searxng-env.sh && touch "$MOCK_LOG/chained-source-succeeded"']);
-
-    expect(result.status).not.toBe(0);
-    expect(existsSync(successMarker)).toBe(false);
-    expect(result.stdout).toBe('');
-    expect(result.stderr.split(invalidSearxngAssignmentError)).toHaveLength(2);
-    expect(result.stderr).not.toContain(privateValue);
-    expect(readFileSync(localPath, 'utf8')).toBe(localContent);
-    expect(readFileSync(generatedPath, 'utf8')).toBe(generatedContent);
-    expect(readdirSync(resolve(root, 'searxng')).filter((name) => name.includes('.tmp.'))).toEqual([]);
-    expect(readdirSync(resolve(root, 'agent')).filter((name) => name.includes('.tmp.'))).toEqual([]);
-  });
-
-  it('treats existing local state as data without executing commands or injecting environment', () => {
-    const root = fixture();
-    expect(run(root, ['scripts/searxng-env.sh']).status).toBe(0);
-    const localPath = resolve(root, 'searxng/.env.local');
-    const generatedPath = resolve(root, 'agent/.env.development');
-    const generatedContent = readFileSync(generatedPath, 'utf8');
-    const commandMarker = resolve(root, 'mock-log/command-executed');
-    const environmentMarker = resolve(root, 'mock-log/environment-injected');
-    const preloadPath = resolve(root, 'inject.cjs');
-    writeFileSync(preloadPath, [
-      "const { writeFileSync } = require('node:fs');",
-      `writeFileSync(${JSON.stringify(environmentMarker)}, 'injected');`,
-      '',
-    ].join('\n'));
-    const privateValue = 'private-local-state-value';
-    const maliciousContent = [
-      `NODE_OPTIONS=--require=${preloadPath.replaceAll('\\', '/')}`,
-      `SEARXNG_SECRET=$(touch ${shellValue(commandMarker.replaceAll('\\', '/'))})`,
-      `SEARXNG_CONFIG_HASH=${'c'.repeat(64)}`,
-      'SEARXNG_BASE_URL=http://127.0.0.1:8888',
-      'SEARXNG_API_KEY=',
-      `UNRELATED=${privateValue}`,
-      '',
-    ].join('\n');
-    writeFileSync(localPath, maliciousContent);
-
-    const result = run(root, ['scripts/searxng-env.sh']);
-
-    expect(result.status).not.toBe(0);
-    expect(existsSync(commandMarker)).toBe(false);
-    expect(existsSync(environmentMarker)).toBe(false);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toBe(invalidSearxngLocalStateError);
-    expect(result.stderr).not.toContain(privateValue);
-    expect(readFileSync(localPath, 'utf8')).toBe(maliciousContent);
-    expect(readFileSync(generatedPath, 'utf8')).toBe(generatedContent);
-  });
-
-  it.each([
-    ['missing key', searxngEnv().replace('SEARXNG_API_KEY=\n', '')],
-    ['duplicate key', `${searxngEnv()}SEARXNG_CONFIG_HASH=${'d'.repeat(64)}\n`],
-    ['extra key', `${searxngEnv()}NODE_OPTIONS=--trace-warnings\n`],
-    ['command syntax', searxngEnv({ SEARXNG_SECRET: '$(touch command-marker)' })],
-    ['comment', `${searxngEnv()}# local state\n`],
-    ['reordered keys', searxngEnv().split('\n').slice(0, 4).reverse().join('\n') + '\n'],
-    ['invalid secret', searxngEnv({ SEARXNG_SECRET: 'not-a-secret' })],
-    ['invalid hash', searxngEnv({ SEARXNG_CONFIG_HASH: 'not-a-hash' })],
-    ['nonlocal URL', searxngEnv({ SEARXNG_BASE_URL: 'https://search.example.test' })],
-    ['nonempty API key', searxngEnv({ SEARXNG_API_KEY: 'private-api-key' })],
-  ])('rejects %s in existing local state without changing generated state', (_case, content) => {
-    const root = fixture();
-    expect(run(root, ['scripts/searxng-env.sh']).status).toBe(0);
-    const localPath = resolve(root, 'searxng/.env.local');
-    const generatedPath = resolve(root, 'agent/.env.development');
-    const generatedContent = readFileSync(generatedPath, 'utf8');
-    writeFileSync(localPath, content);
-
-    const result = run(root, ['scripts/searxng-env.sh']);
-
-    expect(result.status).not.toBe(0);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toBe(invalidSearxngLocalStateError);
-    expect(readFileSync(localPath, 'utf8')).toBe(content);
-    expect(readFileSync(generatedPath, 'utf8')).toBe(generatedContent);
-  });
-
-  it('keeps a private stable secret and updates the tracked settings hash', () => {
-    const root = fixture({
-      agentEnv: [
-        validAgentEnv.trimEnd(),
-        'SEARXNG_BASE_URL=https://stale.example.test',
-        ' export SEARXNG_API_KEY = stale-key',
-        'SEARXNG_BASE_URL=duplicate-stale-value',
-        '',
-      ].join('\n'),
-    });
-    expect(run(root, ['scripts/storage-env.sh']).status).toBe(0);
-
-    const first = run(root, ['scripts/searxng-env.sh']);
-    const envPath = resolve(root, 'searxng/.env.local');
-    const firstContent = readFileSync(envPath, 'utf8');
-    const firstValues = parse(firstContent);
-    const firstAgentContent = readFileSync(resolve(root, 'agent/.env.development'), 'utf8');
-
-    expect(first.status, first.stderr).toBe(0);
-    expect(firstValues.SEARXNG_SECRET).toMatch(/^[A-Za-z0-9_-]{43}$/);
-    expect(firstValues.SEARXNG_CONFIG_HASH).toMatch(/^[a-f0-9]{64}$/);
-    expect(firstValues.SEARXNG_BASE_URL).toBe('http://127.0.0.1:8888');
-    expect(firstValues.SEARXNG_API_KEY).toBe('');
-    expect(firstAgentContent.match(/^SEARXNG_BASE_URL=/gm)).toHaveLength(1);
-    expect(firstAgentContent.match(/^SEARXNG_API_KEY=/gm)).toHaveLength(1);
-    expect(parse(firstAgentContent).SEARXNG_BASE_URL).toBe('http://127.0.0.1:8888');
-    expect(parse(firstAgentContent).SEARXNG_API_KEY).toBe('');
-    expect(firstAgentContent).not.toMatch(/^SEARXNG_(?:SECRET|CONFIG_HASH)=/m);
-    expect(firstAgentContent.includes(firstValues.SEARXNG_SECRET!)).toBe(false);
-    expect(firstAgentContent.includes(firstValues.SEARXNG_CONFIG_HASH!)).toBe(false);
-    expect(firstAgentContent).not.toContain('stale');
-    expect((first.stdout + first.stderr).includes(firstValues.SEARXNG_SECRET!)).toBe(false);
-
-    const unchanged = run(root, ['scripts/searxng-env.sh']);
-    expect(unchanged.status, unchanged.stderr).toBe(0);
-    expect(readFileSync(envPath, 'utf8')).toBe(firstContent);
-
-    appendFileSync(resolve(root, 'searxng/settings.yml'), '\n# changed\n');
-    const changed = run(root, ['scripts/searxng-env.sh']);
-    const changedValues = parse(readFileSync(envPath, 'utf8'));
-
-    expect(changed.status, changed.stderr).toBe(0);
-    expect(changedValues.SEARXNG_SECRET === firstValues.SEARXNG_SECRET).toBe(true);
-    expect(changedValues.SEARXNG_CONFIG_HASH).not.toBe(firstValues.SEARXNG_CONFIG_HASH);
-    expect((changed.stdout + changed.stderr).includes(firstValues.SEARXNG_SECRET!)).toBe(false);
-    if (process.platform !== 'win32') {
-      expect(statSync(envPath).mode & 0o077).toBe(0);
-    }
-  });
-
-  it('exports the persisted winner from concurrent first runs', async () => {
-    const root = fixture({ agentEnv: null });
-    const log = resolve(root, 'mock-log');
-    const realNode = process.execPath.replaceAll('\\', '/');
-    executable(resolve(root, 'bin/node'), `
-if [[ "$1" == - ]] && mkdir "$MOCK_LOG/first-node" 2>/dev/null; then
-  ${shellValue(realNode)} "$@"
-  touch "$MOCK_LOG/first-generated"
-  for _ in {1..500}; do
-    if [[ -f "$MOCK_LOG/caller-2-sourced" ]]; then exit 0; fi
-    sleep 0.01
-  done
-  exit 70
-fi
-exec ${shellValue(realNode)} "$@"
-`);
-
-    const first = runAsync(root, ['-c', [
-      'source scripts/searxng-env.sh',
-      'printf %s "$SEARXNG_SECRET" > "$MOCK_LOG/caller-1"',
-    ].join('; ')]);
-    await waitForPath(resolve(log, 'first-generated'));
-    const second = runAsync(root, ['-c', [
-      'source scripts/searxng-env.sh',
-      'printf %s "$SEARXNG_SECRET" > "$MOCK_LOG/caller-2"',
-      'touch "$MOCK_LOG/caller-2-sourced"',
-    ].join('; ')]);
-    const [firstResult, secondResult] = await Promise.all([first, second]);
-    const persisted = parse(readFileSync(resolve(root, 'searxng/.env.local'), 'utf8'));
-    const firstSecret = readFileSync(resolve(log, 'caller-1'), 'utf8');
-    const secondSecret = readFileSync(resolve(log, 'caller-2'), 'utf8');
-
-    expect(firstResult.status, firstResult.stderr).toBe(0);
-    expect(secondResult.status, secondResult.stderr).toBe(0);
-    expect(firstSecret === persisted.SEARXNG_SECRET).toBe(true);
-    expect(secondSecret === persisted.SEARXNG_SECRET).toBe(true);
-    expect((firstResult.stdout + firstResult.stderr).includes(firstSecret)).toBe(false);
-    expect((secondResult.stdout + secondResult.stderr).includes(secondSecret)).toBe(false);
-    if (process.platform !== 'win32') {
-      expect(statSync(resolve(root, 'searxng/.env.local')).mode & 0o077).toBe(0);
-    }
-  }, 10_000);
-
-  it('removes complete multiline quoted application assignments', () => {
-    const root = fixture({
-      agentEnv: [
-        validAgentEnv.trimEnd(),
-        'SEARXNG_BASE_URL="https://stale.example.test',
-        'stale-base-continuation" # stale base comment',
-        "SEARXNG_API_KEY='stale-api-first",
-        "stale-api-continuation'",
-        'SEARXNG_SECRET=`stale-secret-first',
-        'stale-secret-continuation`',
-        'SEARXNG_CONFIG_HASH=stale-config-hash',
-        'SEARXNG_UNRELATED="stale-unrelated-first',
-        'stale-unrelated-continuation"',
-        'SEARXNG_SECRET.ALT=stale-secret-dot',
-        'SEARXNG_UNRELATED: stale-unrelated-colon',
-        'SEARXNG_COLON.ALT: "stale-colon-first',
-        'stale-colon-continuation"',
-        `${bom}SEARXNG_BOM.SECRET=stale-searxng-bom`,
-        `${nbsp}SEARXNG_NBSP.SECRET${nbsp}=${nbsp}stale-searxng-nbsp`,
-        `${verticalTab}SEARXNG_VT.SECRET:${formFeed}stale-searxng-vt`,
-        `${nbsp}NON-SEARXNG.NBSP${nbsp}=${nbsp}preserved-searxng-nbsp`,
-        `${verticalTab}NON-SEARXNG.VT:${formFeed}preserved-searxng-vt`,
-        'NON-SEARXNG.KEY: preserved-searxng-colon',
-        'UNRELATED=preserved',
-        '',
-      ].join('\r\n'),
-    });
-    expect(run(root, ['scripts/storage-env.sh']).status).toBe(0);
-
-    const result = run(root, ['scripts/searxng-env.sh']);
-    const generated = readFileSync(resolve(root, 'agent/.env.development'), 'utf8');
-    const values = parse(generated);
-    const sourceNames = prefixedAssignmentNames(readFileSync(resolve(root, 'agent/.env'), 'utf8'));
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(sourceNames).toEqual(expect.arrayContaining([
-      'SEARXNG_BOM.SECRET',
-      'SEARXNG_NBSP.SECRET',
-      'SEARXNG_VT.SECRET',
-    ]));
-    expect(values.SEARXNG_BASE_URL).toBe('http://127.0.0.1:8888');
-    expect(values.SEARXNG_API_KEY).toBe('');
-    expect(generated.match(/^SEARXNG_BASE_URL=/gm)).toHaveLength(1);
-    expect(generated.match(/^SEARXNG_API_KEY=/gm)).toHaveLength(1);
-    expect(generated.includes('stale-base-continuation')).toBe(false);
-    expect(generated.includes('stale-api-continuation')).toBe(false);
-    expect(generated.includes('stale-secret-continuation')).toBe(false);
-    expect(generated.includes('stale-config-hash')).toBe(false);
-    expect(generated.includes('stale-unrelated-continuation')).toBe(false);
-    expect(generated.includes('stale-secret-dot')).toBe(false);
-    expect(generated.includes('stale-unrelated-colon')).toBe(false);
-    expect(generated.includes('stale-colon-continuation')).toBe(false);
-    expect(generated.includes('stale-searxng-bom')).toBe(false);
-    expect(generated.includes('stale-searxng-nbsp')).toBe(false);
-    expect(generated.includes('stale-searxng-vt')).toBe(false);
-    expect(generated).toContain(`${nbsp}NON-SEARXNG.NBSP${nbsp}=${nbsp}preserved-searxng-nbsp`);
-    expect(generated).toContain(`${verticalTab}NON-SEARXNG.VT:${formFeed}preserved-searxng-vt`);
-    expect(generated).toContain('NON-SEARXNG.KEY: preserved-searxng-colon');
-    expect(generated).toContain('UNRELATED=preserved');
-    expect(result.stdout + result.stderr).not.toContain('stale-base-continuation');
-    expect(result.stdout + result.stderr).not.toContain('stale-api-continuation');
-  });
-
-  it('ignores escaped delimiters until multiline single and backtick assignments close', () => {
-    const root = fixture({
-      agentEnv: [
-        validAgentEnv.trimEnd(),
-        "SEARXNG_BASE_URL='https://stale.example.test/escaped\\'delimiter",
-        "stale-single-continuation' # stale single comment",
-        'SEARXNG_API_KEY=`stale\\`delimiter',
-        'stale-backtick-continuation`',
-        'UNRELATED=preserved-after-escaped-values',
-        '',
-      ].join('\n'),
-    });
-    expect(run(root, ['scripts/storage-env.sh']).status).toBe(0);
-
-    const result = run(root, ['scripts/searxng-env.sh']);
-    const generated = readFileSync(resolve(root, 'agent/.env.development'), 'utf8');
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(generated.includes('stale-single-continuation')).toBe(false);
-    expect(generated.includes('stale-backtick-continuation')).toBe(false);
-    expect(generated).toContain('UNRELATED=preserved-after-escaped-values');
-    expect(result.stdout + result.stderr).not.toContain('stale-single-continuation');
-    expect(result.stdout + result.stderr).not.toContain('stale-backtick-continuation');
-  });
-
-  it.each([
-    {
-      quoteStyle: 'single quote',
-      start: "SEARXNG_BASE_URL='stale\\\\'escaped-delimiter",
-      continuation: "single-double-slash-continuation'",
-      marker: 'single-double-slash-continuation',
-    },
-    {
-      quoteStyle: 'double quote',
-      start: 'SEARXNG_BASE_URL="stale\\\\"escaped-delimiter',
-      continuation: 'double-double-slash-continuation"',
-      marker: 'double-double-slash-continuation',
-    },
-    {
-      quoteStyle: 'backtick',
-      start: 'SEARXNG_API_KEY=`stale\\\\`escaped-delimiter',
-      continuation: 'backtick-double-slash-continuation`',
-      marker: 'backtick-double-slash-continuation',
-    },
-  ])('treats a $quoteStyle delimiter after two backslashes as escaped', ({ start, continuation, marker }) => {
-    const root = fixture({
-      agentEnv: [
-        validAgentEnv.trimEnd(),
-        start,
-        continuation,
-        'UNRELATED=preserved-after-double-slash-value',
-        '',
-      ].join('\n'),
-    });
-    expect(run(root, ['scripts/storage-env.sh']).status).toBe(0);
-
-    const result = run(root, ['scripts/searxng-env.sh']);
-    const generated = readFileSync(resolve(root, 'agent/.env.development'), 'utf8');
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(generated.includes(marker)).toBe(false);
-    expect(generated).toContain('UNRELATED=preserved-after-double-slash-value');
-    expect((result.stdout + result.stderr).includes(marker)).toBe(false);
-  });
-
-  it.each([
-    ['SEARXNG_API_KEY', '='],
-    ['SEARXNG_UNRELATED', '='],
-    ['SEARXNG_UNRELATED.ALT', ': '],
-    [`${bom}SEARXNG_BOM.ALT`, `${nbsp}=${nbsp}`],
-    [`${verticalTab}SEARXNG_VT.ALT`, `:${formFeed}`],
-  ])(
-    'rejects an unterminated $0 assignment without changing generated state',
-    (assignmentName, operator) => {
-      const root = fixture();
-      expect(run(root, ['scripts/storage-env.sh']).status).toBe(0);
-      expect(run(root, ['scripts/searxng-env.sh']).status).toBe(0);
-
-      const localPath = resolve(root, 'searxng/.env.local');
-      const localContent = readFileSync(localPath, 'utf8');
-      const localValues = parse(localContent);
-      const sourcePath = resolve(root, 'agent/.env');
-      const sourceContent = readFileSync(sourcePath, 'utf8');
-      const generatedPath = resolve(root, 'agent/.env.development');
-      appendFileSync(generatedPath, [
-        `${assignmentName}${operator}"unterminated-target-value`,
-        'UNRELATED=must-remain-after-invalid-assignment',
-        '',
-      ].join('\n'));
-      const generatedContent = readFileSync(generatedPath, 'utf8');
-
-      const result = run(root, ['scripts/searxng-env.sh']);
-
-      expect(result.status).not.toBe(0);
-      expect(result.stderr.split(invalidSearxngAssignmentError)).toHaveLength(2);
-      expect(result.stdout).toBe('');
-      expect(result.stderr.includes('unterminated-target-value')).toBe(false);
-      expect(result.stderr.includes('must-remain-after-invalid-assignment')).toBe(false);
-      expect(result.stderr.includes(localValues.SEARXNG_SECRET!)).toBe(false);
-      expect(result.stderr.includes(localValues.SEARXNG_CONFIG_HASH!)).toBe(false);
-      expect(readFileSync(sourcePath, 'utf8') === sourceContent).toBe(true);
-      expect(readFileSync(generatedPath, 'utf8') === generatedContent).toBe(true);
-      expect(readFileSync(localPath, 'utf8') === localContent).toBe(true);
-    },
-  );
-
-  it('rejects service-only values in retained agent content without mutation', () => {
-    const root = fixture({ agentEnv: null });
-    expect(run(root, ['scripts/searxng-env.sh']).status).toBe(0);
-
-    const localPath = resolve(root, 'searxng/.env.local');
-    const localContent = readFileSync(localPath, 'utf8');
-    const localValues = parse(localContent);
-    const sourcePath = resolve(root, 'agent/.env');
-    writeFileSync(sourcePath, [
-      validAgentEnv.trimEnd(),
-      `UNRELATED_SECRET=${localValues.SEARXNG_SECRET}`,
-      `# retained fingerprint ${localValues.SEARXNG_CONFIG_HASH}`,
-      '',
-    ].join('\n'));
-    expect(run(root, ['scripts/storage-env.sh']).status).toBe(0);
-    const sourceContent = readFileSync(sourcePath, 'utf8');
-    const generatedPath = resolve(root, 'agent/.env.development');
-    const generatedContent = readFileSync(generatedPath, 'utf8');
-
-    const result = run(root, ['scripts/searxng-env.sh']);
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr.split(leakedSearxngValueError)).toHaveLength(2);
-    expect(result.stdout).toBe('');
-    expect(result.stderr.includes(localValues.SEARXNG_SECRET!)).toBe(false);
-    expect(result.stderr.includes(localValues.SEARXNG_CONFIG_HASH!)).toBe(false);
-    expect(readFileSync(sourcePath, 'utf8') === sourceContent).toBe(true);
-    expect(readFileSync(generatedPath, 'utf8') === generatedContent).toBe(true);
-    expect(readFileSync(localPath, 'utf8') === localContent).toBe(true);
-  });
-
-  it('does not create an agent development environment without an agent source', () => {
-    const root = fixture({ agentEnv: null });
-    const result = run(root, ['scripts/searxng-env.sh']);
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(existsSync(resolve(root, 'searxng/.env.local'))).toBe(true);
-    expect(existsSync(resolve(root, 'agent/.env.development'))).toBe(false);
-  });
-});
-
 describe('development launcher', () => {
   it('checks Docker Compose before generating Garage state', () => {
-    const root = fixture();
+    const root = fixture({ setupEnv: false });
     const result = runDev(root, { COMPOSE_AVAILABLE: '0' });
 
     expect(result.status).not.toBe(0);
@@ -964,7 +380,6 @@ describe('development launcher', () => {
 
     const failingRoot = fixture();
     const secret = 'must-not-appear-in-output';
-    expect(run(failingRoot, ['scripts/storage-env.sh']).status).toBe(0);
     const storageEnvPath = resolve(failingRoot, 'storage/.env.local');
     const generatedStorageEnv = readFileSync(storageEnvPath, 'utf8').replace(
       /^GARAGE_SECRET_ACCESS_KEY=.*$/m,
@@ -1223,8 +638,6 @@ describe('development launcher', () => {
     ];
     const expectedClientNames = expectedAgentNames.slice(0, 5);
 
-    expect(run(root, ['scripts/storage-env.sh']).status).toBe(0);
-    expect(run(root, ['scripts/searxng-env.sh']).status).toBe(0);
     const generated = readFileSync(resolve(root, 'agent/.env.development'), 'utf8');
     expect(prefixedAssignmentNames(generated)).toEqual(expectedAgentNames);
     expect(generated).toContain('NON-SERVICE.KEY: preserved-colon-value');
@@ -1316,22 +729,24 @@ describe('development launcher', () => {
 
   it('force-recreates Garage only after generated config changes', () => {
     const root = fixture({ tmux: true });
-    expect(run(root, ['scripts/storage-env.sh']).status).toBe(0);
     expect(runDev(root).status).toBe(0);
-    appendFileSync(resolve(root, 'storage/garage.toml.template'), '\n# changed\n');
+    expect(runDev(root).status).toBe(0);
+    appendFileSync(resolve(root, 'storage/.garage/garage.toml'), '\n# changed\n');
     expect(runDev(root).status).toBe(0);
     const starts = readFileSync(resolve(root, 'mock-log/docker'), 'utf8')
       .split('\n')
       .filter((line) => line.includes(' up '));
 
-    expect(starts[0]).toContain('up -d garage');
-    expect(starts[0]).not.toContain('--force-recreate');
+    expect(starts[0]).toContain('up -d --force-recreate garage');
     expect(starts[1]).toContain('up -d searxng');
     expect(starts[1]).not.toContain('--force-recreate');
-    expect(starts[2]).toContain('up -d --force-recreate garage');
+    expect(starts[2]).toContain('up -d garage');
+    expect(starts[2]).not.toContain('--force-recreate');
     expect(starts[3]).toContain('up -d searxng');
     expect(starts[3]).not.toContain('--force-recreate');
-  }, 10_000);
+    expect(starts[4]).toContain('up -d --force-recreate garage');
+    expect(starts[5]).toContain('up -d searxng');
+  }, 30_000);
 
   it('removes partially-created tmux session after pane failure', () => {
     const root = fixture({ tmux: true });
@@ -1375,10 +790,45 @@ describe('development launcher', () => {
   }, 20_000);
 });
 
+describe('dev.sh integration with setup-env.sh', () => {
+  it('aborts with an actionable message when storage/.env.local is missing', () => {
+    const root = fixture();
+    writeFileSync(resolve(root, 'agent/.env'), validAgentEnv);
+    rmSync(resolve(root, 'storage/.env.local'), { force: true });
+    const result = runDev(root);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('Run scripts/setup-env.sh first');
+  }, 20_000);
+
+  it('writes .applied-hash after garage becomes healthy on first run', () => {
+    const root = fixture({ captureNpmEnv: true });
+    runSetup(root);
+    expect(existsSync(resolve(root, 'storage/.garage/.applied-hash'))).toBe(false);
+    const result = runDev(root, { CHEKKU_NO_TMUX: '1' });
+    expect(result.status, result.stderr).toBe(0);
+    expect(existsSync(resolve(root, 'storage/.garage/.applied-hash'))).toBe(true);
+  }, 20_000);
+
+  it('does not force-recreate garage when hash matches applied hash', () => {
+    const root = fixture({ captureNpmEnv: true });
+    const tomlPath = resolve(root, 'storage/.garage/garage.toml');
+    const tomlHashResult = spawnSync(bash, ['-c', `sha256sum "${tomlPath.replace(/\\/g, '/')}" | cut -d' ' -f1`], { encoding: 'utf8' });
+    const tomlHash = tomlHashResult.stdout.trim();
+    writeFileSync(resolve(root, 'storage/.garage/.applied-hash'), tomlHash);
+    runDev(root, { CHEKKU_NO_TMUX: '1' });
+    const dockerLog = readFileSync(resolve(root, 'mock-log/docker'), 'utf8');
+    const upLines = dockerLog.split(/\r?\n/).filter((line) => line.includes(' up '));
+    expect(upLines.length).toBeGreaterThan(0);
+    for (const line of upLines) {
+      expect(line).not.toContain('--force-recreate');
+    }
+  }, 20_000);
+});
+
 describe('committed local runtime', () => {
   it('publishes only the loopback S3 port and keeps Garage internals private', () => {
     const compose = readFileSync(resolve(sourceRoot, 'compose.yaml'), 'utf8');
-    const scripts = readFileSync(resolve(sourceRoot, 'scripts/storage-env.sh'), 'utf8');
+    const scripts = readFileSync(resolve(sourceRoot, 'scripts/setup-env.sh'), 'utf8');
     const launcher = readFileSync(resolve(sourceRoot, 'scripts/dev.sh'), 'utf8');
     const settings = readFileSync(resolve(sourceRoot, 'searxng/settings.yml'), 'utf8');
 
@@ -1415,5 +865,370 @@ describe('committed local runtime', () => {
 
     expect(ignored.status, ignored.stderr).toBe(0);
     expect(ignored.stdout.trim().split(/\r?\n/)).toHaveLength(5);
+  });
+});
+
+describe('setup-env.sh', () => {
+  it('runs and exits 0 on a clean fixture', () => {
+    const root = fixture();
+    const result = runSetup(root);
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  describe('prerequisites and bootstrap', () => {
+    it('copies agent/.env.example to agent/.env with mode 0600 when missing', () => {
+      const root = fixture({ setupEnv: false, agentEnv: null });
+      expect(existsSync(resolve(root, 'agent/.env'))).toBe(false);
+      const result = runSetup(root);
+      expect(result.status, result.stderr).toBe(0);
+      const envPath = resolve(root, 'agent/.env');
+      expect(existsSync(envPath)).toBe(true);
+      expect(readFileSync(envPath, 'utf8')).toBe(
+        readFileSync(resolve(sourceRoot, 'agent/.env.example'), 'utf8'),
+      );
+      if (process.platform !== 'win32') {
+        expect(statSync(envPath).mode & 0o077).toBe(0);
+      }
+    });
+
+    it('copies client/.env.example to client/.env.local with mode 0600 when missing', () => {
+      const root = fixture();
+      const result = runSetup(root);
+      expect(result.status, result.stderr).toBe(0);
+      const envPath = resolve(root, 'client/.env.local');
+      expect(existsSync(envPath)).toBe(true);
+      expect(readFileSync(envPath, 'utf8')).toBe(
+        readFileSync(resolve(sourceRoot, 'client/.env.example'), 'utf8'),
+      );
+      if (process.platform !== 'win32') {
+        expect(statSync(envPath).mode & 0o077).toBe(0);
+      }
+    });
+
+    it('preserves an existing agent/.env in sync mode', () => {
+      const root = fixture();
+      const original = 'LLM_API_KEY=preserved-key\nPORT=4111\n';
+      writeFileSync(resolve(root, 'agent/.env'), original);
+      const result = runSetup(root, [], '');
+      expect(result.status, result.stderr).toBe(0);
+      const values = parse(readFileSync(resolve(root, 'agent/.env'), 'utf8'));
+      expect(values.LLM_API_KEY).toBe('preserved-key');
+      expect(values.PORT).toBe('4111');
+    });
+
+    it('aborts when node is missing on PATH', () => {
+      const root = fixture({ agentEnv: null });
+      const emptyPath = resolve(root, 'empty-bin');
+      mkdirSync(emptyPath, { recursive: true });
+      const result = runSetup(root, [], null, { PATH: emptyPath });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('node');
+    });
+  });
+
+  describe('storage/.env.local generation', () => {
+    it('creates private stable random Garage credentials', () => {
+      const root = fixture();
+      const first = runSetup(root);
+      const envPath = resolve(root, 'storage/.env.local');
+      const envContent = readFileSync(envPath, 'utf8');
+      const values = parse(envContent);
+
+      expect(first.status, first.stderr).toBe(0);
+      expect(values.GARAGE_ENDPOINT).toBe('http://127.0.0.1:3900');
+      expect(values.GARAGE_REGION).toBe('garage');
+      expect(values.GARAGE_BUCKET).toBe('chekku-objects');
+      expect(values.GARAGE_ACCESS_KEY_ID).toMatch(/^GK[A-F0-9]{24}$/);
+      expect(values.GARAGE_SECRET_ACCESS_KEY).toMatch(/^[0-9a-f]{64}$/);
+      expect(values.GARAGE_RPC_SECRET).toMatch(/^[0-9a-f]{64}$/);
+      expect(values.GARAGE_ADMIN_TOKEN).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(values.GARAGE_METRICS_TOKEN).toMatch(/^[A-Za-z0-9_-]{43}$/);
+
+      // Second run is a no-op.
+      const second = runSetup(root);
+      expect(second.status, second.stderr).toBe(0);
+      expect(readFileSync(envPath, 'utf8')).toBe(envContent);
+
+      if (process.platform !== 'win32') {
+        expect(statSync(envPath).mode & 0o077).toBe(0);
+      }
+      // Secret values never appear in stdout/stderr.
+      for (const [name, value] of Object.entries(values)) {
+        if (!value || !storageSecretKeyNames.has(name)) continue;
+        expect(first.stdout).not.toContain(value);
+        expect(first.stderr).not.toContain(value);
+      }
+    });
+
+    it('regenerates only when the file is missing or invalid', () => {
+      const root = fixture();
+      runSetup(root);
+      const envPath = resolve(root, 'storage/.env.local');
+      const before = readFileSync(envPath, 'utf8');
+      // Tamper: drop one required line.
+      const tampered = before.replace(/^GARAGE_ADMIN_TOKEN=.*\n/m, '');
+      writeFileSync(envPath, tampered);
+      const result = runSetup(root);
+      expect(result.status, result.stderr).toBe(0);
+      const after = readFileSync(envPath, 'utf8');
+      expect(parse(after).GARAGE_ADMIN_TOKEN).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      // Other regenerated values may differ (whole file regenerated when invalid).
+      expect(parse(after).GARAGE_BUCKET).toBe('chekku-objects');
+    });
+  });
+
+  describe('garage.toml rendering', () => {
+    it('renders storage/.garage/garage.toml from the tracked template', () => {
+      const root = fixture();
+      const result = runSetup(root);
+      const tomlPath = resolve(root, 'storage/.garage/garage.toml');
+      expect(result.status, result.stderr).toBe(0);
+      expect(existsSync(tomlPath)).toBe(true);
+      const toml = readFileSync(tomlPath, 'utf8');
+      const storageValues = parse(readFileSync(resolve(root, 'storage/.env.local'), 'utf8'));
+      expect(toml).toContain(`rpc_secret = "${storageValues.GARAGE_RPC_SECRET}"`);
+      expect(toml).toContain(`s3_region = "${storageValues.GARAGE_REGION}"`);
+      expect(toml).toContain(`admin_token = "${storageValues.GARAGE_ADMIN_TOKEN}"`);
+      expect(toml).toContain(`metrics_token = "${storageValues.GARAGE_METRICS_TOKEN}"`);
+      expect(toml).not.toContain('${GARAGE_');
+      if (process.platform !== 'win32') {
+        expect(statSync(tomlPath).mode & 0o077).toBe(0);
+      }
+    });
+
+    it('keeps the same inode when the rendered output is unchanged', () => {
+      const root = fixture();
+      runSetup(root);
+      const tomlPath = resolve(root, 'storage/.garage/garage.toml');
+      const inodeBefore = statSync(tomlPath).ino;
+      runSetup(root);
+      if (process.platform !== 'win32') {
+        expect(statSync(tomlPath).ino).toBe(inodeBefore);
+      }
+    });
+  });
+
+  describe('searxng/.env.local generation', () => {
+    it('creates the local searxng env with the expected shape', () => {
+      const root = fixture();
+      const result = runSetup(root);
+      const envPath = resolve(root, 'searxng/.env.local');
+      expect(result.status, result.stderr).toBe(0);
+      expect(existsSync(envPath)).toBe(true);
+      const values = parse(readFileSync(envPath, 'utf8'));
+      expect(values.SEARXNG_SECRET).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(values.SEARXNG_CONFIG_HASH).toMatch(/^[a-f0-9]{64}$/);
+      expect(values.SEARXNG_BASE_URL).toBe('http://127.0.0.1:8888');
+      expect(values.SEARXNG_API_KEY).toBe('');
+      if (process.platform !== 'win32') {
+        expect(statSync(envPath).mode & 0o077).toBe(0);
+      }
+    });
+
+    it('preserves SEARXNG_SECRET and updates SEARXNG_CONFIG_HASH when settings change', () => {
+      const root = fixture();
+      runSetup(root);
+      const envPath = resolve(root, 'searxng/.env.local');
+      const before = parse(readFileSync(envPath, 'utf8'));
+      // Simulate a settings change.
+      writeFileSync(
+        resolve(root, 'searxng/settings.yml'),
+        readFileSync(resolve(root, 'searxng/settings.yml'), 'utf8') + '\n# changed\n',
+      );
+      const result = runSetup(root);
+      expect(result.status, result.stderr).toBe(0);
+      const after = parse(readFileSync(envPath, 'utf8'));
+      expect(after.SEARXNG_SECRET).toBe(before.SEARXNG_SECRET);
+      expect(after.SEARXNG_CONFIG_HASH).not.toBe(before.SEARXNG_CONFIG_HASH);
+    });
+  });
+
+  describe('agent/.env.development rendering', () => {
+    it('writes exactly the five Garage app keys and 2 SearXNG app keys, never service secrets', () => {
+      const root = fixture();
+      const result = runSetup(root);
+      const devPath = resolve(root, 'agent/.env.development');
+      expect(result.status, result.stderr).toBe(0);
+      expect(existsSync(devPath)).toBe(true);
+      const generated = readFileSync(devPath, 'utf8');
+      const values = parse(generated);
+      const storageValues = parse(readFileSync(resolve(root, 'storage/.env.local'), 'utf8'));
+      const searxngValues = parse(readFileSync(resolve(root, 'searxng/.env.local'), 'utf8'));
+
+      expect(values.GARAGE_ENDPOINT).toBe(storageValues.GARAGE_ENDPOINT);
+      expect(values.GARAGE_REGION).toBe(storageValues.GARAGE_REGION);
+      expect(values.GARAGE_BUCKET).toBe(storageValues.GARAGE_BUCKET);
+      expect(values.GARAGE_ACCESS_KEY_ID).toBe(storageValues.GARAGE_ACCESS_KEY_ID);
+      expect(values.GARAGE_SECRET_ACCESS_KEY).toBe(storageValues.GARAGE_SECRET_ACCESS_KEY);
+      expect(values.SEARXNG_BASE_URL).toBe('http://127.0.0.1:8888');
+      expect(values.SEARXNG_API_KEY).toBe('');
+
+      const secretNames = ['GARAGE_RPC_SECRET', 'GARAGE_ADMIN_TOKEN', 'GARAGE_METRICS_TOKEN', 'SEARXNG_SECRET', 'SEARXNG_CONFIG_HASH'];
+      for (const name of secretNames) {
+        const secretValue = searxngValues[name] ?? storageValues[name] ?? '';
+        expect(generated).not.toContain(secretValue);
+        expect(generated).not.toMatch(new RegExp(`^${name}=`, 'm'));
+      }
+      if (process.platform !== 'win32') {
+        expect(statSync(devPath).mode & 0o077).toBe(0);
+      }
+    });
+
+    it('removes stale Garage assignments including multiline values', () => {
+      const root = fixture();
+      writeFileSync(resolve(root, 'agent/.env'), [
+        validAgentEnv.trimEnd(),
+        'GARAGE_ENDPOINT="stale-endpoint-first',
+        'stale-endpoint-second"',
+        "export GARAGE_RPC_SECRET='stale-rpc-first",
+        "stale-rpc-second'",
+        'UNRELATED=preserved',
+        '',
+      ].join('\r\n'));
+      const result = runSetup(root);
+      expect(result.status, result.stderr).toBe(0);
+      const generated = readFileSync(resolve(root, 'agent/.env.development'), 'utf8');
+      expect(generated).toContain('UNRELATED=preserved');
+      expect(generated).not.toContain('stale-');
+    });
+
+    it('regenerates a clean development env from the example when agent/.env is removed between runs', () => {
+      const root = fixture();
+      runSetup(root);
+      expect(existsSync(resolve(root, 'agent/.env.development'))).toBe(true);
+      rmSync(resolve(root, 'agent/.env'));
+      const result = runSetup(root);
+      expect(result.status, result.stderr).toBe(0);
+      // setup-env.sh's bootstrap recreates agent/.env from .env.example, then render
+      // regenerates the dev env.
+      expect(existsSync(resolve(root, 'agent/.env.development'))).toBe(true);
+      const generated = readFileSync(resolve(root, 'agent/.env.development'), 'utf8');
+      for (const name of ['GARAGE_RPC_SECRET', 'GARAGE_ADMIN_TOKEN', 'GARAGE_METRICS_TOKEN', 'SEARXNG_SECRET', 'SEARXNG_CONFIG_HASH']) {
+        expect(generated).not.toMatch(new RegExp(`^${name}=`, 'm'));
+      }
+    });
+
+    it('does not leak secrets into stdout or stderr', () => {
+      const root = fixture();
+      const result = runSetup(root);
+      const storageValues = parse(readFileSync(resolve(root, 'storage/.env.local'), 'utf8'));
+      const searxngValues = parse(readFileSync(resolve(root, 'searxng/.env.local'), 'utf8'));
+      for (const [name, value] of Object.entries({ ...storageValues, ...searxngValues })) {
+        if (!value || !isSecretKeyName(name)) continue;
+        expect(result.stdout).not.toContain(value);
+        expect(result.stderr).not.toContain(value);
+      }
+    });
+  });
+
+  describe('agent/.env sync against .env.example', () => {
+    it('appends missing variables under the sync marker without overwriting existing values', () => {
+      const root = fixture();
+      writeFileSync(resolve(root, 'agent/.env'), 'LLM_API_KEY=user-supplied\nPORT=4111\n');
+      const result = runSetup(root, [], '');
+      expect(result.status, result.stderr).toBe(0);
+      const synced = readFileSync(resolve(root, 'agent/.env'), 'utf8');
+      const values = parse(synced);
+      expect(values.LLM_API_KEY).toBe('user-supplied');
+      expect(values.PORT).toBe('4111');
+      // Variables present in .env.example but not in the original .env must appear.
+      const exampleValues = parse(readFileSync(resolve(sourceRoot, 'agent/.env.example'), 'utf8'));
+      for (const name of Object.keys(exampleValues)) {
+        expect(values[name], `${name} should be present after sync`).toBeDefined();
+      }
+      expect(synced).toContain('# Added by setup-env.sh (synced from .env.example)');
+    });
+
+    it('is idempotent across multiple runs and only writes one marker', () => {
+      const root = fixture();
+      writeFileSync(resolve(root, 'agent/.env'), 'LLM_API_KEY=user-supplied\n');
+      runSetup(root, [], '');
+      const firstSync = readFileSync(resolve(root, 'agent/.env'), 'utf8');
+      runSetup(root, [], '');
+      const secondSync = readFileSync(resolve(root, 'agent/.env'), 'utf8');
+      expect(secondSync).toBe(firstSync);
+      const markerCount = (secondSync.match(/# Added by setup-env.sh \(synced from \.env\.example\)/g) ?? []).length;
+      expect(markerCount).toBe(1);
+    });
+
+    it('preserves variables that exist in .env but not in .env.example', () => {
+      const root = fixture();
+      writeFileSync(resolve(root, 'agent/.env'), 'LLM_API_KEY=x\nCUSTOM_USER_VAR=keep-me\n');
+      const result = runSetup(root, [], '');
+      expect(result.status, result.stderr).toBe(0);
+      expect(parse(readFileSync(resolve(root, 'agent/.env'), 'utf8')).CUSTOM_USER_VAR).toBe('keep-me');
+    });
+  });
+
+  describe('interactive prompts', () => {
+    it('skips prompts and leaves required empty when stdin is piped but empty', () => {
+      const root = fixture({ agentEnv: null });
+      const result = runSetup(root, [], '');
+      expect(result.status, result.stderr).toBe(0);
+      expect(parse(readFileSync(resolve(root, 'agent/.env'), 'utf8')).LLM_API_KEY ?? '').toBe('');
+    });
+
+    it('skips prompts and leaves values empty when stdin is piped (non-TTY)', () => {
+      const root = fixture({ agentEnv: null });
+      const stdin = ['user-llm-key', '', '', '', '', '', '', '', ''].join('\n') + '\n';
+      const result = runSetup(root, [], stdin);
+      expect(result.status, result.stderr).toBe(0);
+      const values = parse(readFileSync(resolve(root, 'agent/.env'), 'utf8'));
+      // Piped non-TTY stdin does NOT drive prompts: the piped 'user-llm-key'
+      // is ignored and LLM_API_KEY stays empty (as in .env.example).
+      expect(values.LLM_API_KEY ?? '').toBe('');
+      // Required-mode prompts emit a stderr warning.
+      expect(result.stderr).toContain('LLM_API_KEY');
+    });
+
+    it('does not overwrite values that are already present', () => {
+      const root = fixture();
+      writeFileSync(
+        resolve(root, 'agent/.env'),
+        [
+          'LLM_API_KEY=already-set',
+          'LLM_BASE_URL=https://custom.example/v1',
+          '',
+        ].join('\n'),
+      );
+      const result = runSetup(root, [], '\n\n\n');
+      expect(result.status, result.stderr).toBe(0);
+      const values = parse(readFileSync(resolve(root, 'agent/.env'), 'utf8'));
+      expect(values.LLM_API_KEY).toBe('already-set');
+      expect(values.LLM_BASE_URL).toBe('https://custom.example/v1');
+    });
+  });
+
+  describe('summary output', () => {
+    it('prints a setup summary without leaking secrets', () => {
+      const root = fixture({ agentEnv: null });
+      const stdin = ['user-llm-key', '', '', '', '', '', '', '', ''].join('\n') + '\n';
+      const result = runSetup(root, [], stdin);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain('Setup complete.');
+      expect(result.stdout).toContain('Files generated:');
+      expect(result.stdout).toContain('storage/.env.local');
+      expect(result.stdout).toContain('storage/.garage/garage.toml');
+      expect(result.stdout).toContain('searxng/.env.local');
+      expect(result.stdout).toContain('agent/.env.development');
+      expect(result.stdout).toContain('Next step: npm run dev:sh');
+      const storageValues = parse(readFileSync(resolve(root, 'storage/.env.local'), 'utf8'));
+      const searxngValues = parse(readFileSync(resolve(root, 'searxng/.env.local'), 'utf8'));
+      for (const [name, value] of Object.entries({ ...storageValues, ...searxngValues })) {
+        if (!value || !isSecretKeyName(name)) continue;
+        expect(result.stdout).not.toContain(value);
+        expect(result.stderr).not.toContain(value);
+      }
+      expect(result.stdout).not.toContain('user-llm-key');
+    });
+
+    it('lists optional integrations and any still-missing required values', () => {
+      const root = fixture({ agentEnv: null });
+      const result = runSetup(root, [], '');
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain('LLM_API_KEY');
+      expect(result.stdout).toContain('TELEGRAM_BOT_TOKEN');
+      expect(result.stdout).toContain('RESEND_API_KEY');
+    });
   });
 });

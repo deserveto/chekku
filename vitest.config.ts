@@ -13,5 +13,6 @@ export default defineConfig({
     exclude: ['**/node_modules/**', '**/node_modules'],
     environment: 'node',
     setupFiles: ['./vitest.setup.js'],
+    testTimeout: 15_000,
   },
 });

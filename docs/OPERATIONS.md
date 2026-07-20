@@ -4,10 +4,11 @@
 
 ```bash
 npm ci
-cp agent/.env.example agent/.env
-cp client/.env.example client/.env.local
+npm run setup
 npm run dev:sh
 ```
+
+`npm run setup` copies env examples, generates local Garage and SearXNG secrets, and prompts for required values like `LLM_API_KEY`. `npm run dev:sh` starts local services and both workspaces without regenerating files; rerun `npm run setup` whenever environment requirements change.
 
 The launcher provisions local Garage and SearXNG configuration, waits for both services to become healthy, then starts:
 
@@ -33,7 +34,7 @@ SEARXNG_BASE_URL
 SEARXNG_API_KEY
 ```
 
-The Next.js client process receives zero `SEARXNG_*` values. Only `SEARXNG_BASE_URL` and optional `SEARXNG_API_KEY` are SearXNG application configuration. Local `scripts/searxng-env.sh` also creates `searxng/.env.local` with a generated `SEARXNG_SECRET` and configuration hash for Docker Compose. Those values are private local service state: they are not copied to the agent or client application environments and must not be committed, logged, pasted, or configured as application variables.
+The Next.js client process receives zero `SEARXNG_*` values. Only `SEARXNG_BASE_URL` and optional `SEARXNG_API_KEY` are SearXNG application configuration. `scripts/setup-env.sh` (run via `npm run setup`) also creates `searxng/.env.local` with a generated `SEARXNG_SECRET` and configuration hash for Docker Compose. Those values are private local service state: they are not copied to the agent or client application environments and must not be committed, logged, pasted, or configured as application variables.
 
 ## Environment files
 
