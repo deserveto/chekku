@@ -44,12 +44,20 @@ class WebReaderClientError extends Error {
   }
 }
 
+function cancelReader(reader: ReadableStreamDefaultReader<Uint8Array>): void {
+  try {
+    void reader.cancel().catch(() => undefined);
+  } catch {
+    // Cleanup must not replace the fixed client error.
+  }
+}
+
 async function readWithAbort(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   signal: AbortSignal,
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
   if (signal.aborted) {
-    await reader.cancel();
+    cancelReader(reader);
     throw signal.reason;
   }
 
@@ -58,7 +66,8 @@ async function readWithAbort(
     rejectAbort = reject;
   });
   const onAbort = () => {
-    void reader.cancel().finally(() => rejectAbort?.(signal.reason));
+    cancelReader(reader);
+    rejectAbort?.(signal.reason);
   };
   signal.addEventListener('abort', onAbort, { once: true });
   try {
@@ -91,46 +100,54 @@ async function readBoundedJson(
   if (!response.body) throw new WebReaderClientError('invalid');
 
   const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  while (true) {
-    const { done, value } = await readWithAbort(reader, signal);
-    if (done) break;
-    totalBytes += value.byteLength;
-    if (totalBytes > MAX_BODY_BYTES) {
-      await reader.cancel();
-      throw new WebReaderClientError('tooLarge');
+  try {
+    const chunks: Uint8Array[] = [];
+    let totalBytes = 0;
+    while (true) {
+      const { done, value } = await readWithAbort(reader, signal);
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > MAX_BODY_BYTES) {
+        cancelReader(reader);
+        throw new WebReaderClientError('tooLarge');
+      }
+      chunks.push(value);
     }
-    chunks.push(value);
-  }
 
-  const body = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
+    const body = new Uint8Array(totalBytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      body.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
 
-  checkpoint();
-  let decoded: string;
-  try {
-    decoded = new TextDecoder('utf-8', { fatal: true }).decode(body);
-  } catch {
     checkpoint();
-    throw new WebReaderClientError('invalid');
-  }
-  checkpoint();
-
-  checkpoint();
-  let payload: unknown;
-  try {
-    payload = JSON.parse(decoded) as unknown;
-  } catch {
+    let decoded: string;
+    try {
+      decoded = new TextDecoder('utf-8', { fatal: true }).decode(body);
+    } catch {
+      checkpoint();
+      throw new WebReaderClientError('invalid');
+    }
     checkpoint();
-    throw new WebReaderClientError('invalid');
+
+    checkpoint();
+    let payload: unknown;
+    try {
+      payload = JSON.parse(decoded) as unknown;
+    } catch {
+      checkpoint();
+      throw new WebReaderClientError('invalid');
+    }
+    checkpoint();
+    return payload;
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      // Cleanup must not replace the fixed client error.
+    }
   }
-  checkpoint();
-  return payload;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -225,6 +242,7 @@ export function createJinaReaderClient(
     async read(url, signal) {
       const deadlineAt = now() + timeoutMs;
       const timeoutSignal = AbortSignal.timeout(timeoutMs);
+      let providerAccessStarted = false;
       let abortSource: AbortSource | undefined = signal?.aborted
         ? 'cancelled'
         : undefined;
@@ -254,6 +272,7 @@ export function createJinaReaderClient(
         const requestSignal = signal
           ? AbortSignal.any([signal, timeoutSignal])
           : timeoutSignal;
+        providerAccessStarted = true;
         const response = await fetch(ENDPOINT, {
           method: 'POST',
           redirect: 'error',
@@ -271,6 +290,7 @@ export function createJinaReaderClient(
           },
           body: JSON.stringify({ url: requestedUrl }),
         });
+        checkpoint();
         const payload = await readBoundedJson(response, requestSignal, checkpoint);
 
         checkpoint();
@@ -283,9 +303,12 @@ export function createJinaReaderClient(
         checkpoint();
         return output;
       } catch (error) {
-        if (error instanceof PublicWebUrlError || error instanceof WebReaderClientError) {
+        if (!providerAccessStarted
+          && (error instanceof PublicWebUrlError || error instanceof WebReaderClientError)) {
           throw error;
         }
+        if (abortSource) throw new WebReaderClientError(abortSource);
+        if (error instanceof PublicWebUrlError || error instanceof WebReaderClientError) throw error;
         checkpoint();
         throw new WebReaderClientError('unavailable');
       } finally {

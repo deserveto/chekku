@@ -218,6 +218,152 @@ describe('Jina Reader client', () => {
     expect(cancelled).toBe(true);
   });
 
+  it('keeps timeout classification when fetch ignores abort and returns an error', async () => {
+    let resolveFetch!: (response: Response) => void;
+    let recordAbort!: () => void;
+    const aborted = new Promise<void>((resolve) => { recordAbort = resolve; });
+    const fetch = vi.fn((_url: URL | RequestInfo, init?: RequestInit) => {
+      init?.signal?.addEventListener('abort', recordAbort, { once: true });
+      return new Promise<Response>((resolve) => { resolveFetch = resolve; });
+    });
+    const client = createJinaReaderClient({ apiKey: 'token', fetch, timeoutMs: 10 });
+    const result = client.read('https://example.com/');
+
+    await aborted;
+    resolveFetch(new Response('private-body', { status: 500 }));
+
+    await expect(result).rejects.toThrow('Web Reader timed out. Try again.');
+  });
+
+  it('keeps cancellation classification when fetch ignores abort and returns an error', async () => {
+    let resolveFetch!: (response: Response) => void;
+    const fetch = vi.fn(() => new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    }));
+    const controller = new AbortController();
+    const client = createJinaReaderClient({ apiKey: 'token', fetch });
+    const result = client.read('https://example.com/', controller.signal);
+
+    controller.abort('private-caller-reason');
+    resolveFetch(new Response('private-body', { status: 500 }));
+
+    await expect(result).rejects.toThrow('Web Reader request was cancelled.');
+  });
+
+  it('does not wait for stalled abort cleanup and releases the reader lock', async () => {
+    let recordPull!: () => void;
+    const pulling = new Promise<void>((resolve) => { recordPull = resolve; });
+    const never = new Promise<void>(() => undefined);
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{'));
+      },
+      pull() {
+        recordPull();
+        return never;
+      },
+      cancel() {
+        return never;
+      },
+    });
+    const fetch = vi.fn(async () => new Response(body, {
+      headers: { 'content-type': 'application/json' },
+    }));
+    const controller = new AbortController();
+    const client = createJinaReaderClient({ apiKey: 'token', fetch });
+    const result = client.read('https://example.com/', controller.signal);
+
+    await pulling;
+    controller.abort('private-caller-reason');
+    const error = await Promise.race([
+      readError(result),
+      new Promise<Error>((resolve) => {
+        setTimeout(() => resolve(new Error('Web Reader did not settle.')), 100);
+      }),
+    ]);
+
+    expect(String(error)).toBe('Error: Web Reader request was cancelled.');
+    expect(body.locked).toBe(false);
+  });
+
+  it('does not wait for stalled oversize cleanup and releases the reader lock', async () => {
+    let cancelled = false;
+    const never = new Promise<void>(() => undefined);
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(1024 * 1024));
+        controller.enqueue(new Uint8Array(1024 * 1024));
+        controller.enqueue(new Uint8Array(1));
+      },
+      cancel() {
+        cancelled = true;
+        return never;
+      },
+    });
+    const fetch = vi.fn(async () => new Response(body, {
+      headers: { 'content-type': 'application/json' },
+    }));
+    const client = createJinaReaderClient({ apiKey: 'token', fetch });
+    const error = await Promise.race([
+      readError(client.read('https://example.com/')),
+      new Promise<Error>((resolve) => {
+        setTimeout(() => resolve(new Error('Web Reader did not settle.')), 100);
+      }),
+    ]);
+
+    expect(String(error)).toBe('Error: Web Reader returned too much data.');
+    expect(cancelled).toBe(true);
+    expect(body.locked).toBe(false);
+  });
+
+  it('suppresses rejected oversize cleanup and releases the reader lock', async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(1024 * 1024));
+        controller.enqueue(new Uint8Array(1024 * 1024));
+        controller.enqueue(new Uint8Array(1));
+      },
+      cancel() {
+        return Promise.reject(new Error('private-cancel-error'));
+      },
+    });
+    const fetch = vi.fn(async () => new Response(body, {
+      headers: { 'content-type': 'application/json' },
+    }));
+    const client = createJinaReaderClient({ apiKey: 'token', fetch });
+    const error = await readError(client.read('https://example.com/'));
+
+    expect(String(error)).toBe('Error: Web Reader returned too much data.');
+    expect(String(error)).not.toContain('private-cancel-error');
+    expect(body.locked).toBe(false);
+  });
+
+  it('releases the stream reader lock after successful parsing', async () => {
+    const response = jsonResponse(payload());
+    const body = response.body!;
+    const client = createJinaReaderClient({
+      apiKey: 'token', fetch: vi.fn(async () => response),
+    });
+
+    await client.read('https://example.com/');
+
+    expect(body.locked).toBe(false);
+  });
+
+  it('releases the stream reader lock after invalid JSON', async () => {
+    const response = new Response('{bad', {
+      headers: { 'content-type': 'application/json' },
+    });
+    const body = response.body!;
+    const client = createJinaReaderClient({
+      apiKey: 'token', fetch: vi.fn(async () => response),
+    });
+
+    await expect(client.read('https://example.com/'))
+      .rejects.toThrow('Web Reader returned an invalid response.');
+    expect(body.locked).toBe(false);
+  });
+
   it.each([
     ['configuration', 2],
     ['URL validation', 3],
