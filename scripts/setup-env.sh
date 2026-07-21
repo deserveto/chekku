@@ -61,15 +61,16 @@ if (missing.length === 0) {
   process.exit(0);
 }
 
+const eol = sourceText.includes('\r\n') ? '\r\n' : '\n';
 const lines = sourceText.split(/\r?\n/);
 if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
 const hasMarker = lines.some((line) => line.trim() === marker);
-const newBlock = hasMarker ? [] : ['', marker];
+const newBlock = hasMarker ? [''] : ['', marker];
 for (const name of missing) {
   const value = exampleValues[name] ?? '';
   newBlock.push(`${name}=${value}`);
 }
-const result = `${lines.join('\n')}${newBlock.join('\n')}\n`;
+const result = `${lines.join(eol)}${newBlock.join(eol)}${eol}`;
 writeFileSync(outputPath, result, { mode: 0o600 });
 NODE
   chmod 600 "$tmp"
@@ -91,19 +92,29 @@ generate_storage_env() {
   local tmp
   tmp="$(mktemp "${STORAGE_ENV_FILE}.tmp.XXXXXX")"
   chmod 600 "$tmp"
-  node >"$tmp" <<'NODE'
+  node - "$STORAGE_ENV_FILE" >"$tmp" <<'NODE'
+const { readFileSync } = require('node:fs');
+const { parse } = require('dotenv');
 const crypto = require('node:crypto');
+const [existingPath] = process.argv.slice(2);
 const hex = (bytes) => crypto.randomBytes(bytes).toString('hex');
 const token = () => crypto.randomBytes(32).toString('base64url');
+let existing = {};
+try {
+  existing = parse(readFileSync(existingPath, 'utf8'));
+} catch {
+  existing = {};
+}
+const pick = (name, fallback) => (typeof existing[name] === 'string' && existing[name] !== '' ? existing[name] : fallback);
 process.stdout.write([
-  'GARAGE_ENDPOINT=http://127.0.0.1:3900',
-  'GARAGE_REGION=garage',
-  'GARAGE_BUCKET=chekku-objects',
-  `GARAGE_ACCESS_KEY_ID=GK${hex(12).toUpperCase()}`,
-  `GARAGE_SECRET_ACCESS_KEY=${hex(32)}`,
-  `GARAGE_RPC_SECRET=${hex(32)}`,
-  `GARAGE_ADMIN_TOKEN=${token()}`,
-  `GARAGE_METRICS_TOKEN=${token()}`,
+  `GARAGE_ENDPOINT=${pick('GARAGE_ENDPOINT', 'http://127.0.0.1:3900')}`,
+  `GARAGE_REGION=${pick('GARAGE_REGION', 'garage')}`,
+  `GARAGE_BUCKET=${pick('GARAGE_BUCKET', 'chekku-objects')}`,
+  `GARAGE_ACCESS_KEY_ID=${pick('GARAGE_ACCESS_KEY_ID', `GK${hex(12).toUpperCase()}`)}`,
+  `GARAGE_SECRET_ACCESS_KEY=${pick('GARAGE_SECRET_ACCESS_KEY', hex(32))}`,
+  `GARAGE_RPC_SECRET=${pick('GARAGE_RPC_SECRET', hex(32))}`,
+  `GARAGE_ADMIN_TOKEN=${pick('GARAGE_ADMIN_TOKEN', token())}`,
+  `GARAGE_METRICS_TOKEN=${pick('GARAGE_METRICS_TOKEN', token())}`,
   '',
 ].join('\n'));
 NODE
@@ -312,6 +323,7 @@ const serialize = (name, value) => {
 };
 
 let source = readFileSync(sourcePath, 'utf8');
+const userValues = parse(source);
 source = removeAssignments('GARAGE_')(source);
 source = removeAssignments('SEARXNG_')(source);
 
@@ -325,7 +337,12 @@ const garageAssignments = garageKeys.map((name) => {
   if (!value) throw new Error(`Missing ${name} in storage/.env.local`);
   return serialize(name, value);
 });
-const searxngAssignments = searxngKeys.map((name) => serialize(name, process.env[name] ?? ''));
+const searxngAssignments = searxngKeys.map((name) => {
+  if (name === 'SEARXNG_API_KEY' && typeof userValues[name] === 'string' && userValues[name] !== '') {
+    return serialize(name, userValues[name]);
+  }
+  return serialize(name, process.env[name] ?? '');
+});
 const separator = source.length > 0 && !source.endsWith('\n') ? '\n' : '';
 writeFileSync(outputPath, `${source}${separator}${[...garageAssignments, ...searxngAssignments].join('\n')}\n`);
 NODE

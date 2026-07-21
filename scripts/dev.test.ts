@@ -1,4 +1,4 @@
-﻿import {
+import {
   appendFileSync,
   chmodSync,
   copyFileSync,
@@ -6,7 +6,6 @@
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  readdirSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -40,9 +39,6 @@ const validAgentEnv = [
   'GARAGE_SECRET_ACCESS_KEY=stale-secret-key',
   '',
 ].join('\n');
-const invalidSearxngAssignmentError = 'SearXNG application environment contains an invalid assignment.';
-const leakedSearxngValueError = 'SearXNG service-only values must not appear in agent environment.';
-const invalidSearxngLocalStateError = 'Invalid SearXNG local environment state.\n';
 const bom = '\uFEFF';
 const nbsp = '\u00A0';
 const verticalTab = '\u000B';
@@ -72,35 +68,10 @@ function executable(path: string, body: string): void {
   chmodSync(path, 0o755);
 }
 
-function shellValue(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
-}
-
 function prefixedAssignmentNames(content: string): string[] {
   return Object.keys(parse(content))
     .filter((name) => /^(?:GARAGE|SEARXNG)_/.test(name))
     .sort();
-}
-
-function storageEnv(values: Record<string, string>): string {
-  return [
-    ...Object.entries(values).map(([name, value]) => `${name}=${shellValue(value)}`),
-    'GARAGE_RPC_SECRET=rpc-secret',
-    'GARAGE_ADMIN_TOKEN=admin-token',
-    'GARAGE_METRICS_TOKEN=metrics-token',
-    '',
-  ].join('\n');
-}
-
-function searxngEnv(overrides: Partial<Record<string, string>> = {}): string {
-  const values = {
-    SEARXNG_SECRET: 'A'.repeat(43),
-    SEARXNG_CONFIG_HASH: 'b'.repeat(64),
-    SEARXNG_BASE_URL: 'http://127.0.0.1:8888',
-    SEARXNG_API_KEY: '',
-    ...overrides,
-  };
-  return Object.entries(values).map(([name, value]) => `${name}=${value}\n`).join('');
 }
 
 function fixture(options: {
@@ -839,7 +810,7 @@ describe('committed local runtime', () => {
     const settings = readFileSync(resolve(sourceRoot, 'searxng/settings.yml'), 'utf8');
 
     expect(compose).toContain('dxflrs/garage:v2.3.0');
-    expect(scripts).toContain('GARAGE_BUCKET=chekku-objects');
+    expect(scripts).toMatch(/GARAGE_BUCKET=.*chekku-objects/);
     expect(compose).toContain('"127.0.0.1:3900:3900"');
     for (const port of [3901, 3902, 3903]) expect(compose).not.toMatch(new RegExp(`^[^#]*${port}:${port}`, 'm'));
     expect(launcher).toContain('CHEKKU_GARAGE_PORTS:-3900}');
@@ -971,15 +942,36 @@ describe('setup-env.sh', () => {
       runSetup(root);
       const envPath = resolve(root, 'storage/.env.local');
       const before = readFileSync(envPath, 'utf8');
+      const beforeValues = parse(before);
       // Tamper: drop one required line.
       const tampered = before.replace(/^GARAGE_ADMIN_TOKEN=.*\n/m, '');
       writeFileSync(envPath, tampered);
       const result = runSetup(root);
       expect(result.status, result.stderr).toBe(0);
-      const after = readFileSync(envPath, 'utf8');
-      expect(parse(after).GARAGE_ADMIN_TOKEN).toMatch(/^[A-Za-z0-9_-]{43}$/);
-      // Other regenerated values may differ (whole file regenerated when invalid).
-      expect(parse(after).GARAGE_BUCKET).toBe('chekku-objects');
+      const afterValues = parse(readFileSync(envPath, 'utf8'));
+      expect(afterValues.GARAGE_ADMIN_TOKEN).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(afterValues.GARAGE_ADMIN_TOKEN).not.toBe(beforeValues.GARAGE_ADMIN_TOKEN);
+      // Merge-and-fill preserves the other existing values verbatim.
+      expect(afterValues.GARAGE_BUCKET).toBe('chekku-objects');
+      expect(afterValues.GARAGE_RPC_SECRET).toBe(beforeValues.GARAGE_RPC_SECRET);
+      expect(afterValues.GARAGE_SECRET_ACCESS_KEY).toBe(beforeValues.GARAGE_SECRET_ACCESS_KEY);
+      expect(afterValues.GARAGE_ACCESS_KEY_ID).toBe(beforeValues.GARAGE_ACCESS_KEY_ID);
+      expect(afterValues.GARAGE_METRICS_TOKEN).toBe(beforeValues.GARAGE_METRICS_TOKEN);
+    });
+
+    it('preserves user-customized GARAGE_BUCKET when regenerating after another key becomes invalid', () => {
+      const root = fixture();
+      runSetup(root);
+      const envPath = resolve(root, 'storage/.env.local');
+      const tampered = readFileSync(envPath, 'utf8')
+        .replace(/^GARAGE_BUCKET=.*\n/m, 'GARAGE_BUCKET=my-custom-bucket\n')
+        .replace(/^GARAGE_ADMIN_TOKEN=.*\n/m, '');
+      writeFileSync(envPath, tampered);
+      const result = runSetup(root);
+      expect(result.status, result.stderr).toBe(0);
+      const after = parse(readFileSync(envPath, 'utf8'));
+      expect(after.GARAGE_BUCKET).toBe('my-custom-bucket');
+      expect(after.GARAGE_ADMIN_TOKEN).toMatch(/^[A-Za-z0-9_-]{43}$/);
     });
   });
 
@@ -1098,6 +1090,19 @@ describe('setup-env.sh', () => {
       expect(generated).not.toContain('stale-');
     });
 
+    it('preserves a non-empty user-set SEARXNG_API_KEY from agent/.env into agent/.env.development', () => {
+      const root = fixture();
+      writeFileSync(
+        resolve(root, 'agent/.env'),
+        [validAgentEnv.trimEnd(), 'SEARXNG_API_KEY=user-bearer-token', ''].join('\n'),
+      );
+      const result = runSetup(root);
+      expect(result.status, result.stderr).toBe(0);
+      const values = parse(readFileSync(resolve(root, 'agent/.env.development'), 'utf8'));
+      expect(values.SEARXNG_BASE_URL).toBe('http://127.0.0.1:8888');
+      expect(values.SEARXNG_API_KEY).toBe('user-bearer-token');
+    });
+
     it('regenerates a clean development env from the example when agent/.env is removed between runs', () => {
       const root = fixture();
       runSetup(root);
@@ -1155,6 +1160,48 @@ describe('setup-env.sh', () => {
       expect(secondSync).toBe(firstSync);
       const markerCount = (secondSync.match(/# Added by setup-env.sh \(synced from \.env\.example\)/g) ?? []).length;
       expect(markerCount).toBe(1);
+    });
+
+    it('appends newly-missing variables on their own lines when the marker already exists', () => {
+      const root = fixture();
+      const marker = '# Added by setup-env.sh (synced from .env.example)';
+      writeFileSync(
+        resolve(root, 'agent/.env'),
+        [
+          'LLM_API_KEY=user-supplied',
+          '',
+          marker,
+          'EXISTING_EXTRA=foo',
+          '',
+        ].join('\n'),
+      );
+      const result = runSetup(root, [], '');
+      expect(result.status, result.stderr).toBe(0);
+      const synced = readFileSync(resolve(root, 'agent/.env'), 'utf8');
+      const values = parse(synced);
+      expect(values.EXISTING_EXTRA).toBe('foo');
+      expect(values.PORT).toBe('4111');
+      expect(synced).not.toMatch(/fooPORT=/);
+      expect(synced).not.toMatch(/EXISTING_EXTRA=foo[A-Z]/);
+      for (const line of synced.split(/\r?\n/)) {
+        expect((line.match(/=/g) ?? []).length).toBeLessThanOrEqual(1);
+      }
+    });
+
+    it('preserves CRLF line endings from the source file on sync', () => {
+      const root = fixture();
+      writeFileSync(
+        resolve(root, 'agent/.env'),
+        ['LLM_API_KEY=user-supplied', ''].join('\r\n'),
+      );
+      const result = runSetup(root, [], '');
+      expect(result.status, result.stderr).toBe(0);
+      const synced = readFileSync(resolve(root, 'agent/.env'), 'utf8');
+      expect(synced).toContain('\r\n');
+      expect(synced.includes('\n') && !synced.includes('\r\n')).toBe(false);
+      const values = parse(synced);
+      expect(values.LLM_API_KEY).toBe('user-supplied');
+      expect(values.PORT).toBe('4111');
     });
 
     it('preserves variables that exist in .env but not in .env.example', () => {

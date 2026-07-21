@@ -17,7 +17,7 @@ The launcher provisions local Garage and SearXNG configuration, waits for both s
 - Mastra on `http://localhost:4111`;
 - Next.js on `http://localhost:3000`.
 
-It generates and exports these five Garage application values to both the Mastra process and the Next.js server boundary; do not copy generated credentials into tracked files:
+It exports these five Garage application values to both the Mastra process and the Next.js server boundary; do not copy generated credentials into tracked files:
 
 ```text
 GARAGE_ENDPOINT
@@ -119,7 +119,7 @@ Set `LLM_DEFAULT_MODEL` to an exact returned `id`, without adding Chekku's inter
 
 Local SearXNG runs pinned image `docker.io/searxng/searxng:2026.7.18-277d8469c`. Compose publishes container port `8080` only on loopback at `127.0.0.1:8888`; the container health check calls its internal `http://127.0.0.1:8080/healthz`. Tracked `searxng/settings.yml` enables JSON search with POST requests, safe-search level 1, page limit 5, a 5-second engine request timeout, and a 10-second maximum engine request timeout.
 
-Local startup creates or reuses private `searxng/.env.local` with mode `0600`, generates the service secret once, and recreates configuration when tracked settings change. Do not copy that file into `agent/.env`; the launcher writes only `SEARXNG_BASE_URL=http://127.0.0.1:8888` and empty `SEARXNG_API_KEY` to generated `agent/.env.development`, strips all SearXNG values from the client process, and does not print private values.
+`npm run setup` creates or reuses private `searxng/.env.local` with mode `0600`, generates the service secret once, and recreates configuration when tracked settings change. Do not copy that file into `agent/.env`; `setup-env.sh` writes `SEARXNG_BASE_URL=http://127.0.0.1:8888` to generated `agent/.env.development` and preserves a non-empty user-set `SEARXNG_API_KEY` from `agent/.env` (empty by default locally), the launcher strips all SearXNG values from the client process, and neither step prints private values.
 
 `search_web` is search-only. It returns bounded titles, HTTP(S) URLs, snippets, source engines, optional category/score/published time, answers, corrections, and suggestions; it never downloads result-page content. Web Reader and PM competitive-analysis workflows remain deferred to separate independently reviewed work.
 
