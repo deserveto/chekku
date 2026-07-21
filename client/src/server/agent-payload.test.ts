@@ -9,7 +9,7 @@ import {
 
 describe('stored-agent payload', () => {
   it('exposes only fixed MCP client ids', () => {
-    expect(STUDIO_MCP_CLIENT_IDS).toEqual(['garage', 'searxng']);
+    expect(STUDIO_MCP_CLIENT_IDS).toEqual(['garage', 'searxng', 'web-reader']);
   });
 
   it('preserves endpoint-native vendor prefixes', () => {
@@ -31,6 +31,7 @@ describe('stored-agent payload', () => {
       mcpClients: [
         'garage',
         'searxng',
+        'web-reader',
         'unknown',
         'https://example.test/mcp',
         'npx arbitrary-package',
@@ -44,6 +45,7 @@ describe('stored-agent payload', () => {
       mcpClients: {
         garage: { tools: {} },
         searxng: { tools: {} },
+        'web-reader': { tools: {} },
       },
       memory: { options: { lastMessages: 20 } },
     });
@@ -52,9 +54,23 @@ describe('stored-agent payload', () => {
   it.each([
     [['garage'], { garage: { tools: {} } }],
     [['searxng'], { searxng: { tools: {} } }],
+    [['web-reader'], { 'web-reader': { tools: {} } }],
     [['garage', 'searxng'], {
       garage: { tools: {} },
       searxng: { tools: {} },
+    }],
+    [['garage', 'web-reader'], {
+      garage: { tools: {} },
+      'web-reader': { tools: {} },
+    }],
+    [['searxng', 'web-reader'], {
+      searxng: { tools: {} },
+      'web-reader': { tools: {} },
+    }],
+    [['garage', 'searxng', 'web-reader'], {
+      garage: { tools: {} },
+      searxng: { tools: {} },
+      'web-reader': { tools: {} },
     }],
   ])('serializes fixed MCP selection %j', (mcpClients, expected) => {
     const payload = toStoredAgentPayload({
