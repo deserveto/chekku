@@ -294,7 +294,13 @@ export function createJinaReaderClient(
         const payload = await readBoundedJson(response, requestSignal, checkpoint);
 
         checkpoint();
-        const normalized = normalizeEnvelope(payload, requestedUrl);
+        let normalized: WebReaderOutput;
+        try {
+          normalized = normalizeEnvelope(payload, requestedUrl);
+        } catch (error) {
+          checkpoint();
+          throw error;
+        }
         checkpoint();
 
         checkpoint();

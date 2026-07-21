@@ -367,14 +367,30 @@ describe('Jina Reader client', () => {
   it.each([
     ['configuration', 2],
     ['URL validation', 3],
-    ['fatal UTF-8 decoding', 5],
-    ['JSON.parse', 7],
-    ['envelope normalization', 9],
-    ['final output budgeting', 11],
+    ['fatal UTF-8 decoding', 6],
+    ['JSON.parse', 8],
+    ['envelope normalization', 10],
+    ['final output budgeting', 12],
   ])('enforces the absolute deadline after %s', async (_stage, crossingCall) => {
     let calls = 0;
     const now = () => calls++ >= crossingCall - 1 ? 10 : 0;
     const fetch = vi.fn(async () => jsonResponse(payload()));
+    const client = createJinaReaderClient({
+      apiKey: 'token', fetch, timeoutMs: 10, now,
+    });
+
+    await expect(client.read('https://example.com/'))
+      .rejects.toThrow('Web Reader timed out. Try again.');
+  });
+
+  it('classifies a deadline crossed during failed envelope normalization', async () => {
+    let calls = 0;
+    const now = () => calls++ >= 9 ? 10 : 0;
+    const fetch = vi.fn(async () => jsonResponse({
+      code: 200,
+      status: 20000,
+      data: null,
+    }));
     const client = createJinaReaderClient({
       apiKey: 'token', fetch, timeoutMs: 10, now,
     });
