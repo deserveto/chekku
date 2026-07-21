@@ -14,6 +14,7 @@
   "scripts": {
     "dev": "concurrently --kill-others-on-fail --names agent,client --prefix-colors cyan,magenta \"npm run dev:agent\" \"npm run dev:client\"",
     "dev:sh": "bash ./scripts/dev.sh",
+    "setup": "bash ./scripts/setup-env.sh",
     "dev:agent": "npm run dev --workspace agent",
     "dev:client": "npm run dev --workspace client",
     "build": "npm run build --workspace agent && npm run build --workspace client",

@@ -143,23 +143,17 @@ npm ci
 
 Run `npm ci` from the repository root after the initial clone and after every `git pull`. It replaces stale workspace dependencies with the exact versions in `package-lock.json`. If Mastra exits with an error such as `Invalid Version: ^1.14.0`, rerun `npm ci` before restarting the launcher.
 
-### 2. Configure the Mastra server
+### 2. Configure environment
 
 ```bash
-cp agent/.env.example agent/.env
+npm run setup
 ```
 
-Edit `agent/.env`:
-
-```dotenv
-LLM_BASE_URL=https://llm.rafiqspace.ai/v1
-LLM_API_KEY=replace-with-your-server-only-key
-LLM_DEFAULT_MODEL=qwen3.6-35b-a3b-fast
-LLM_DISPLAY_NAME=Rafiqspace LLM
-LLM_MODELS=qwen3.6-35b-a3b-fast,qwen3.6-35b-a3b
-```
+This copies `.env.example` files into place, auto-generates local Garage and SearXNG secrets, and prompts for required values like `LLM_API_KEY`. Optional integrations (Telegram, Resend, Maestro) can be left empty and edited into `agent/.env` later.
 
 Never expose `LLM_API_KEY` through a `NEXT_PUBLIC_*` variable or commit `agent/.env`.
+
+For an existing checkout, rerun `npm run setup` after every `git pull` to pick up new environment variables without losing existing values.
 
 #### Optional integrations
 
@@ -169,15 +163,7 @@ Never expose `LLM_API_KEY` through a `NEXT_PUBLIC_*` variable or commit `agent/.
 
 All three are optional; Chekku boots fine without them. The `social-media-agent` binds the send-email tool and (when configured) the Telegram channel; stored agents can opt in from the builder's **Capabilities** section.
 
-### 3. Configure the client
-
-```bash
-cp client/.env.example client/.env.local
-```
-
-The defaults target the local Mastra server and normally require no edits.
-
-### 4. Start Garage, SearXNG, and both application workspaces
+### 3. Start Garage, SearXNG, and both application workspaces
 
 ```bash
 npm run dev:sh
@@ -244,6 +230,7 @@ Local file: `client/.env.local`
 
 | Command | Purpose |
 | --- | --- |
+| `npm run setup` | Copy env examples, generate local Garage/SearXNG secrets, prompt for required values. |
 | `npm run dev:sh` | Provision local Garage and SearXNG, then start agent and client workspaces. |
 | `npm run dev` | Start agent and client workspaces without provisioning local services. |
 | `npm run dev:agent` | Start only the Mastra server. |
@@ -364,6 +351,8 @@ LLM_DEFAULT_MODEL=exact-model-id-from-get-v1-models
 ```
 
 Restart the development server after changing environment values.
+
+If `LLM_API_KEY` is missing entirely, rerun `npm run setup` or edit `agent/.env` directly.
 
 ### `key not allowed to access model`
 
