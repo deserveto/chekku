@@ -46,6 +46,7 @@ describe('pm-agent (weekly report analysis)', () => {
     const tools = await pmAgent.listTools();
     expect(Object.keys(tools).sort()).toEqual([
       'list_pm_reports_from_garage',
+      'read_web_page',
       'save_pm_report_to_garage',
       'search_web',
       'view_pm_report_from_garage',

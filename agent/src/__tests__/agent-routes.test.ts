@@ -3,6 +3,7 @@ import type { ApiRoute } from '@mastra/core/server';
 import { healthRoute } from '../mastra/routes/health.js';
 import { garageMcpServer } from '../mastra/mcp/garage-mcp-server.js';
 import { searxngMcpServer } from '../mastra/mcp/searxng-mcp-server.js';
+import { webReaderMcpServer } from '../mastra/mcp/web-reader-mcp-server.js';
 import { mastra } from '../mastra/index.js';
 
 async function json(response: unknown): Promise<unknown> {
@@ -31,9 +32,13 @@ describe('agent server routes', () => {
       'qaWebAgent',
       'socialMediaAgent',
     ]);
+    expect(
+      Object.keys(mastra.listWorkflows()).filter((key) => !key.endsWith('-input-processor')),
+    ).toEqual(['weeklySocialDrafts']);
     expect(mastra.listMCPServers()).toEqual({
       garage: garageMcpServer,
       searxng: searxngMcpServer,
+      'web-reader': webReaderMcpServer,
     });
 
     const server = mastra.getServer();

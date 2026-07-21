@@ -3,6 +3,7 @@ import { Agent, type AgentConfig, type ToolsInput } from '@mastra/core/agent';
 import { createAgentContextLimiter, createAgentMemory, createCharBudgetGuard } from '../mastra/processors/context-limit.js';
 import { getServerModel } from '../providers/model.js';
 import { searchWebTool } from '../mastra/tools/searxng-search.js';
+import { readWebPageTool } from '../mastra/tools/web-reader.js';
 import {
   listPmReportsFromGarageTool,
   savePmReportToGarageTool,
@@ -72,6 +73,7 @@ const pmAgentConfig: AgentConfig<string, ToolsInput, undefined, ProviderContext>
     list_pm_reports_from_garage: listPmReportsFromGarageTool,
     view_pm_report_from_garage: viewPmReportFromGarageTool,
     search_web: searchWebTool,
+    read_web_page: readWebPageTool,
   },
   memory: createAgentMemory(),
   inputProcessors: [createAgentContextLimiter(), createCharBudgetGuard()],

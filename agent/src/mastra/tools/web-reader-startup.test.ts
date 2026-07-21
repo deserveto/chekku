@@ -40,4 +40,31 @@ describe('read_web_page startup', () => {
       expect(stderr).not.toHaveBeenCalled();
     },
   );
+
+  it('loads the full Mastra runtime without a configured key or startup output', async () => {
+    const fetch = vi.fn();
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const debug = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    vi.stubEnv('WEB_READER_API_KEY', '');
+    vi.stubGlobal('fetch', fetch);
+    vi.resetModules();
+
+    const { mastra } = await import('../index.js');
+
+    expect(mastra).toBeDefined();
+    expect(Object.keys(mastra.listMCPServers() ?? {})).toContain('web-reader');
+    expect(fetch).not.toHaveBeenCalled();
+    expect(error).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    expect(info).not.toHaveBeenCalled();
+    expect(debug).not.toHaveBeenCalled();
+    expect(log).not.toHaveBeenCalled();
+    expect(stdout).not.toHaveBeenCalled();
+    expect(stderr).not.toHaveBeenCalled();
+  });
 });
