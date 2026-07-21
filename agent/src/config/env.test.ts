@@ -3,6 +3,21 @@ import { describe, expect, it } from 'vitest';
 import { loadEnv } from './env.js';
 
 describe('env config', () => {
+  it('uses an empty provider-neutral Web Reader key by default', () => {
+    expect(loadEnv({}).WEB_READER_API_KEY).toBe('');
+  });
+
+  it('accepts only the provider-neutral Web Reader application value', () => {
+    const value = loadEnv({
+      WEB_READER_API_KEY: 'reader-secret',
+      JINA_API_KEY: 'must-be-ignored',
+      WEB_READER_BASE_URL: 'https://evil.test',
+    });
+    expect(value.WEB_READER_API_KEY).toBe('reader-secret');
+    expect(value).not.toHaveProperty('JINA_API_KEY');
+    expect(value).not.toHaveProperty('WEB_READER_BASE_URL');
+  });
+
   it('uses empty server-owned SearXNG defaults', () => {
     const value = loadEnv({});
     expect(value.SEARXNG_BASE_URL).toBe('');

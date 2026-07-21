@@ -20,6 +20,7 @@
     "typecheck": "npm run typecheck --workspace @chekku/storage && npm run typecheck --workspace agent && npm run typecheck --workspace client",
     "lint": "npm run lint --workspace client",
     "test": "vitest run",
+    "test:web-reader:live": "vitest run agent/src/mastra/web-reader/client.live.test.ts",
     "check": "npm run typecheck && npm run lint && npm test"
   },
   "devDependencies": {
