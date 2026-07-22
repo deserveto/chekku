@@ -2,6 +2,8 @@ import ipaddr from 'ipaddr.js';
 
 const ERROR = 'This URL is not allowed for public web reading.';
 const RAW_CONTROL = /[\u0000-\u001f\u007f]/;
+const TERMINAL_DOT_AUTHORITY =
+  /(?:[.\u3002\uff0e\uff61]|%2e|%e3%80%82|%ef%bc%8e|%ef%bd%a1)(?::[0-9]*)?$/i;
 const MAX_URL_BYTES = 2_048;
 const LOCAL_NAMES = ['localhost', 'local', 'internal', 'home.arpa'] as const;
 const IPV6_GLOBAL_RANGES = [
@@ -39,6 +41,20 @@ function isLocalName(hostname: string): boolean {
     hostname === name || hostname.endsWith(`.${name}`));
 }
 
+function hasTerminalDotAuthority(value: string): boolean {
+  const scheme = /^https?:/i.exec(value);
+  if (!scheme) return false;
+  let authorityStart = scheme[0].length;
+  while (value[authorityStart] === '/' || value[authorityStart] === '\\') {
+    authorityStart += 1;
+  }
+  const remainder = value.slice(authorityStart);
+  const delimiter = remainder.search(/[\\/?#]/);
+  const authority = delimiter === -1 ? remainder : remainder.slice(0, delimiter);
+  const hostPort = authority.slice(authority.lastIndexOf('@') + 1);
+  return TERMINAL_DOT_AUTHORITY.test(hostPort);
+}
+
 function literalAddress(hostname: string): ipaddr.IPv4 | ipaddr.IPv6 | undefined {
   const unwrapped = hostname.startsWith('[') && hostname.endsWith(']')
     ? hostname.slice(1, -1)
@@ -58,7 +74,9 @@ function isGloballyRoutable(address: ipaddr.IPv4 | ipaddr.IPv6): boolean {
 export function parsePublicWebUrl(value: string): URL {
   if (RAW_CONTROL.test(value)) reject();
   const trimmed = value.trim();
-  if (!trimmed || Buffer.byteLength(trimmed, 'utf8') > MAX_URL_BYTES) reject();
+  if (!trimmed
+    || Buffer.byteLength(trimmed, 'utf8') > MAX_URL_BYTES
+    || hasTerminalDotAuthority(trimmed)) reject();
 
   let url: URL;
   try {

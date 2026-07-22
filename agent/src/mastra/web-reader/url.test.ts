@@ -12,6 +12,8 @@ describe('public Web Reader URL', () => {
     ['https://[2606:4700:4700::1111]/', 'https://[2606:4700:4700::1111]/'],
     ['https://[64:ff9b::808:808]/', 'https://[64:ff9b::808:808]/'],
     ['https://[::ffff:8.8.8.8]/', 'https://[::ffff:808:808]/'],
+    ['https://example.com/?next=8.8.8.8.#8.8.8.8.',
+      'https://example.com/?next=8.8.8.8.#8.8.8.8.'],
   ])('accepts public URL %s', (input, expected) => {
     expect(parsePublicWebUrl(input).href).toBe(expected);
   });
@@ -35,6 +37,14 @@ describe('public Web Reader URL', () => {
     'https://home.arpa/',
     'https://router.home.arpa/',
     'https://example.com./',
+    'https://8.8.8.8./',
+    'https://8.8.8.8%2e/',
+    'https://8.8.8.8。/',
+    'https://8.8.8.8．/',
+    'https://8.8.8.8｡/',
+    'https://8.8.8.8%E3%80%82/',
+    'https://8.8.8.8%EF%BC%8E/',
+    'https://8.8.8.8%EF%BD%A1/',
     'https://127.0.0.1/',
     'https://0.0.0.0/',
     'https://10.0.0.1/',
