@@ -6,9 +6,10 @@ const TERMINAL_DOT_AUTHORITY =
   /(?:[.\u3002\uff0e\uff61]|%2e|%e3%80%82|%ef%bc%8e|%ef%bd%a1)(?::[0-9]*)?$/i;
 const MAX_URL_BYTES = 2_048;
 const LOCAL_NAMES = ['localhost', 'local', 'internal', 'home.arpa'] as const;
+const IPV4_TRANSLATION_PREFIX = ipaddr.IPv6.parseCIDR('64:ff9b::/96');
 const IPV6_GLOBAL_RANGES = [
   ipaddr.IPv6.parseCIDR('2000::/3'),
-  ipaddr.IPv6.parseCIDR('64:ff9b::/96'),
+  IPV4_TRANSLATION_PREFIX,
 ] as const;
 const IPV6_NON_GLOBAL_RANGES = [
   ipaddr.IPv6.parseCIDR('2001::/23'),
@@ -63,9 +64,22 @@ function literalAddress(hostname: string): ipaddr.IPv4 | ipaddr.IPv6 | undefined
   return ipaddr.process(unwrapped);
 }
 
+function isGloballyRoutableIpv4(address: ipaddr.IPv4): boolean {
+  return address.range() === 'unicast';
+}
+
+function rfc6052Ipv4(address: ipaddr.IPv6): ipaddr.IPv4 {
+  const octets = address.parts.slice(-2)
+    .flatMap((part) => [part >> 8, part & 0xff]);
+  return new ipaddr.IPv4(octets);
+}
+
 function isGloballyRoutable(address: ipaddr.IPv4 | ipaddr.IPv6): boolean {
-  if (address.kind() === 'ipv4') return address.range() === 'unicast';
+  if (address.kind() === 'ipv4') return isGloballyRoutableIpv4(address as ipaddr.IPv4);
   const ipv6 = address as ipaddr.IPv6;
+  if (ipv6.match(IPV4_TRANSLATION_PREFIX)) {
+    return isGloballyRoutableIpv4(rfc6052Ipv4(ipv6));
+  }
   if (IPV6_GLOBAL_IETF_EXCEPTIONS.some((range) => ipv6.match(range))) return true;
   if (IPV6_NON_GLOBAL_RANGES.some((range) => ipv6.match(range))) return false;
   return IPV6_GLOBAL_RANGES.some((range) => ipv6.match(range));
