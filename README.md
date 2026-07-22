@@ -153,7 +153,7 @@ Run `npm ci` from the repository root after the initial clone and after every `g
 npm run setup
 ```
 
-This copies `.env.example` files into place, auto-generates local Garage and SearXNG secrets, and prompts for required values like `LLM_API_KEY`. Optional integrations (Telegram, Resend, Maestro) can be left empty and edited into `agent/.env` later.
+This copies `.env.example` files into place, auto-generates local Garage and SearXNG secrets, and prompts for required values like `LLM_API_KEY`. Optional integrations (Telegram, Resend, Maestro, Web Reader) can be left empty and edited into `agent/.env` later.
 
 Never expose `LLM_API_KEY` through a `NEXT_PUBLIC_*` variable or commit `agent/.env`.
 
