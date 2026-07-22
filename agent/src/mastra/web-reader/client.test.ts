@@ -435,6 +435,63 @@ describe('Jina Reader client', () => {
       .rejects.toThrow('Web Reader timed out. Try again.');
   });
 
+  it('cancels a post-fetch body without waiting for stalled cleanup', async () => {
+    let nowCalls = 0;
+    let cancelCalls = 0;
+    const body = new ReadableStream<Uint8Array>({
+      cancel() {
+        cancelCalls += 1;
+        return new Promise<void>(() => undefined);
+      },
+    });
+    const fetch = vi.fn(async () => new Response(body));
+    const client = createJinaReaderClient({
+      apiKey: 'token', fetch, timeoutMs: 1_000,
+      now: () => nowCalls++ >= 3 ? 1_000 : 0,
+    });
+    const error = await Promise.race([
+      readError(client.read('https://example.com/')),
+      new Promise<Error>((resolve) => {
+        setTimeout(() => resolve(new Error('Web Reader did not settle.')), 100);
+      }),
+    ]);
+
+    expect(String(error)).toBe('Error: Web Reader timed out. Try again.');
+    expect(cancelCalls).toBe(1);
+    expect(body.locked).toBe(false);
+  });
+
+  it('suppresses rejected post-fetch deadline cleanup', async () => {
+    let nowCalls = 0;
+    let cancelCalls = 0;
+    const unhandled: unknown[] = [];
+    const recordUnhandled = (reason: unknown) => { unhandled.push(reason); };
+    process.on('unhandledRejection', recordUnhandled);
+    const body = new ReadableStream<Uint8Array>({
+      cancel() {
+        cancelCalls += 1;
+        return Promise.reject(new Error('private-cancel-error'));
+      },
+    });
+    const fetch = vi.fn(async () => new Response(body));
+    const client = createJinaReaderClient({
+      apiKey: 'token', fetch, timeoutMs: 1_000,
+      now: () => nowCalls++ >= 3 ? 1_000 : 0,
+    });
+
+    try {
+      const error = await readError(client.read('https://example.com/'));
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+
+      expect(String(error)).toBe('Error: Web Reader timed out. Try again.');
+      expect(cancelCalls).toBe(1);
+      expect(body.locked).toBe(false);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', recordUnhandled);
+    }
+  });
+
   it('classifies a deadline crossed during failed envelope normalization', async () => {
     let calls = 0;
     const now = () => calls++ >= 9 ? 10 : 0;

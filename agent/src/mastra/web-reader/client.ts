@@ -301,7 +301,12 @@ export function createJinaReaderClient(
           },
           body: JSON.stringify({ url: requestedUrl }),
         });
-        checkpoint();
+        try {
+          checkpoint();
+        } catch (error) {
+          cancelBody(response.body);
+          throw error;
+        }
         const payload = await readBoundedJson(response, requestSignal, checkpoint);
 
         checkpoint();
