@@ -96,6 +96,29 @@ describe('Jina Reader client', () => {
     expect(String(error)).not.toMatch(/private-token|private-body|example\.com/);
   });
 
+  it('cancels an HTTP error body without waiting for stalled cleanup', async () => {
+    let cancelCalls = 0;
+    const body = new ReadableStream<Uint8Array>({
+      cancel() {
+        cancelCalls += 1;
+        return new Promise<void>(() => undefined);
+      },
+    });
+    const fetch = vi.fn(async () => new Response(body, { status: 500 }));
+    const client = createJinaReaderClient({ apiKey: 'token', fetch });
+    const result = client.read('https://example.com/');
+    const error = await Promise.race([
+      readError(result),
+      new Promise<Error>((resolve) => {
+        setTimeout(() => resolve(new Error('Web Reader did not settle.')), 100);
+      }),
+    ]);
+
+    expect(String(error)).toBe('Error: Web Reader is unavailable. Try again later.');
+    expect(cancelCalls).toBe(1);
+    expect(body.locked).toBe(false);
+  });
+
   it('emits no diagnostics for a failed private provider response', async () => {
     const consoleSpies = [
       vi.spyOn(console, 'error').mockImplementation(() => undefined),
@@ -133,6 +156,35 @@ describe('Jina Reader client', () => {
       const client = createJinaReaderClient({ apiKey: 'token', fetch });
       await expect(client.read('https://example.com/'))
         .rejects.toThrow('Web Reader returned an unsupported format.');
+    }
+  });
+
+  it('suppresses rejected unsupported-MIME body cleanup', async () => {
+    let cancelCalls = 0;
+    const unhandled: unknown[] = [];
+    const recordUnhandled = (reason: unknown) => { unhandled.push(reason); };
+    process.on('unhandledRejection', recordUnhandled);
+    const body = new ReadableStream<Uint8Array>({
+      cancel() {
+        cancelCalls += 1;
+        return Promise.reject(new Error('private-cancel-error'));
+      },
+    });
+    const fetch = vi.fn(async () => new Response(body, {
+      headers: { 'content-type': 'text/html' },
+    }));
+    const client = createJinaReaderClient({ apiKey: 'token', fetch });
+
+    try {
+      const error = await readError(client.read('https://example.com/'));
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+
+      expect(String(error)).toBe('Error: Web Reader returned an unsupported format.');
+      expect(cancelCalls).toBe(1);
+      expect(body.locked).toBe(false);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', recordUnhandled);
     }
   });
 

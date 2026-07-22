@@ -44,6 +44,15 @@ class WebReaderClientError extends Error {
   }
 }
 
+function cancelBody(body: ReadableStream<Uint8Array> | null): void {
+  if (!body || body.locked) return;
+  try {
+    void body.cancel().catch(() => undefined);
+  } catch {
+    // Cleanup must not replace the fixed client error.
+  }
+}
+
 function cancelReader(reader: ReadableStreamDefaultReader<Uint8Array>): void {
   try {
     void reader.cancel().catch(() => undefined);
@@ -83,6 +92,7 @@ async function readBoundedJson(
   checkpoint: () => void,
 ): Promise<unknown> {
   if (!response.ok) {
+    cancelBody(response.body);
     throw new WebReaderClientError(
       response.status === 401 || response.status === 403
         ? 'configuration'
@@ -95,6 +105,7 @@ async function readBoundedJson(
     ?.trim()
     .toLowerCase();
   if (contentType !== 'application/json' && contentType !== 'text/json') {
+    cancelBody(response.body);
     throw new WebReaderClientError('format');
   }
   if (!response.body) throw new WebReaderClientError('invalid');
