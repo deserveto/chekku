@@ -33,6 +33,31 @@ describe('Web Reader MCP server', () => {
     expect(Object.keys(server.tools())).toEqual(['read_web_page']);
   });
 
+  it.each([
+    ['add', (registry: Record<string, unknown>, extra: unknown) => {
+      registry.extra = extra;
+    }],
+    ['delete', (registry: Record<string, unknown>) => {
+      delete registry.read_web_page;
+    }],
+    ['replace', (registry: Record<string, unknown>, extra: unknown) => {
+      registry.read_web_page = extra;
+    }],
+  ])('blocks direct %s mutation of the tool registry', (_case, mutate) => {
+    const server = createWebReaderMcpServer();
+    const original = server.tools().read_web_page;
+    const registry = server.tools() as Record<string, unknown>;
+    const extra = createTool({
+      id: 'extra', description: 'not allowed', inputSchema: z.object({}),
+      execute: async () => ({}),
+    });
+
+    expect(Object.isFrozen(registry)).toBe(true);
+    expect(() => { mutate(registry, extra); }).toThrow(TypeError);
+    expect(Object.keys(server.tools())).toEqual(['read_web_page']);
+    expect(server.tools().read_web_page).toBe(original);
+  });
+
   it('hydrates every fixed MCP selection without a provider request', async () => {
     const normalizedOutput = {
       requestedUrl: 'https://example.com/',

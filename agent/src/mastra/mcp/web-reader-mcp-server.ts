@@ -12,6 +12,10 @@ class WebReaderMcpServer extends MCPServer {
     this.toolActions.add = rejectMutation;
     this.toolActions.remove = rejectMutation;
   }
+
+  override tools(): ReturnType<MCPServer['tools']> {
+    return Object.freeze({ ...super.tools() });
+  }
 }
 
 export function createWebReaderMcpServer(tool = readWebPageTool): MCPServer {
