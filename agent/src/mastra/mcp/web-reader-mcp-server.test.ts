@@ -43,19 +43,25 @@ describe('Web Reader MCP server', () => {
     ['replace', (registry: Record<string, unknown>, extra: unknown) => {
       registry.read_web_page = extra;
     }],
-  ])('blocks direct %s mutation of the tool registry', (_case, mutate) => {
+  ])('blocks direct %s mutation of the registered live registry', (_case, mutate) => {
     const server = createWebReaderMcpServer();
-    const original = server.tools().read_web_page;
-    const registry = server.tools() as Record<string, unknown>;
+    new Mastra({
+      storage: new InMemoryStore(),
+      mcpServers: { 'web-reader': server },
+      gateways: { openAICompatible: new OpenAICompatibleGateway() },
+    });
+    const original = server.convertedTools.read_web_page;
+    const registry = server.convertedTools as Record<string, unknown>;
     const extra = createTool({
       id: 'extra', description: 'not allowed', inputSchema: z.object({}),
       execute: async () => ({}),
     });
 
     expect(Object.isFrozen(registry)).toBe(true);
+    expect(server.tools()).toBe(registry);
     expect(() => { mutate(registry, extra); }).toThrow(TypeError);
-    expect(Object.keys(server.tools())).toEqual(['read_web_page']);
-    expect(server.tools().read_web_page).toBe(original);
+    expect(Object.keys(server.convertedTools)).toEqual(['read_web_page']);
+    expect(server.convertedTools.read_web_page).toBe(original);
   });
 
   it('hydrates every fixed MCP selection without a provider request', async () => {
@@ -71,16 +77,20 @@ describe('Web Reader MCP server', () => {
       read: async () => normalizedOutput,
     });
     const editor = new MastraEditor({ source: 'db' });
+    const server = createWebReaderMcpServer(fakeReadWebPageTool);
     new Mastra({
       storage: new InMemoryStore(),
       editor,
       mcpServers: {
         garage: garageMcpServer,
         searxng: searxngMcpServer,
-        'web-reader': createWebReaderMcpServer(fakeReadWebPageTool),
+        'web-reader': server,
       },
       gateways: { openAICompatible: new OpenAICompatibleGateway() },
     });
+    expect(Object.isFrozen(server.convertedTools)).toBe(true);
+    expect(server.tools()).toBe(server.convertedTools);
+    expect(Object.keys(server.convertedTools)).toEqual(['read_web_page']);
     const cases = [
       [{ 'web-reader': { tools: {} } }, ['read_web_page']],
       [{ garage: { tools: {} }, 'web-reader': { tools: {} } }, [
