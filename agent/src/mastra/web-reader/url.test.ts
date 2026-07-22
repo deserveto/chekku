@@ -10,6 +10,8 @@ describe('public Web Reader URL', () => {
     ['https://bücher.example/', 'https://xn--bcher-kva.example/'],
     ['https://8.8.8.8/', 'https://8.8.8.8/'],
     ['https://[2606:4700:4700::1111]/', 'https://[2606:4700:4700::1111]/'],
+    ['https://[64:ff9b::808:808]/', 'https://[64:ff9b::808:808]/'],
+    ['https://[::ffff:8.8.8.8]/', 'https://[::ffff:808:808]/'],
   ])('accepts public URL %s', (input, expected) => {
     expect(parsePublicWebUrl(input).href).toBe(expected);
   });
@@ -55,6 +57,11 @@ describe('public Web Reader URL', () => {
     'https://[fc00::1]/',
     'https://[ff00::1]/',
     'https://[2001:db8::1]/',
+    'https://[64:ff9b:1::7f00:1]/',
+    'https://[100::1]/',
+    'https://[2001:2::1]/',
+    'https://[fec0::1]/',
+    'https://[::7f00:1]/',
     'https://[::ffff:127.0.0.1]/',
     'https://[::ffff:10.0.0.1]/',
     'https://[::ffff:100.64.0.1]/',
