@@ -442,7 +442,7 @@ describe('development launcher', () => {
     expect(calls.match(/^inspect /gm)?.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('normalizes leading-zero decimal durations before arithmetic and output', () => {
+  it('normalizes a leading-zero decimal readiness interval before arithmetic', () => {
     const healthyRoot = fixture({ tmux: true });
     const startedAt = Date.now();
     const healthy = runDev(healthyRoot, {
@@ -455,7 +455,9 @@ describe('development launcher', () => {
     expect(Date.now() - startedAt).toBeGreaterThanOrEqual(4_000);
     expect(Date.now() - startedAt).toBeLessThan(8_000);
     expect(readFileSync(resolve(healthyRoot, 'mock-log/inspect-count-garage'), 'utf8')).toBe('2');
+  }, 12_000);
 
+  it('normalizes a leading-zero decimal readiness timeout in output', () => {
     const timeoutRoot = fixture();
     const timedOut = runDev(timeoutRoot, {
       CHEKKU_NO_TMUX: '1',
