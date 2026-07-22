@@ -722,6 +722,28 @@ describe('development launcher', () => {
     expect(clientCall).toContain('unset WEB_READER_API_KEY');
   });
 
+  it('propagates the Web Reader key from agent env through setup only to the agent', () => {
+    const root = fixture({ captureNpmEnv: true });
+    const agentEnvPath = resolve(root, 'agent/.env');
+    const agentEnv = readFileSync(agentEnvPath, 'utf8').replace(
+      /^WEB_READER_API_KEY=.*$/m,
+      'WEB_READER_API_KEY=reader-from-agent-env',
+    );
+    writeFileSync(agentEnvPath, agentEnv);
+
+    const setup = runSetup(root, [], '');
+    const result = runDev(root, { CHEKKU_NO_TMUX: '1', RELOAD_AGENT_ENV: '1' });
+    const generated = parse(readFileSync(resolve(root, 'agent/.env.development'), 'utf8'));
+    const agentCapture = readFileSync(resolve(root, 'mock-log/env-dev_agent'), 'utf8');
+    const clientCapture = readFileSync(resolve(root, 'mock-log/env-dev_client'), 'utf8');
+
+    expect(setup.status, setup.stderr).toBe(0);
+    expect(result.status, result.stderr).toBe(0);
+    expect(generated.WEB_READER_API_KEY).toBe('reader-from-agent-env');
+    expect(agentCapture).toContain('WEB_READER_API_KEY=reader-from-agent-env');
+    expect(clientCapture).not.toContain('WEB_READER_API_KEY');
+  });
+
   it('force-recreates Garage only after generated config changes', () => {
     const root = fixture({ tmux: true });
     expect(runDev(root).status).toBe(0);
@@ -1301,6 +1323,7 @@ describe('setup-env.sh', () => {
       expect(result.stdout).toContain('TELEGRAM_BOT_TOKEN');
       expect(result.stdout).toContain('RESEND_API_KEY');
       expect(result.stdout).toContain('WEB_READER_API_KEY');
+      expect(result.stdout).toContain('Rerun npm run setup after editing agent/.env.');
     });
   });
 });

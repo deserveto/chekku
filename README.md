@@ -153,7 +153,7 @@ Run `npm ci` from the repository root after the initial clone and after every `g
 npm run setup
 ```
 
-This copies `.env.example` files into place, auto-generates local Garage and SearXNG secrets, and prompts for required values like `LLM_API_KEY`. Optional integrations (Telegram, Resend, Maestro, Web Reader) can be left empty and edited into `agent/.env` later.
+This copies `.env.example` files into place, auto-generates local Garage and SearXNG secrets, and prompts for required values like `LLM_API_KEY`. Optional integrations (Telegram, Resend, Maestro, Web Reader) can be left empty and edited into `agent/.env` later; rerun `npm run setup` after editing so local Mastra receives the changes.
 
 Never expose `LLM_API_KEY` through a `NEXT_PUBLIC_*` variable or commit `agent/.env`.
 
@@ -164,7 +164,7 @@ For an existing checkout, rerun `npm run setup` after every `git pull` to pick u
 - **Telegram (social-media-agent)** — create a bot with [@BotFather](https://t.me/BotFather), then set `TELEGRAM_BOT_TOKEN`. Keep `TELEGRAM_MODE=polling` for local dev; switch to `webhook` with `TELEGRAM_WEBHOOK_SECRET_TOKEN` for production.
 - **Email outbound (send-email tool)** — sign up at [resend.com](https://resend.com), set `RESEND_API_KEY`, and (for production) a Resend-verified sender in `RESEND_FROM_EMAIL`. The default `onboarding@resend.dev` sender only delivers to the account owner. Deliveries run directly (no approval gate).
 - **Android QA (qa-android-agent)** — install the [Maestro CLI](https://maestro.mobile.dev/) and ADB, start an emulator or connect a device, then set `MAESTRO_ENABLED=true`. Chekku, Maestro, ADB, and the device must run on the same machine.
-- **Hosted Web Reader** — set `WEB_READER_API_KEY` in `agent/.env` to enable `read_web_page`. Keep it server-only; missing configuration does not block startup and fails only when the tool executes.
+- **Hosted Web Reader** — set `WEB_READER_API_KEY` in `agent/.env`, rerun `npm run setup`, then restart the agent to enable `read_web_page`. Keep the key server-only; missing configuration does not block startup and fails only when the tool executes.
 
 These integrations are optional; Chekku boots fine without them. The `social-media-agent` binds the send-email tool and (when configured) the Telegram channel; stored agents can opt in from the builder's **Capabilities** section.
 
@@ -428,7 +428,7 @@ Port `8888` must be free before local startup. Search has a fixed 12-second appl
 
 ### `Web Reader is not configured.`
 
-Set `WEB_READER_API_KEY` only in `agent/.env` or a deployment secret manager, then restart the agent. The fixed Web Reader registry remains available without a key, but `read_web_page` fails closed until one is configured.
+Set `WEB_READER_API_KEY` only in `agent/.env` or a deployment secret manager. For local development, rerun `npm run setup` after editing `agent/.env`, then restart the agent. The fixed Web Reader registry remains available without a key, but `read_web_page` fails closed until one is configured.
 
 ### Reset local agents and conversations
 

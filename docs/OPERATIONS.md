@@ -79,6 +79,8 @@ WEB_READER_API_KEY=replace-with-server-owned-key
 
 Keep key only in agent process or deployment secret manager. Missing or malformed key does not block startup; `read_web_page` instead returns fixed `Web Reader is not configured.` error when invoked. Chekku provides no anonymous fallback.
 
+For local development, rerun `npm run setup` after editing `agent/.env` so the key is copied into generated `agent/.env.development`, then restart the agent.
+
 ### `client/.env.local`
 
 ```dotenv
@@ -383,7 +385,7 @@ For local operation, call `curl --fail http://127.0.0.1:8888/healthz` and inspec
 
 ### Web Reader is not configured
 
-Confirm `WEB_READER_API_KEY` reaches agent process and restart it. Do not add key to client environment, stored-agent records, model input, command output, logs, or tickets. Server should remain healthy while tool fails closed.
+For local development, set `WEB_READER_API_KEY` in `agent/.env`, rerun `npm run setup`, and restart the agent. Confirm the key reaches only the agent process. Do not add it to client environment, stored-agent records, model input, command output, logs, or tickets. Server should remain healthy while tool fails closed.
 
 ### Web Reader is unavailable or times out
 
