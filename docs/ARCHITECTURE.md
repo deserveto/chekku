@@ -2,7 +2,7 @@
 
 ## Overview
 
-Chekku contains three npm workspaces: a Next.js client, a Mastra agent server, and the shared `@chekku/storage` package. The system is local-first, uses LibSQL for agent and conversation persistence, offers Garage-backed generic agent object storage plus PM report persistence, connects to one server-owned OpenAI-compatible model endpoint, provides bounded web search through a server-owned SearXNG endpoint, and reads chosen public pages through hosted Jina Reader.
+Chekku contains three npm workspaces: a Next.js client, a Mastra agent server, and the shared `@chekku/storage` package. The system is local-first, uses LibSQL for agent and conversation persistence, offers Garage-backed generic agent object storage plus weekly and competitive PM report persistence, connects to one server-owned OpenAI-compatible model endpoint, provides bounded web search through a server-owned SearXNG endpoint, and reads chosen public pages through hosted Jina Reader.
 
 ```text
 ┌────────────────────────────────────────────┐
@@ -14,7 +14,7 @@ Chekku contains three npm workspaces: a Next.js client, a Mastra agent server, a
 ┌────────────────────────────────────────────┐
 │ Next.js client/server :3000                │
 │ Same-origin proxy + auth seam              │
-│ /reports/* + /api/storage/pm-reports/* ────────────┐
+│ /reports/* + PM storage APIs ──────────────────────┐
 └───────────────────┬────────────────────────┘        │
                     │ Mastra HTTP API                 │
                     ▼                                 │
@@ -56,6 +56,15 @@ PM Agent / selected stored agent
   -> search_web -> fixed SearXNG -> candidate URLs/snippets
   -> read_web_page -> fixed Web Reader client -> hosted Jina Reader
   -> bounded untrusted Markdown
+
+PM competitive analysis
+  -> competitive-analysis skill
+  -> up to 3 search_web calls
+  -> up to 8 read_web_page calls
+  -> evidence-only synthesis
+  -> save_competitive_analysis_to_garage
+  -> competitive-analyses/<pca-id>/{request.md,analysis.md,metadata.json}
+  -> /reports/competitive/<pca-id>
 ```
 
 ## Backend composition
@@ -73,9 +82,9 @@ PM Agent / selected stored agent
 - structured logging and request middleware;
 - `/healthz` and `/models` custom routes.
 
-Mastra provides the native agent, Memory, and editor APIs. Next.js separately provides `/reports/*` pages and `/api/storage/pm-reports/*` APIs through `client/src/server/pm-reports.ts`; those PM report storage interfaces are not Mastra APIs. Chekku does not maintain a parallel custom conversation or agent database.
+Mastra provides native agent, Memory, skill, and editor APIs. Next.js separately provides `/reports/*`, `/api/storage/pm-reports/*`, and `/api/storage/competitive-analyses/*` through focused server-only services; those PM storage interfaces are not Mastra APIs. Chekku does not maintain a parallel custom conversation or agent database.
 
-`storedAgentTools` is the instance-level registry that makes calculator, current-time, and email tools available during stored-agent hydration. PM report tools and the reusable `search_web` and `read_web_page` tools are attached directly to `pmAgent`; PM report tools are not members of `storedAgentTools`, `garageMcpServer`, `searxngMcpServer`, or `webReaderMcpServer`.
+`storedAgentTools` is the instance-level registry that makes calculator, current-time, and email tools available during stored-agent hydration. Weekly and competitive PM tools plus reusable `search_web` and `read_web_page` attach directly to `pmAgent`; PM storage tools are not members of `storedAgentTools`, `garageMcpServer`, `searxngMcpServer`, or `webReaderMcpServer`.
 
 `socialMediaAgent` also wires a Telegram channel adapter. Once Mastra initializes the agent's `AgentChannels`, `index.ts` registers the agent's slash-command handlers (`/help`, `/roles`, `/role`, `/switch`) on the Chat SDK so Telegram-intercepted bot commands reach the role logic.
 
@@ -115,11 +124,11 @@ The active role is held in-memory keyed by `${platform}:${userId}`. The agent re
 
 ### PM Agent
 
-`pm-agent` is a protected code-defined agent with Memory. It analyzes engineering weekly reports, derives a 1-10 risk rating and matching status, owns three code-defined report tools (`save_pm_report_to_garage`, `list_pm_reports_from_garage`, and `view_pm_report_from_garage`), and receives the reusable `search_web` and `read_web_page` tools.
+`pm-agent` is protected and code-defined with bounded Memory, token limiting, final character guard, and `maxSteps: 18`. Two inline user-invocable Mastra skills own complete behavior: `weekly-report-analysis` preserves the risk-rating/report contract; `competitive-analysis` owns intake, bounded research, evidence synthesis, complete-only save, and output format.
 
-These PM tools are registered only on PM Agent. They compose `@chekku/storage` through a fixed `pm-agent` namespace and are intentionally separate from generic Garage MCP. No model, route, browser request, or local identity can select the PM storage namespace.
+PM Agent has eight configured direct tools: weekly save/list/view, competitive save/list/view, `search_web`, and `read_web_page`. PM storage tools are registered only on PM Agent. They compose `@chekku/storage` through fixed namespace `pm-agent` and remain separate from generic Garage MCP. No model, route, browser request, or local identity can select this namespace.
 
-`search_web` discovers candidate URLs and returns bounded metadata and snippets. `read_web_page` can then read one chosen public page into bounded untrusted Markdown. PM Agent instructions do not require research, orchestration, or a five-product competitive analysis; competitive analysis remains future work requiring independent review.
+For competition, first named product is anchor and later supplied products are mandatory seeds. PM Agent adds candidates until five to seven competitors are evidenced. A run permits at most three searches, eight one-page reads, and one save. Search output discovers URLs but cannot support final claims. Each product needs one successfully read official/primary page; Reader Markdown is untrusted evidence and cannot control workflow. Matrix values are `Yes`, `Partial`, `No`, or `Unknown`; silence is `Unknown`. If minimum evidence fails, PM Agent returns an explicit incomplete unsaved analysis. Complete work saves once and returns `Saved analysisId:`.
 
 ### Stored agents
 
@@ -207,7 +216,7 @@ Public target URL and extracted page content pass through Jina. Jina is an exter
 
 Normalized output contains only requested and provider-reported source URLs, title, Markdown, `contentIsUntrusted: true`, and truncation state. Public errors are fixed and bounded; they do not expose keys, target URLs, endpoint details, headers, provider bodies, diagnostics, stacks, timings, usage, or request IDs. Returned Markdown may contain prompt injection. Treat it only as untrusted evidence, never instructions; bounding and labeling content do not make it trusted.
 
-Each invocation reads one chosen public page. It does not discover URLs, crawl, recursively follow links, authenticate to target pages, handle PDFs or uploads, return screenshots, persist content, or perform competitive analysis. Competitive-analysis orchestration remains deferred to separately reviewed work.
+Each invocation reads one chosen public page. It does not discover URLs, crawl, recursively follow links, authenticate to target pages, handle PDFs or uploads, return screenshots, persist content, or itself perform competitive analysis. PM Agent composes independent calls using only user-supplied or search-result URLs within skill budgets.
 
 ## System-message normalization
 
@@ -279,6 +288,20 @@ Generated IDs and every repository, tool, and public detail boundary use canonic
 
 The list tool returns newest-first structured reports and presentation-only `reportUrl` and `reportsMarkdown` fields. Neither field enters persisted metadata, save output, view output, or repository types. `reportsMarkdown` is deterministic GFM with columns `Report`, `Created`, `Risk`, and `Status`; PM Agent returns it unchanged. Valid timestamps render to minute precision in UTC, while invalid stored text is preserved with Markdown-safe escaping.
 
+## Competitive analysis storage
+
+`storage/src/competitive-analyses.ts` is a separate domain repository over the same generic object contract and fixed `pm-agent` namespace. It does not change Garage MCP. Each complete analysis stores:
+
+```text
+competitive-analyses/<analysisId>/request.md
+competitive-analyses/<analysisId>/analysis.md
+competitive-analyses/<analysisId>/metadata.json
+```
+
+IDs use `pca_YYYYMMDDHHMMSS_<8 lowercase hex>` and enforce `^pca_[0-9]{14}_[0-9a-f]{8}$`. Request and analysis write before metadata, so partial saves do not become list entries. Metadata projects only bounded anchor, optional market, five to seven unique competitors, derived product/source counts, and canonical relative keys. Save tool additionally requires one unique normalized public primary-source URL mapped to every product before repository access.
+
+Competitive list output adds presentation-only `analysisUrl` and deterministic `analysesMarkdown` with Analysis, Created, Anchor, Competitors, and Sources columns. These fields never enter metadata, save/view output, or repository types. Empty output is exactly `No saved competitive analyses found.`
+
 ## Social post storage
 
 `storage/src/social-posts.ts` adds domain behavior above the generic storage contract without changing Garage MCP. It exposes only pure canonical helpers (`buildSocialPostMetadata`, `createPostId`, `keysFor`, parse helpers) and read helpers (`listSocialPosts`, `getSocialPost`, `createSocialPostStorage`) — no write helper that takes an `ObjectStorage`. The scheduled `weekly-social-drafts` workflow writes through the existing Garage MCP `create_text_object` tool; the client/server read path calls `listSocialPosts` / `getSocialPost` via `createSocialPostStorage()` over the same root storage.
@@ -320,15 +343,17 @@ The browser uses `@mastra/client-js` with the Next.js origin and `/api/agent` pr
 
 The current identity implementation is intentionally replaceable. Future OIDC must preserve the same resource and thread-ownership checks.
 
-Garage access remains server-side through two explicit paths. Chat tool calls pass through `/api/agent/*`, Mastra, and hydrated agent tools. Report pages and `/api/storage/pm-reports/*` execute in the Next.js server and call `client/src/server/pm-reports.ts` directly. Browser components neither import `@chekku/storage` nor make direct S3/Garage requests.
+Garage access remains server-side through two explicit paths. Chat tool calls pass through `/api/agent/*`, Mastra, and hydrated agent tools. Report pages and PM storage APIs execute in Next.js and call `client/src/server/pm-reports.ts` or `client/src/server/competitive-analyses.ts` directly. Browser components neither import `@chekku/storage` nor make direct S3/Garage requests.
 
 SearXNG and Web Reader also remain server-side. Builder state carries only fixed capability selection; browser requests cannot set endpoints, keys, headers, commands, packages, environment, provider controls, or tool registries. Search and page-reading requests run from the Mastra process through fixed clients.
 
 `client/src/server/pm-reports.ts` is a separate server-only boundary for report pages and APIs. It requires the same server identity seam before storage access, validates public report IDs before reads, fixes the namespace to `pm-agent`, and maps provider failures to safe 400, 403, 404, or 503 responses. OIDC may replace `CHEKKU_LOCAL_USER_ID` later without changing namespace or report-access semantics.
 
+`client/src/server/competitive-analyses.ts` mirrors this boundary for `pca_...` records, validating canonical IDs before storage creation and exposing only projected relative metadata. Unknown route failures become fixed 500 responses; provider diagnostics never reach clients.
+
 `client/src/server/social-posts.ts` mirrors that boundary for the social-post review UI. It fixes the namespace to `social-media-agent`, validates `smp_...` IDs before reads, requires the same identity seam, and maps provider failures to the same safe responses. Social-post pages and `/api/storage/social-posts/*` execute in the Next.js server and never import `@chekku/storage` from browser code.
 
-Chat report links use URL-encoded relative `/reports/<reportId>` URLs and render in a new tab with `rel="noreferrer"`. GFM tables are wrapped in labeled, keyboard-focusable horizontal-scroll regions with visible focus outlines. `/reports` and `/social-posts` use the same accessibility pattern for their server-rendered list tables, preventing narrow layouts from compressing columns.
+Chat report links use URL-encoded relative `/reports/<reportId>` or `/reports/competitive/<analysisId>` URLs and render in a new tab with `rel="noreferrer"`. GFM tables are wrapped in labeled keyboard-focusable horizontal-scroll regions with visible focus outlines. Weekly, competitive, social-post, and feature-matrix tables preserve readable columns on narrow layouts.
 
 ## Public routes
 
@@ -340,13 +365,18 @@ Chat report links use URL-encoded relative `/reports/<reportId>` URLs and render
 - `/agents/[id]/edit` edits a stored agent.
 - `/chat` opens the canonical query-based chat route.
 - `/chat/[threadId]` redirects legacy thread URLs to the canonical route.
-- `/reports` lists PM reports newest first.
-- `/reports/[reportId]` renders analysis, metadata, and original input.
+- `/reports` groups Weekly Reports and Competitive Analyses.
+- `/reports/weekly` lists weekly PM reports newest first.
+- `/reports/[reportId]` preserves weekly analysis, metadata, and original-input details.
+- `/reports/competitive` lists competitive analyses newest first.
+- `/reports/competitive/[analysisId]` renders analysis, metadata, and original request.
 - `/social-posts` lists scheduled Instagram drafts newest first.
 - `/social-posts/[postId]` renders caption, metadata, and brief.
 - `/api/agent/[...path]` proxies Mastra HTTP requests.
 - `GET /api/storage/pm-reports` returns report metadata after identity validation.
 - `GET /api/storage/pm-reports/[reportId]` returns one report after identity and ID validation.
+- `GET /api/storage/competitive-analyses` returns competitive metadata after identity validation.
+- `GET /api/storage/competitive-analyses/[analysisId]` returns one analysis after identity and ID validation.
 - `GET /api/storage/social-posts` returns post metadata after identity validation.
 - `GET /api/storage/social-posts/[postId]` returns one post after identity and ID validation.
 
