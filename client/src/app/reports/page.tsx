@@ -2,6 +2,8 @@ import Link from 'next/link';
 
 import { StudioNav } from '@/components/studio/studio-nav';
 
+export const dynamic = 'force-dynamic';
+
 export default async function ReportsPage() {
   const resourceId = process.env.CHEKKU_LOCAL_USER_ID || 'local-user';
 

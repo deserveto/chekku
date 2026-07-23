@@ -289,6 +289,28 @@ describe('competitive analysis storage', () => {
     });
   });
 
+  it('rejects oversized stored timestamps from lists and direct reads', async () => {
+    const { objects, storage } = createMemoryStorage();
+    const keys = competitiveAnalysisKeysFor(analysisId);
+    const oversized = {
+      analysisId,
+      createdAt: 'x'.repeat(129),
+      anchorProduct: 'GPT',
+      competitorNames,
+      productCount: 6,
+      sourceCount: 6,
+      ...keys,
+    };
+    objects.set(keys.requestObjectKey, requestMarkdown);
+    objects.set(keys.analysisObjectKey, analysisMarkdown);
+    objects.set(keys.metadataObjectKey, JSON.stringify(oversized));
+
+    await expect(listCompetitiveAnalyses(storage)).resolves.toEqual([]);
+    await expect(getCompetitiveAnalysis(storage, analysisId)).rejects.toThrow(
+      `Invalid competitive analysis metadata for ${analysisId}`,
+    );
+  });
+
   it.each([
     '../escape',
     'pca_bad/id',

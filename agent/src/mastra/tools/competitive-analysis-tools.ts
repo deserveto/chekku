@@ -53,7 +53,7 @@ const saveInputSchema = z.object({
   sources: z.array(sourceSchema).min(6).max(8),
 }).strict().superRefine((input, context) => {
   const products = [input.anchorProduct, ...input.competitorNames];
-  const productKeys = products.map((name) => name.toLocaleLowerCase());
+  const productKeys = products.map((name) => name.toLowerCase());
   if (new Set(productKeys).size !== productKeys.length) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
@@ -62,7 +62,7 @@ const saveInputSchema = z.object({
     });
   }
 
-  const sourceProductKeys = input.sources.map(({ productName }) => productName.toLocaleLowerCase());
+  const sourceProductKeys = input.sources.map(({ productName }) => productName.toLowerCase());
   if (new Set(sourceProductKeys).size !== sourceProductKeys.length) {
     context.addIssue({
       code: z.ZodIssueCode.custom,

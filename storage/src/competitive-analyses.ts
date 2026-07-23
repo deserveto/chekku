@@ -40,6 +40,7 @@ const ANALYSIS_ID_RE = /^pca_[0-9]{14}_[0-9a-f]{8}$/;
 const MAX_MARKDOWN_BYTES = 262_144;
 const MAX_NAME_BYTES = 256;
 const MAX_MARKET_BYTES = 512;
+const MAX_CREATED_AT_BYTES = 128;
 
 export const createCompetitiveAnalysisStorage = (root: ObjectStorage): ObjectStorage =>
   createNamespacedObjectStorage(root, PM_REPORT_AGENT_ID);
@@ -91,9 +92,9 @@ function normalizeProducts(
   }
   const normalizedCompetitors = competitorNames.map((name, index) =>
     normalizeBoundedText(name, `competitorNames[${index}]`, MAX_NAME_BYTES));
-  const seen = new Set([normalizedAnchor.toLocaleLowerCase()]);
+  const seen = new Set([normalizedAnchor.toLowerCase()]);
   for (const competitor of normalizedCompetitors) {
-    const normalizedKey = competitor.toLocaleLowerCase();
+    const normalizedKey = competitor.toLowerCase();
     if (seen.has(normalizedKey)) {
       throw new Error('anchorProduct and competitorNames must be unique case-insensitively');
     }
@@ -109,6 +110,8 @@ function parseCompetitiveAnalysisMetadata(value: unknown): CompetitiveAnalysisMe
     return undefined;
   }
   if (typeof metadata.createdAt !== 'string'
+    || metadata.createdAt.length === 0
+    || Buffer.byteLength(metadata.createdAt, 'utf8') > MAX_CREATED_AT_BYTES
     || typeof metadata.anchorProduct !== 'string'
     || !Array.isArray(metadata.competitorNames)
     || !metadata.competitorNames.every((name) => typeof name === 'string')

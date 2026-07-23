@@ -112,6 +112,7 @@ describe('requested UI structure', () => {
   });
 
   it('groups weekly and competitive report routes without changing weekly detail URLs', () => {
+    expect(reportLandingPage).toContain("export const dynamic = 'force-dynamic'");
     expect(reportLandingPage).toContain('href="/reports/weekly"');
     expect(reportLandingPage).toContain('href="/reports/competitive"');
     expect(reportListPage).toContain('href={`/reports/${encodeURIComponent(report.reportId)}`}');
