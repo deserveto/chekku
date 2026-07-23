@@ -22,6 +22,16 @@ const envSchema = z.object({
   SEARXNG_API_KEY: z.string().default(''),
   WEB_READER_API_KEY: z.string().default(''),
 
+  // Public Holiday Indonesia API base URL. Optional — when unset, the
+  // weekly-social-drafts workflow falls back to the hardcoded SPECIAL_DAYS
+  // calendar only (no movable feasts like Idul Fitri / Idul Adha).
+  PUBLIC_HOLIDAY_API_BASE_URL: z.string().default('https://api-hari-libur.vercel.app/api'),
+
+  // Local filesystem directory for the per-year holiday cache. Relative to
+  // the agent workspace working directory. The directory and its contents
+  // are gitignored generated state.
+  PUBLIC_HOLIDAY_CACHE_DIR: z.string().default('src/mastra/calendar/.cache'),
+
   CHEKKU_DEFAULT_AGENT_ID: z.string().default('main-agent'),
   CHEKKU_LOCAL_USER_ID: z.string().default('local-user'),
   BROWSER_HEADLESS: z.enum(['true', 'false']).default('true'),

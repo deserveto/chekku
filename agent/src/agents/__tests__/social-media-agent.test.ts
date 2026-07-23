@@ -10,6 +10,7 @@ import {
   normalizeCommandWord,
   listRolesText,
   buildInstructions,
+  buildInstructionsForRole,
   HELP_TEXT,
   unknownCommandReply,
   isTelegramConfigured,
@@ -67,6 +68,44 @@ describe('getRole', () => {
 
   it('falls back to general for undefined', () => {
     expect(getRole(undefined).id).toBe('general');
+  });
+});
+
+describe('instagram-writer brand identity (scheduled-workflow source of truth)', () => {
+  // The instagram-writer role is the voice the weekly-social-drafts workflow
+  // pins via buildInstructionsForRole('instagram-writer'). The brand identity
+  // strings below are surfaced in every greeting-card draft, so they must
+  // live in the role guidance itself (not just in the workflow prompt).
+  const role = getRole('instagram-writer');
+
+  it('carries the R brand name, tagline, and sign-off', () => {
+    expect(role.guidance).toContain('R — Your Gentle AI Companion');
+    expect(role.guidance).toContain('AI Human-Centered Intelligence');
+    expect(role.guidance).toContain('Keluarga Besar PT Rafiq Space Intelligence');
+  });
+
+  it('pins the reflective, non-promotional tone guardrail', () => {
+    expect(role.guidance).toContain('reflective');
+    expect(role.guidance).toContain('warm');
+    expect(role.guidance).toContain('professional');
+    expect(role.guidance).toContain('never hype');
+  });
+
+  it('allows well-known religious/cultural verses with attribution', () => {
+    expect(role.guidance).toContain('Quran');
+    expect(role.guidance).toContain('Surah reference');
+    expect(role.guidance).toContain('attribution');
+  });
+
+  it('keeps the [source] placeholder rule for unverifiable claims', () => {
+    expect(role.guidance).toContain('[source] placeholder');
+    expect(role.guidance).toContain('statistics');
+  });
+
+  it('surfaces the brand identity in buildInstructions for the workflow', () => {
+    const instructions = buildInstructionsForRole('instagram-writer');
+    expect(instructions).toContain('R — Your Gentle AI Companion');
+    expect(instructions).toContain('Keluarga Besar PT Rafiq Space Intelligence');
   });
 });
 

@@ -9,18 +9,45 @@ import { z } from 'zod';
 
 import { socialMediaAgent, buildInstructionsForRole } from '../../agents/social-media-agent.js';
 import { env } from '../../config/env.js';
+import {
+  createPublicHolidayClient,
+  type PublicHoliday,
+  type PublicHolidayClient,
+} from '../calendar/public-holidays.js';
 import { createCreateTextObjectTool } from '../tools/garage-object-tools.js';
 import { sendEmailViaResend, type SendEmailInput } from '../tools/send-email.js';
-import { selectTopicsForWeek, weekStartLabel, type Topic } from './special-days.js';
+import { searchWebTool } from '../tools/searxng-search.js';
+import type { SearxngSearchOutput } from '../searxng/client.js';
+import {
+  evergreenPillarsForWeek,
+  selectBonusAwarenessDayForWeek,
+  weekStartLabel,
+  type SpecialDay,
+  type Topic,
+} from './special-days.js';
+import { researchTrendingTopics, type SearchFn } from './trending-research.js';
 
 /**
- * Scheduled weekly social-drafts workflow (Stage 1).
+ * Scheduled weekly social-drafts workflow (Stage 2).
  *
  * Fires every Monday at 09:00 Asia/Jakarta via Mastra's built-in scheduler
- * (see `agent/src/mastra/index.ts`). One fire produces exactly 2 Instagram
- * drafts: up to 2 awareness days in the week, filled out by evergreen pillars,
- * then persists each to the `social-media-agent` Garage namespace and emails a
- * review link to `SOCIAL_DRAFT_REVIEW_EMAIL`.
+ * (see `agent/src/mastra/index.ts`). One fire drafts 2 base Instagram posts
+ * plus, when the week contains an awareness day, 1 bonus awareness post on
+ * top (total 2–3 drafts per week).
+ *
+ * Topic composition:
+ * - Base 2 slots, in priority order: trending topics from SearXNG research,
+ *   then evergreen pillars as fill when trending returns fewer than 2.
+ * - Bonus slot, when the week has a fixed-date awareness day: that day
+ *   becomes its own post (every entry in `SPECIAL_DAYS` is eligible, including
+ *   national holidays such as `08-17`). The 2 base slots stay "outside big
+ *   events" — trending results that overlap the awareness day's theme are
+ *   skipped so the bonus and a base slot do not duplicate the same topic.
+ *
+ * Degraded mode (SearXNG not configured, or every search query fails): the
+ * workflow still produces exactly 2 base drafts from evergreen pillars. The
+ * awareness-day bonus is gated on a working research pass, so degraded mode
+ * never emits awareness-day content for the week.
  *
  * Storage writes go through the existing Garage MCP `create_text_object` tool
  * (the same five-tool generic MCP registered on the Mastra instance), invoked
@@ -37,8 +64,8 @@ import { selectTopicsForWeek, weekStartLabel, type Topic } from './special-days.
  * instructions })`.
  *
  * The orchestrator (`runWeeklySocialDrafts`) is dependency-injected so the
- * schedule/agent/storage/email seams can be unit-tested with fakes; the
- * `createStep` binding supplies the real defaults.
+ * schedule/agent/storage/email/search seams can be unit-tested with fakes;
+ * the `createStep` binding supplies the real defaults.
  */
 
 const INSTAGRAM_INSTRUCTIONS = buildInstructionsForRole('instagram-writer');
@@ -80,6 +107,8 @@ export const weeklySocialDraftsOutputSchema = z.object({
   posts: z.array(draftedPostSchema),
   emailSent: z.boolean(),
   emailError: z.string().optional(),
+  /** Human-readable note when research fell back to evergreen pillars. */
+  researchNote: z.string().optional(),
 });
 
 export type DraftedPost = z.infer<typeof draftedPostSchema>;
@@ -94,38 +123,119 @@ export function buildPostUrl(postId: string, webUrl: string): string {
 }
 
 export function buildDraftPrompt(topic: Topic, weekStart: string): string {
-  const sourceLine =
-    topic.kind === 'special-day'
-      ? `Source: scheduled awareness day — ${topic.specialDay ?? topic.name}.`
-      : `Source: evergreen content pillar — ${topic.name}.`;
-  return `Draft ONE Instagram post for this week's content calendar.
+  const sourceBlock = buildSourceBlock(topic);
+  const titleHint = buildTitleHint(topic);
+  return `Draft ONE brand greeting-card post for this week's content calendar. The output is greeting-card copy that will be rendered into a brand image, not a traditional Instagram caption.
 
 Topic: ${topic.name}
 Angle: ${topic.angle}
-${sourceLine}
+${sourceBlock}
 Week of: ${weekStart}
 
-Requirements:
-- Produce exactly one ready-to-post Instagram caption.
-- Open with a scroll-stopping first line; use line breaks for readability.
-- Close with a clear call to action and a targeted hashtag set (mix broad and niche).
-- Add a single short line of visual direction at the end prefixed with "Visual:".
-- Never invent quotes, statistics, or facts; leave a [source] placeholder if a claim needs one.
-- Output the caption only — no preamble, no explanation.`;
+Required output structure (produce every line, in this exact order):
+
+R — Your Gentle AI Companion
+<blank line>
+${titleHint.template}
+<canonical date or year line — see rules below; omit entirely when not applicable>
+<blank line>
+<1-2 sentence reflective opening, warm and professional — not promotional>
+<blank line>
+<Optional quote block — see rules below; omit entirely when not applicable>
+<blank line>
+Poin-poin:
+- **[Brand value 1]:** <one-line elaboration mapping the topic to this value>
+- **[Brand value 2]:** <one-line elaboration>
+- **[Brand value 3]:** <one-line elaboration>
+<blank line>
+AI Human-Centered Intelligence
+<blank line>
+Hormat kami,
+Keluarga Besar PT Rafiq Space Intelligence
+
+Rules:
+- Title line: ${titleHint.rule}
+- Date/year line: place immediately below the title. For Islamic awareness days, use the Hijri form (e.g. "1447 H" or "1 Muharram 1448 H"). For civic/Gregorian awareness days, use the Indonesian long-form date (e.g. "23 Juli 2026"). For trending and evergreen topics, omit this line entirely — do not output a placeholder or blank line where it would have been.
+- Opening: reflective and warm. State what the day/moment means, not what the brand sells.
+- Quote block: include ONLY when the topic is a well-known religious or cultural day AND a canonical verse exists. Format the original verse on one line, an Indonesian/English translation in quotes on the next, and the source on the third (e.g. "QS. Al-Hasyr: 18"). Omit the block entirely for trending topics, evergreen pillars, or secular days.
+- Poin-poin: exactly 3 to 4 bullets. Each bullet MUST follow this exact format: **[Brand value name]:** <one-line elaboration>. Example: **Human-Centered:** Memanfaatkan teknologi sebagai alat bantu belajar yang menempatkan manusia sebagai pusat. Pick brand values from the canonical set (Human-Centered, Inclusive Growth, Smart Collaboration, AI for Public Good, Gentle Companion, Edukasi, Empati, Aksesibilitas) that genuinely fit the topic — never force one.
+- Tone: reflective, warm, professional. Never hype, hard-sell, exclamation overload, or cliché. The brand is a gentle companion, not a vendor.
+- For trending topics: the reference URL/title/snippet in the Source block above is research context only — do NOT paste it into the output. Leave a [source] placeholder if a specific claim in the copy needs attribution.
+- Output the greeting-card copy only — no preamble, no caption-style hashtags, no "Visual:" line, no explanation.`;
+}
+
+/**
+ * Title-line template + rule for the greeting-card header, chosen by topic
+ * kind. Special days use the "Selamat {day}" greeting; trending topics use a
+ * "Tren Minggu Ini: {headline}" header; evergreen pillars fall back to a
+ * short themed headline derived from the pillar name.
+ */
+export function buildTitleHint(topic: Topic): { template: string; rule: string } {
+  if (topic.kind === 'special-day') {
+    const dateLineRule = topic.hijriYear !== undefined
+      ? `Add the line "${topic.hijriYear} Hijriyah" immediately below the title.`
+      : `Add the Indonesian long-form Gregorian date (e.g. "23 Juli 2026") immediately below the title when widely known. Skip the date line when not applicable.`;
+    return {
+      template: `Selamat ${topic.name}`,
+      rule: `use "Selamat ${topic.name}" as the title line. ${dateLineRule}`,
+    };
+  }
+  if (topic.kind === 'trending') {
+    return {
+      template: `Tren Minggu Ini: ${topic.name}`,
+      rule: `use "Tren Minggu Ini: ${topic.name}" as the title line. Add a short subtitle line below it only when the topic benefits from a one-line context.`,
+    };
+  }
+  return {
+    template: topic.name,
+    rule: `use a short themed headline derived from "${topic.name}" as the title line. Avoid generic filler like "Tips" or "Inspirasi" — make the headline specific to the angle.`,
+  };
+}
+
+/**
+ * Render the "Source:" context block for the prompt. Trending topics include
+ * the reference title, URL, and snippet so the drafter has research context
+ * for the week. The no-invention rule in the prompt still applies — snippets
+ * are context, not verified facts — so the drafter still leaves `[source]`
+ * placeholders for any specific claim it surfaces.
+ */
+export function buildSourceBlock(topic: Topic): string {
+  if (topic.kind === 'special-day') {
+    return `Source: scheduled awareness day — ${topic.specialDay ?? topic.name}.`;
+  }
+  if (topic.kind === 'trending' && topic.source) {
+    const lines = [
+      'Source: trending topic from this week\'s web search.',
+      `Reference title: ${topic.source.title}`,
+      `Reference URL: ${topic.source.url}`,
+    ];
+    if (topic.source.snippet) lines.push(`Reference snippet: ${topic.source.snippet}`);
+    return lines.join('\n');
+  }
+  return `Source: evergreen content pillar — ${topic.name}.`;
 }
 
 export function buildBrief(topic: Topic, weekStart: string): string {
-  return [
+  const lines = [
     'Brief for scheduled Instagram draft',
     '',
     `Week of: ${weekStart}`,
     `Topic: ${topic.name}`,
     `Angle: ${topic.angle}`,
-    `Source: ${topic.kind === 'special-day' ? 'special-day' : 'evergreen-pillar'}`,
-    ...(topic.specialDay ? [`Special day: ${topic.specialDay}`] : []),
-    'Platform: instagram',
-    'Status: DRAFT',
-  ].join('\n');
+    `Source: ${topic.kind === 'special-day' ? 'special-day' : topic.kind === 'trending' ? 'trending-research' : 'evergreen-pillar'}`,
+  ];
+  if (topic.specialDay) {
+    lines.push(`Special day: ${topic.specialDay}`);
+  }
+  if (topic.hijriYear !== undefined) {
+    lines.push(`Hijri year: ${topic.hijriYear}`);
+  }
+  if (topic.kind === 'trending' && topic.source) {
+    lines.push(`Reference URL: ${topic.source.url}`);
+    lines.push(`Reference title: ${topic.source.title}`);
+  }
+  lines.push('Platform: instagram', 'Status: DRAFT');
+  return lines.join('\n');
 }
 
 function escapeHtml(value: string): string {
@@ -185,14 +295,22 @@ export function renderReviewEmail(
 export type DraftGenerateFn = (prompt: string, instructions: string) => Promise<string>;
 export type CreateTextFn = (key: string, text: string) => Promise<void>;
 export type SendReviewEmailFn = (input: SendEmailInput) => Promise<unknown>;
+export type SelectBonusAwarenessDayFn = (now: Date) => Promise<SpecialDay | undefined>;
 
 export interface WeeklySocialDraftsDeps {
   now?: () => Date;
+  /**
+   * Hard override that forces a specific topic list and bypasses the Stage 2
+   * research + awareness composition. Kept for the legacy happy-path tests.
+   */
   selectTopics?: (now: Date) => Topic[];
+  /** SearXNG search seam. `undefined` triggers the degraded (evergreen) path. */
+  search?: SearchFn | undefined;
+  /** Override the awareness-day bonus picker (defaults to the calendar). */
+  selectBonusAwarenessDay?: SelectBonusAwarenessDayFn;
   generate?: DraftGenerateFn;
   createText?: CreateTextFn;
   sendEmail?: SendReviewEmailFn;
-  reviewEmailTo?: string;
   webUrl?: string;
 }
 
@@ -203,6 +321,68 @@ const defaultCreateText: CreateTextFn = (key, text) =>
   defaultCreateTextTool.execute!({ key, text }, SOCIAL_AGENT_CONTEXT).then(() => undefined);
 
 const defaultSendEmail: SendReviewEmailFn = (input) => sendEmailViaResend(input);
+
+// Lazily build the public-holiday client once per process.
+// `undefined` = not yet evaluated; `null` = evaluated and disabled (env
+// empty); `PublicHolidayClient` = evaluated and ready.
+let cachedPublicHolidayClient: PublicHolidayClient | null | undefined;
+function getDefaultPublicHolidayClient(): PublicHolidayClient | undefined {
+  if (cachedPublicHolidayClient === undefined) {
+    cachedPublicHolidayClient = env.PUBLIC_HOLIDAY_API_BASE_URL.trim().length === 0
+      ? null
+      : createPublicHolidayClient({
+          apiUrl: env.PUBLIC_HOLIDAY_API_BASE_URL,
+          ...(env.PUBLIC_HOLIDAY_CACHE_DIR
+            ? { cacheDir: env.PUBLIC_HOLIDAY_CACHE_DIR }
+            : {}),
+        });
+  }
+  return cachedPublicHolidayClient ?? undefined;
+}
+
+const defaultSelectBonusAwarenessDay: SelectBonusAwarenessDayFn = async (now) => {
+  // When the public-holiday API is reachable, also resolve movable feasts
+  // (Idul Fitri, Idul Adha, 1 Muharram, Isra Mi'raj, Maulid Nabi, etc.) for
+  // the current year. When it is unconfigured or unreachable, the selector
+  // falls through to the fixed-date SPECIAL_DAYS calendar so the workflow
+  // still resolves a bonus day for observance days (Hari Kartini, Hari
+  // Guru, etc.).
+  let publicHolidays: PublicHoliday[] | undefined;
+  const client = getDefaultPublicHolidayClient();
+  if (client) {
+    try {
+      publicHolidays = await client.getHolidays(now.getUTCFullYear());
+    } catch {
+      publicHolidays = undefined;
+    }
+  }
+  return selectBonusAwarenessDayForWeek(now, publicHolidays ? { publicHolidays } : {});
+};
+
+// Minimal context for the SearXNG search tool — its execute only reads
+// `abortSignal`. The tool's inputSchema is bypassed because the workflow
+// controls the input shape directly; we still go through `searchWebTool` so
+// the search path, bounding, and normalization remain a single source of
+// truth shared with PM Agent.
+const SEARCH_TOOL_CONTEXT = { abortSignal: undefined } as never;
+
+/**
+ * Build the default SearXNG search seam. Returns `undefined` when
+ * `SEARXNG_BASE_URL` is not configured so the orchestrator switches to the
+ * degraded evergreen path without making a transport call. Errors from the
+ * underlying tool are surfaced to the caller (`researchTrendingTopics`
+ * swallows them per-query and triggers the fallback).
+ */
+export function createDefaultSearch(): SearchFn | undefined {
+  if (!env.SEARXNG_BASE_URL || env.SEARXNG_BASE_URL.trim().length === 0) return undefined;
+  return async (query: string): Promise<SearxngSearchOutput> => {
+    const output = await searchWebTool.execute!(
+      { query, maxResults: 10, page: 1, timeRange: 'month' },
+      SEARCH_TOOL_CONTEXT,
+    );
+    return output as SearxngSearchOutput;
+  };
+}
 
 /**
  * Persist one social post via the Garage MCP `create_text_object` tool.
@@ -226,14 +406,69 @@ export async function runWeeklySocialDrafts(
   deps: WeeklySocialDraftsDeps = {},
 ): Promise<WeeklySocialDraftsResult> {
   const now = deps.now?.() ?? new Date();
-  const select = deps.selectTopics ?? selectTopicsForWeek;
-  const topics = select(now);
   const weekStart = weekStartLabel(now);
   const webUrl = deps.webUrl ?? env.WEB_URL;
   const generate = deps.generate ?? defaultGenerate;
   const createText = deps.createText ?? defaultCreateText;
   const sendEmail = deps.sendEmail ?? defaultSendEmail;
-  const reviewEmailTo = deps.reviewEmailTo ?? env.SOCIAL_DRAFT_REVIEW_EMAIL;
+  // The recipient always comes from `SOCIAL_DRAFT_REVIEW_EMAIL`. The workflow
+  // has no override seam here — keeping the recipient list in environment
+  // config only matches how a scheduled workflow is meant to be operated.
+  const reviewEmailTo = env.SOCIAL_DRAFT_REVIEW_EMAIL;
+  const search = deps.search ?? createDefaultSearch();
+  const selectBonusAwarenessDay = deps.selectBonusAwarenessDay ?? defaultSelectBonusAwarenessDay;
+
+  // Stage 2 topic composition. The legacy `selectTopics` override short-
+  // circuits the whole pipeline (still used by the original happy-path
+  // tests); otherwise we research → fill → bonus in that order.
+  let researchNote: string | undefined;
+  let researchFailed = false;
+  let topics: Topic[];
+  if (deps.selectTopics) {
+    topics = deps.selectTopics(now);
+  } else {
+    const bonusDay = await selectBonusAwarenessDay(now);
+    let trending: Topic[] = [];
+    if (search) {
+      try {
+        trending = await researchTrendingTopics(search, {
+          ...(bonusDay ? { excludeAwarenessDay: bonusDay.name } : {}),
+        });
+      } catch (error) {
+        researchFailed = true;
+        researchNote = error instanceof Error
+          ? `SearXNG research failed: ${error.message} Falling back to evergreen pillars.`
+          : 'SearXNG research failed. Falling back to evergreen pillars.';;
+      }
+    } else {
+      researchFailed = true;
+      researchNote = 'SearXNG is not configured; using evergreen pillars only.';
+    }
+
+    topics = trending.slice(0, 2);
+    if (topics.length < 2) {
+      const fillCount = 2 - topics.length;
+      const pillars = evergreenPillarsForWeek(now, fillCount);
+      for (const pillar of pillars) {
+        if (topics.length >= 2) break;
+        topics.push({ kind: 'evergreen', name: pillar.name, angle: pillar.angle });
+      }
+    }
+
+    // Awareness-day bonus is appended only when research was actually
+    // healthy this fire. Degraded mode (no SearXNG, or every query failed)
+    // falls all the way back to evergreen pillars with no bonus, so a
+    // broken research seam never emits awareness-day content for the week.
+    if (!researchFailed && search && bonusDay) {
+      topics.push({
+        kind: 'special-day',
+        name: bonusDay.name,
+        angle: bonusDay.angle,
+        specialDay: bonusDay.name,
+        ...(bonusDay.hijriYear !== undefined ? { hijriYear: bonusDay.hijriYear } : {}),
+      });
+    }
+  }
 
   const posts: DraftedPost[] = [];
   for (const topic of topics) {
@@ -282,11 +517,12 @@ export async function runWeeklySocialDrafts(
   }
 
   return {
-    ok: posts.length === 2,
+    ok: posts.length >= 2,
     weekStart,
     posts,
     emailSent,
     ...(emailError ? { emailError } : {}),
+    ...(researchNote ? { researchNote } : {}),
   };
 }
 

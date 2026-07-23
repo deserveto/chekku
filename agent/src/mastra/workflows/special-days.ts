@@ -1,16 +1,26 @@
 /**
  * Special-days topic selection for the weekly social drafts workflow.
  *
- * Stage 1 (no SearXNG research): the workflow derives the week's 2 content
+ * Stage 1 (deterministic fallback): the workflow derives the week's content
  * topics from fixed-date awareness days that fall inside the current
- * Asia/Jakarta week (Mon–Sun). When a week has fewer than 2 special days, the
- * remaining slots are filled from a deterministic, week-indexed rotation of
- * evergreen content pillars, so the pipeline always emits exactly 2 topics.
+ * Asia/Jakarta week (Mon–Sun) and a deterministic, week-indexed rotation of
+ * evergreen content pillars.
+ *
+ * Stage 2 (active when SearXNG is configured): the workflow drafts 2 trending
+ * topics from SearXNG research and adds up to 1 awareness day from this module
+ * as a separate bonus post (every awareness day is eligible, including
+ * `08-17`). When SearXNG is unavailable, the workflow falls back to the Stage
+ * 1 path: 2 evergreen pillars, no awareness bonus (so degraded mode stays
+ * consistent with the "outside big events" requirement for the 2 base slots).
  *
  * Movable feasts (Idul Fitri, Idul Adha, Imlek, Waisak, Paskah, Galungan, etc.)
- * are intentionally excluded: their Gregorian dates shift every year, and Stage
- * 1 requires deterministic, dependency-free topic selection. Stage 2 will
- * replace/augment this with SearXNG-driven trending topics.
+ * are resolved at runtime by the Public Holiday Indonesia API client (see
+ * `agent/src/mastra/calendar/public-holidays.ts`) — they cannot live in the
+ * fixed-date `SPECIAL_DAYS` calendar because their Gregorian dates shift
+ * every year. `selectBonusAwarenessDayForWeek` merges both sources and
+ * prefers API data when the same date appears in both. The fixed-date
+ * calendar still covers observance days that are NOT national holidays
+ * (Hari Kartini, Hari Guru Nasional, Hari Bumi, etc.).
  */
 
 export const SOCIAL_TIMEZONE = 'Asia/Jakarta';
@@ -24,6 +34,10 @@ export interface SpecialDay {
   name: string;
   /** Short content angle the drafter uses to frame the post. */
   angle: string;
+  /** Hijri year, when known (e.g. 1447). Sourced from the Public Holiday API. */
+  hijriYear?: number;
+  /** Origin of this entry — fixed calendar vs. Public Holiday API. */
+  source?: 'fixed' | 'public-holiday-api';
 }
 
 export interface Pillar {
@@ -32,12 +46,32 @@ export interface Pillar {
   angle: string;
 }
 
+/**
+ * Reference metadata for a trending topic, captured from a SearXNG result.
+ * Persisted only inside the draft prompt and brief (as context for the
+ * drafter); never written into the social-post metadata object.
+ */
+export interface TrendingSource {
+  /** Result URL (HTTP(S), already bounded by the SearXNG client). */
+  url: string;
+  /** Result title, used to identify the topic. */
+  title: string;
+  /** Result snippet, used as the topic angle. */
+  snippet: string;
+  /** Optional ISO `publishedAt` from upstream, when the source provided it. */
+  publishedAt?: string;
+}
+
 export interface Topic {
-  kind: 'special-day' | 'evergreen';
+  kind: 'special-day' | 'evergreen' | 'trending';
   name: string;
   angle: string;
   /** Present only when kind === 'special-day'; persisted as metadata.specialDay. */
   specialDay?: string;
+  /** Present only when kind === 'trending'; used to enrich the draft prompt. */
+  source?: TrendingSource;
+  /** Hijri year for special-day topics, when known (e.g. 1447). */
+  hijriYear?: number;
 }
 
 /**
@@ -219,9 +253,77 @@ export function pickTopics(
 /**
  * Resolve exactly 2 content topics for `now`'s week: up to 2 awareness days,
  * filled out by evergreen pillars when the week has fewer than 2.
+ *
+ * This is the Stage 1 selection path, still used by tests and as the
+ * deterministic fallback shape when SearXNG research is unavailable.
  */
 export function selectTopicsForWeek(now: Date = new Date(), timeZone: string = SOCIAL_TIMEZONE): Topic[] {
   const special = specialDaysForWeek(now, timeZone);
   const pillars = evergreenPillarsForWeek(now, Math.max(0, 2 - special.length), timeZone);
   return pickTopics(special, pillars, 2);
 }
+
+/**
+ * Pick at most 1 awareness day for `now`'s week to append as a bonus post on
+ * top of the 2 base trending/evergreen slots (Stage 2). Returns the earliest
+ * matching entry by date — either from the Public Holiday API (movable
+ * feasts: Idul Fitri, Idul Adha, 1 Muharram, Isra Mi'raj, Maulid Nabi, etc.)
+ * or from the fixed-date `SPECIAL_DAYS` calendar (observance days: Hari
+ * Kartini, Hari Guru, Hari Bumi, etc.). Every entry is eligible, including
+ * national holidays such as `08-17`.
+ *
+ * The caller is responsible for fetching public holidays for the relevant
+ * year and passing them via `options.publicHolidays`. This keeps the
+ * selector pure (no I/O) and lets the workflow control caching/retry.
+ *
+ * When the same date appears in both sources, the API entry wins because it
+ * is authoritative for national/religious holidays and usually carries the
+ * Hijri year label.
+ *
+ * Async so the caller can `await` even when no API data is supplied — the
+ * internal merge is synchronous but the signature future-proofs against a
+ * runtime fetch fallback.
+ */
+export async function selectBonusAwarenessDayForWeek(
+  now: Date = new Date(),
+  options: {
+    timeZone?: string;
+    publicHolidays?: readonly { date: string; name: string; hijriYear?: number; description?: string }[];
+  } = {},
+): Promise<SpecialDay | undefined> {
+  const timeZone = options.timeZone ?? SOCIAL_TIMEZONE;
+  const weekDateSet = new Set(weekDates(now, timeZone));
+
+  const apiDays: SpecialDay[] = (options.publicHolidays ?? [])
+    .filter((holiday) => {
+      if (typeof holiday.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(holiday.date)) return false;
+      return weekDateSet.has(holiday.date.slice(5));
+    })
+    .map((holiday) => ({
+      date: holiday.date.slice(5),
+      name: holiday.name,
+      angle: DEFAULT_PUBLIC_HOLIDAY_ANGLE,
+      ...(holiday.hijriYear !== undefined ? { hijriYear: holiday.hijriYear } : {}),
+      source: 'public-holiday-api' as const,
+    }));
+
+  const fixedDays: SpecialDay[] = specialDaysForWeek(now, timeZone).map((day) => ({
+    ...day,
+    source: 'fixed' as const,
+  }));
+
+  // Merge by date — API wins ties (more authoritative + carries Hijri year).
+  const byDate = new Map<string, SpecialDay>();
+  for (const day of [...fixedDays, ...apiDays]) {
+    const existing = byDate.get(day.date);
+    if (!existing || day.source === 'public-holiday-api') {
+      byDate.set(day.date, day);
+    }
+  }
+
+  const merged = Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
+  return merged[0];
+}
+
+/** Generic angle for API-sourced holidays; the prompt's rules drive the actual tone. */
+const DEFAULT_PUBLIC_HOLIDAY_ANGLE = 'Refleksi makna hari besar ini dan kaitannya dengan brand values.';

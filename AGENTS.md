@@ -136,11 +136,13 @@ LLM_MODELS
 ### Social Media Agent
 
 - Keep `social-media-agent` code-defined with Mastra Memory, Telegram channel integration, role switching, and the `send-email` tool.
+- The `instagram-writer` role carries the brand identity ("R — Your Gentle AI Companion", tagline "AI Human-Centered Intelligence", sign-off "Hormat kami, Keluarga Besar PT Rafiq Space Intelligence"), the reflective/warm/professional tone guardrail, and the quote policy (well-known religious/cultural verses with attribution OK; statistics and unverifiable claims still require `[source]` placeholder). Do not move brand identity into env vars or the workflow prompt — the role is the single source of truth so Telegram chat output stays consistent with the scheduled workflow.
 - Preserve `/help`, `/roles`, `/role`, and `/switch` registration after `AgentChannels` initialization.
 - Telegram uses `TELEGRAM_BOT_TOKEN`, `TELEGRAM_MODE`, optional `TELEGRAM_BOT_USERNAME`, and optional `TELEGRAM_WEBHOOK_SECRET_TOKEN` only.
 - Email uses server-only `RESEND_API_KEY` and `RESEND_FROM_EMAIL`; never expose either to browser code.
 - Outbound email and channel actions run directly (no approval gate).
 - The scheduled `weekly-social-drafts` workflow drafts through `socialMediaAgent.generate(..., { instructions })` and pins the role via `buildInstructionsForRole('instagram-writer')`. The workflow runs outside any chat channel, so the role must not be resolved from channel `requestContext`. Telegram is not part of the scheduled flow.
+- The workflow's `buildDraftPrompt` shapes each draft into a structured greeting-card copy (header → title → opening → optional verse → "Poin-poin" brand-value bullets → tagline → sign-off), not a traditional Instagram caption. Title templates: `Selamat {day}` for special days, `Tren Minggu Ini: {headline}` for trending, themed headline for evergreen. The prompt forbids caption-style hashtags and the "Visual:" line in this format.
 
 ### Client proxy and identity
 
@@ -211,10 +213,16 @@ LLM_MODELS
 
 - The scheduled `weekly-social-drafts` workflow is the only writer of social posts. It binds storage to fixed namespace `social-media-agent`; never accept namespace or agent identity from model, route, browser, or local user input.
 - Workflow writes go through the existing Garage MCP `create_text_object` tool with a trusted context that pins `agentId` to `social-media-agent`. The workflow must not call `@chekku/storage` write APIs directly or bypass the MCP tool's namespace derivation.
+- Each weekly fire drafts 2 base Instagram posts plus, when the week contains a fixed-date awareness day, 1 bonus awareness-day post (total 2–3 drafts). The 2 base slots come from SearXNG trending research via the reusable `search_web` tool (`trending-research.ts` consumes the tool through a `SearchFn` seam — snippet-only, no page crawling). Remaining base slots are filled from the deterministic evergreen-pillar rotation when research yields fewer than 2 topics. Trending results whose title or snippet overlaps the chosen awareness day are skipped so the bonus and a base slot do not duplicate the same theme. Every entry in `SPECIAL_DAYS` is eligible as a bonus, including national holidays such as `08-17`.
+- Awareness-day bonus candidates are merged from two sources via async `selectBonusAwarenessDayForWeek`: (1) the Public Holiday Indonesia API (`agent/src/mastra/calendar/public-holidays.ts`) for movable feasts and national/religious holidays — Idul Fitri, Idul Adha, 1 Muharram / Tahun Baru Islam, Isra Mi'raj, Maulid Nabi, Nyepi, Paskah, Waisak, Natal, and cuti bersama (the latter filtered out); (2) the fixed-date `SPECIAL_DAYS` calendar for observance days that are not national holidays (Hari Kartini, Hari Guru Nasional, Hari Bumi, etc.). When both sources have an entry on the same date, the API entry wins because it is authoritative and usually carries the Hijri year label. The API response is cached per year on disk under `agent/src/mastra/calendar/.cache/` (gitignored). When `PUBLIC_HOLIDAY_API_BASE_URL` is unset or the API is unreachable, the selector falls back to fixed-date `SPECIAL_DAYS` only — observance days still produce a bonus, movable feasts do not.
+- The Public Holiday API client mirrors the SearXNG bounded-transport contract: fixed endpoint, no auth header, no arbitrary configuration, 12-second timeout, 1 MiB max body, reject redirects, per-year file cache. Errors use fixed actionable messages and never leak the endpoint URL or diagnostics. Only the weekly-social-drafts workflow consumes this module — no MCP server is exposed and no agent tool is registered.
+- When SearXNG is not configured (`SEARXNG_BASE_URL` empty) or every research query fails, the workflow degrades to exactly 2 evergreen pillars with no awareness-day bonus and records a `researchNote` on the run output. Research failure is never fatal: drafts still save and email still attempts.
+- Research metadata (reference URL, title, snippet) lives in the draft prompt and brief only; it must not enter `SocialPostMetadata`, the canonical `smp_...` schema, or any persisted field beyond the brief body. The drafter still leaves `[source]` placeholders for specific claims — snippets are context, not verified facts.
 - `@chekku/storage` exposes only pure canonical helpers for social posts (`buildSocialPostMetadata`, `createPostId`, parse helpers) plus read helpers used by client/server (`listSocialPosts`, `getSocialPost`, `createSocialPostStorage`); it must not expose a social-post write helper that takes an `ObjectStorage`.
 - Persist and expose only relative `social-posts/<postId>/...` metadata keys. Never leak physical `agents/<base64url-agent-id>/...` prefixes.
 - Canonical post IDs use `smp_YYYYMMDDHHMMSS_<8 lowercase hex>`; repository, workflow, and public read boundaries enforce `^smp_[0-9]{14}_[0-9a-f]{8}$`, and lists skip noncanonical metadata.
-- Stage 1 topic selection uses the hardcoded fixed-date awareness calendar plus evergreen pillars; movable feasts are excluded for deterministic scheduling. Stage 2 may add SearXNG research without changing voice, storage, or notification.
+- The fixed-date awareness calendar (`SPECIAL_DAYS`) and evergreen-pillar rotation remain in `special-days.ts` as the deterministic Stage 1 surface and degraded-mode fallback. Movable feasts are resolved at runtime by the Public Holiday API client in `agent/src/mastra/calendar/public-holidays.ts`, not hardcoded in `SPECIAL_DAYS`.
+- Stage 1 topic selection uses the hardcoded fixed-date awareness calendar plus evergreen pillars. Stage 2 augments base-slot topic selection with SearXNG research without changing voice, storage, or notification.
 - Stage 1 only creates objects; it does not replace or delete. Email delivery failure is recorded, not fatal — saved drafts remain readable.
 - Social-post tools must never enter the generic Garage MCP registry.
 ## Coding conventions
@@ -239,7 +247,7 @@ Add regression tests for behavior changes, especially:
 - thread ID creation and ownership;
 - proxy URL validation and method support;
 - sidebar and route structure;
-- shared Garage storage, namespace isolation, PM reports/APIs/pages/tables, social posts/APIs/pages/tables, fixed Garage, SearXNG, and Web Reader MCP hydration, bounded SearXNG search and hosted page reading, scheduled workflow topic selection and orchestration, and launcher structure;
+- shared Garage storage, namespace isolation, PM reports/APIs/pages/tables, social posts/APIs/pages/tables, fixed Garage, SearXNG, and Web Reader MCP hydration, bounded SearXNG search, hosted page reading, Public Holiday Indonesia API client (parsing + filtering + cache + bounded transport), scheduled workflow trending research + topic composition + awareness-day bonus (fixed-date + Public Holiday API merge) + degraded-mode fallback, and launcher structure;
 - QA agent Memory and browser integration.
 - Social agent roles, Telegram slash registration, email delivery behavior, and the scheduled social-drafts workflow.
 
