@@ -37,8 +37,11 @@ function readOptionalSource(path: string): string {
     return '';
   }
 }
-const reportListPage = readOptionalSource('../app/reports/page.tsx');
+const reportLandingPage = readOptionalSource('../app/reports/page.tsx');
+const reportListPage = readOptionalSource('../app/reports/weekly/page.tsx');
 const reportDetailPage = readOptionalSource('../app/reports/[reportId]/page.tsx');
+const competitiveAnalysisListPage = readOptionalSource('../app/reports/competitive/page.tsx');
+const competitiveAnalysisDetailPage = readOptionalSource('../app/reports/competitive/[analysisId]/page.tsx');
 
 describe('requested UI structure', () => {
   it('lets each sidebar place its collapse control in the brand row', () => {
@@ -108,13 +111,40 @@ describe('requested UI structure', () => {
     expect(reportListPage).toContain('role="alert"');
   });
 
+  it('groups weekly and competitive report routes without changing weekly detail URLs', () => {
+    expect(reportLandingPage).toContain('href="/reports/weekly"');
+    expect(reportLandingPage).toContain('href="/reports/competitive"');
+    expect(reportListPage).toContain('href={`/reports/${encodeURIComponent(report.reportId)}`}');
+    expect(competitiveAnalysisListPage).toContain(
+      'href={`/reports/competitive/${encodeURIComponent(analysis.analysisId)}`}',
+    );
+  });
+
   it('keeps Garage report access server-only', () => {
+    expect(reportLandingPage).not.toContain("'use client'");
     expect(reportListPage).not.toContain("'use client'");
     expect(reportDetailPage).not.toContain("'use client'");
+    expect(competitiveAnalysisListPage).not.toContain("'use client'");
+    expect(competitiveAnalysisDetailPage).not.toContain("'use client'");
     expect(reportListPage).toContain("from '@/server/pm-reports'");
     expect(reportDetailPage).toContain("from '@/server/pm-reports'");
+    expect(competitiveAnalysisListPage).toContain("from '@/server/competitive-analyses'");
+    expect(competitiveAnalysisDetailPage).toContain("from '@/server/competitive-analyses'");
+    expect(reportLandingPage).not.toContain("from '@chekku/storage'");
     expect(reportListPage).not.toContain("from '@chekku/storage'");
     expect(reportDetailPage).not.toContain("from '@chekku/storage'");
+    expect(competitiveAnalysisListPage).not.toContain("from '@chekku/storage'");
+    expect(competitiveAnalysisDetailPage).not.toContain("from '@chekku/storage'");
+  });
+
+  it('keeps report tables accessible and renders competitive Markdown through shared wrapper', () => {
+    expect(reportListPage).toContain('className="studio-report-table-wrap studio-panel"');
+    expect(reportListPage).toContain('tabIndex={0}');
+    expect(reportListPage).toContain('aria-label="Saved PM reports"');
+    expect(competitiveAnalysisListPage).toContain('className="studio-report-table-wrap studio-panel"');
+    expect(competitiveAnalysisListPage).toContain('tabIndex={0}');
+    expect(competitiveAnalysisListPage).toContain('aria-label="Saved competitive analyses"');
+    expect(competitiveAnalysisDetailPage).toContain('<MarkdownMessage content={analysis.analysisMarkdown} />');
   });
 
   it('reserves the PM built-in id in the shared identity set', () => {

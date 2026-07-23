@@ -431,6 +431,35 @@ body.studio-sidebar-resizing * {
 
 /* Reports */
 
+.studio-report-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.studio-report-choice {
+  display: grid;
+  gap: 10px;
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 140ms ease, transform 140ms ease;
+}
+
+.studio-report-choice h2,
+.studio-report-choice p {
+  margin: 0;
+}
+
+.studio-report-choice:hover {
+  border-color: var(--studio-ink);
+  transform: translateY(-2px);
+}
+
+.studio-report-choice:focus-visible {
+  outline: 2px solid var(--studio-accent);
+  outline-offset: 2px;
+}
+
 .studio-report-table-wrap {
   overflow-x: auto;
 }
@@ -1687,7 +1716,8 @@ body.studio-sidebar-resizing * {
   .studio-overview-grid,
   .studio-agent-grid,
   .studio-form-grid.two,
-  .studio-capability-grid {
+  .studio-capability-grid,
+  .studio-report-choice-grid {
     grid-template-columns: 1fr;
   }
 

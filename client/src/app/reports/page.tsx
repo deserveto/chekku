@@ -1,26 +1,9 @@
 import Link from 'next/link';
 
 import { StudioNav } from '@/components/studio/studio-nav';
-import { formatPmReportCreatedAt } from '@/server/pm-report-format';
-import {
-  listPmReportsForUser,
-  PmReportServiceError,
-} from '@/server/pm-reports';
-
-export const dynamic = 'force-dynamic';
 
 export default async function ReportsPage() {
   const resourceId = process.env.CHEKKU_LOCAL_USER_ID || 'local-user';
-  let reports: Awaited<ReturnType<typeof listPmReportsForUser>> = [];
-  let errorMessage: string | undefined;
-
-  try {
-    reports = await listPmReportsForUser();
-  } catch (error) {
-    errorMessage = error instanceof PmReportServiceError
-      ? error.message
-      : 'Could not load reports.';
-  }
 
   return (
     <div className="studio-shell">
@@ -29,54 +12,24 @@ export default async function ReportsPage() {
         <header className="studio-page-header">
           <div>
             <p className="studio-eyebrow">Garage storage</p>
-            <h1>PM reports</h1>
-            <p>Review saved project analysis, risk ratings, and original weekly input.</p>
+            <h1>Reports</h1>
+            <p>Choose saved weekly risk reviews or product competitive analyses.</p>
           </div>
         </header>
 
         <section className="studio-section">
-          {errorMessage ? (
-            <div className="studio-alert studio-alert-error" role="alert">
-              {errorMessage}
-            </div>
-          ) : reports.length === 0 ? (
-            <div className="studio-empty-state">
-              <h3>No saved reports</h3>
-              <p>PM Agent reports will appear here after they are stored.</p>
-            </div>
-          ) : (
-            <div
-              className="studio-report-table-wrap studio-panel"
-              tabIndex={0}
-              role="region"
-              aria-label="Saved PM reports"
-            >
-              <table className="studio-report-table">
-                <thead>
-                  <tr>
-                    <th>Report id</th>
-                    <th>Created</th>
-                    <th>Rating</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {reports.map((report) => (
-                    <tr key={report.reportId}>
-                      <td>
-                        <Link href={`/reports/${encodeURIComponent(report.reportId)}`}>
-                          {report.reportId}
-                        </Link>
-                      </td>
-                      <td>{formatPmReportCreatedAt(report.createdAt)}</td>
-                      <td>{report.rating}/10</td>
-                      <td>{report.status}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          <div className="studio-report-choice-grid">
+            <Link className="studio-report-choice studio-panel" href="/reports/weekly">
+              <p className="studio-eyebrow">Risk review</p>
+              <h2>Weekly Reports</h2>
+              <p>Review saved engineering weekly analyses and risk ratings.</p>
+            </Link>
+            <Link className="studio-report-choice studio-panel" href="/reports/competitive">
+              <p className="studio-eyebrow">Market research</p>
+              <h2>Competitive Analyses</h2>
+              <p>Review saved product comparisons, feature matrices, and recommendations.</p>
+            </Link>
+          </div>
         </section>
       </main>
     </div>

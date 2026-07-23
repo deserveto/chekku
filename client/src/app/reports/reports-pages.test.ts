@@ -39,6 +39,7 @@ import { PmReportServiceError } from '@/server/pm-reports';
 
 import ReportDetailPage from './[reportId]/page';
 import ReportsPage from './page';
+import WeeklyReportsPage from './weekly/page';
 
 const reportId = 'pmr_20260714120000_deadbeef';
 const metadata = {
@@ -63,9 +64,33 @@ beforeEach(() => {
   mocks.getReport.mockResolvedValue(report);
 });
 
-describe('reports list page', () => {
-  it('renders its table in a labeled keyboard-scrollable region', async () => {
+describe('reports landing page', () => {
+  it('links to grouped weekly and competitive report views', async () => {
     const markup = renderToStaticMarkup(await ReportsPage());
+
+    expect(markup).toContain('href="/reports/weekly"');
+    expect(markup).toContain('>Weekly Reports</h2>');
+    expect(markup).toContain('href="/reports/competitive"');
+    expect(markup).toContain('>Competitive Analyses</h2>');
+    expect(mocks.listReports).not.toHaveBeenCalled();
+  });
+
+  it('gives report choices visible focus styles and one mobile column', () => {
+    const css = readFileSync(new URL('../studio.css', import.meta.url), 'utf8');
+    const focusRule = css.match(/\.studio-report-choice:focus-visible\s*\{([^}]*)\}/)?.[1];
+    const mobileRules = css.match(/@media \(max-width: 760px\) \{([\s\S]*)$/)?.[1] ?? '';
+
+    expect(focusRule).toContain('outline: 2px solid var(--studio-accent)');
+    expect(focusRule).toContain('outline-offset: 2px');
+    expect(mobileRules).toMatch(
+      /\.studio-report-choice-grid[\s\S]*grid-template-columns:\s*1fr/,
+    );
+  });
+});
+
+describe('weekly reports list page', () => {
+  it('renders its table in a labeled keyboard-scrollable region', async () => {
+    const markup = renderToStaticMarkup(await WeeklyReportsPage());
 
     expect(markup).toContain('class="studio-report-table-wrap studio-panel"');
     expect(markup).toContain('tabindex="0"');
@@ -90,10 +115,17 @@ describe('reports list page', () => {
   ])('strictly formats or preserves createdAt %s', async (createdAt, expected) => {
     mocks.listReports.mockResolvedValue([{ ...metadata, createdAt }]);
 
-    const markup = renderToStaticMarkup(await ReportsPage());
+    const markup = renderToStaticMarkup(await WeeklyReportsPage());
 
     expect(markup).toContain(`<td>${expected}</td>`);
     expect(markup).not.toContain('Invalid Date');
+  });
+
+  it('preserves encoded weekly detail links under /reports/<pmr-id>', async () => {
+    const markup = renderToStaticMarkup(await WeeklyReportsPage());
+
+    expect(markup).toContain(`href="/reports/${encodeURIComponent(reportId)}"`);
+    expect(markup).not.toContain(`/reports/weekly/${reportId}`);
   });
 });
 
