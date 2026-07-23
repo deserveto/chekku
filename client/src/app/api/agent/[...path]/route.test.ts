@@ -46,6 +46,26 @@ const allowedMcpBodies = [
       searxng: { tools: {} },
     },
   }],
+  ['Web Reader', { mcpClients: { 'web-reader': { tools: {} } } }],
+  ['Garage and Web Reader', {
+    mcpClients: {
+      garage: { tools: {} },
+      'web-reader': { tools: {} },
+    },
+  }],
+  ['SearXNG and Web Reader', {
+    mcpClients: {
+      searxng: { tools: {} },
+      'web-reader': { tools: {} },
+    },
+  }],
+  ['Garage, SearXNG, and Web Reader', {
+    mcpClients: {
+      garage: { tools: {} },
+      searxng: { tools: {} },
+      'web-reader': { tools: {} },
+    },
+  }],
 ] as const;
 const rejectedMcpBodies = [
   ['empty map', { mcpClients: {} }],
@@ -60,6 +80,13 @@ const rejectedMcpBodies = [
   ['credentials', { mcpClients: { searxng: { tools: {}, credentials: { token: 'secret' } } } }],
   ['headers', { mcpClients: { searxng: { tools: {}, headers: { Authorization: 'secret' } } } }],
   ['tool override', { mcpClients: { searxng: { tools: { search_web: {} } } } }],
+  ['Reader endpoint', { mcpClients: { 'web-reader': { url: 'https://r.jina.ai/' } } }],
+  ['Reader command', { mcpClients: { 'web-reader': { command: 'npx', args: ['evil'] } } }],
+  ['Reader environment', { mcpClients: { 'web-reader': { tools: {}, env: { WEB_READER_API_KEY: 'secret' } } } }],
+  ['Reader credentials', { mcpClients: { 'web-reader': { tools: {}, credentials: { token: 'secret' } } } }],
+  ['Reader headers', { mcpClients: { 'web-reader': { tools: {}, headers: { Authorization: 'secret' } } } }],
+  ['Reader tool override', { mcpClients: { 'web-reader': { tools: { read_web_page: {} } } } }],
+  ['Reader provider option', { mcpClients: { 'web-reader': { tools: {}, proxy: 'http://evil.test' } } }],
   ['extra client', {
     mcpClients: {
       garage: { tools: {} },

@@ -82,6 +82,11 @@ const MCP_META = {
     description: 'Search the web through the server-owned SearXNG instance and return result snippets.',
     icon: 'S',
   },
+  'web-reader': {
+    title: 'Web Reader',
+    description: 'Read one public web page through the fixed hosted Reader and return bounded untrusted Markdown.',
+    icon: 'R',
+  },
 } satisfies Record<
   (typeof STUDIO_MCP_CLIENT_IDS)[number],
   { title: string; description: string; icon: string }

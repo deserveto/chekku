@@ -214,13 +214,13 @@ const { parse } = require('dotenv');
 
 const values = { ...process.env, ...parse(readFileSync('agent/.env.development')) };
 const lines = Object.entries(values)
-  .filter(([name]) => /^(?:GARAGE|SEARXNG)_/.test(name))
+  .filter(([name]) => /^(?:GARAGE|SEARXNG)_/.test(name) || name === 'WEB_READER_API_KEY')
   .sort(([left], [right]) => left.localeCompare(right))
   .map(([name, value]) => name + '=' + value);
 writeFileSync(process.argv[2], lines.join('\\n') + '\\n');
 NODE
 else
-  env | grep -E '^(GARAGE|SEARXNG)_' | sort > "$MOCK_LOG/env-$role"
+  env | grep -E '^(GARAGE|SEARXNG)_|^WEB_READER_API_KEY=' | sort > "$MOCK_LOG/env-$role"
 fi
 touch "$MOCK_LOG/ready-$role"
 for _ in {1..100}; do
@@ -442,7 +442,7 @@ describe('development launcher', () => {
     expect(calls.match(/^inspect /gm)?.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('normalizes leading-zero decimal durations before arithmetic and output', () => {
+  it('normalizes a leading-zero decimal readiness interval before arithmetic', () => {
     const healthyRoot = fixture({ tmux: true });
     const startedAt = Date.now();
     const healthy = runDev(healthyRoot, {
@@ -455,7 +455,9 @@ describe('development launcher', () => {
     expect(Date.now() - startedAt).toBeGreaterThanOrEqual(4_000);
     expect(Date.now() - startedAt).toBeLessThan(8_000);
     expect(readFileSync(resolve(healthyRoot, 'mock-log/inspect-count-garage'), 'utf8')).toBe('2');
+  }, 12_000);
 
+  it('normalizes a leading-zero decimal readiness timeout in output', () => {
     const timeoutRoot = fixture();
     const timedOut = runDev(timeoutRoot, {
       CHEKKU_NO_TMUX: '1',
@@ -661,7 +663,7 @@ describe('development launcher', () => {
     }
   });
 
-  it('isolates exact Garage and SearXNG variables by application role', () => {
+  it('isolates exact Garage, SearXNG, and Web Reader variables by application role', () => {
     const root = fixture({ captureNpmEnv: true });
     const result = runDev(root, {
       CHEKKU_NO_TMUX: '1',
@@ -669,6 +671,7 @@ describe('development launcher', () => {
       SEARXNG_SECRET: 'must-not-reach-apps',
       SEARXNG_CONFIG_HASH: 'must-not-reach-apps',
       SEARXNG_UNRELATED: 'must-not-reach-apps',
+      WEB_READER_API_KEY: 'must-reach-agent-only',
     });
     const agentNames = [
       'GARAGE_ACCESS_KEY_ID',
@@ -678,6 +681,7 @@ describe('development launcher', () => {
       'GARAGE_SECRET_ACCESS_KEY',
       'SEARXNG_API_KEY',
       'SEARXNG_BASE_URL',
+      'WEB_READER_API_KEY',
     ];
     const clientNames = [
       'GARAGE_ACCESS_KEY_ID',
@@ -688,7 +692,11 @@ describe('development launcher', () => {
     ];
     const storageValues = parse(readFileSync(resolve(root, 'storage/.env.local')));
     const searxngValues = parse(readFileSync(resolve(root, 'searxng/.env.local')));
-    const expectedValues = { ...storageValues, ...searxngValues };
+    const expectedValues = {
+      ...storageValues,
+      ...searxngValues,
+      WEB_READER_API_KEY: 'must-reach-agent-only',
+    };
 
     expect(result.status, result.stderr).toBe(0);
     for (const [role, expectedNames] of [
@@ -702,6 +710,40 @@ describe('development launcher', () => {
         expect(line.slice(separator + 1)).toBe(expectedValues[line.slice(0, separator)]);
       }
     }
+  });
+
+  it('strips the Web Reader key from only the tmux client process', () => {
+    const root = fixture({ tmux: true });
+    const result = runDev(root, { WEB_READER_API_KEY: 'must-reach-agent-only' });
+    const calls = readFileSync(resolve(root, 'mock-log/tmux'), 'utf8').split('\n');
+    const agentCall = calls.find((line) => line.startsWith('new-session '));
+    const clientCall = calls.find((line) => line.startsWith('split-window '));
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(agentCall).not.toContain('unset WEB_READER_API_KEY');
+    expect(clientCall).toContain('unset WEB_READER_API_KEY');
+  });
+
+  it('propagates the Web Reader key from agent env through setup only to the agent', () => {
+    const root = fixture({ captureNpmEnv: true });
+    const agentEnvPath = resolve(root, 'agent/.env');
+    const agentEnv = readFileSync(agentEnvPath, 'utf8').replace(
+      /^WEB_READER_API_KEY=.*$/m,
+      'WEB_READER_API_KEY=reader-from-agent-env',
+    );
+    writeFileSync(agentEnvPath, agentEnv);
+
+    const setup = runSetup(root, [], '');
+    const result = runDev(root, { CHEKKU_NO_TMUX: '1', RELOAD_AGENT_ENV: '1' });
+    const generated = parse(readFileSync(resolve(root, 'agent/.env.development'), 'utf8'));
+    const agentCapture = readFileSync(resolve(root, 'mock-log/env-dev_agent'), 'utf8');
+    const clientCapture = readFileSync(resolve(root, 'mock-log/env-dev_client'), 'utf8');
+
+    expect(setup.status, setup.stderr).toBe(0);
+    expect(result.status, result.stderr).toBe(0);
+    expect(generated.WEB_READER_API_KEY).toBe('reader-from-agent-env');
+    expect(agentCapture).toContain('WEB_READER_API_KEY=reader-from-agent-env');
+    expect(clientCapture).not.toContain('WEB_READER_API_KEY');
   });
 
   it('force-recreates Garage only after generated config changes', () => {
@@ -1282,6 +1324,8 @@ describe('setup-env.sh', () => {
       expect(result.stdout).toContain('LLM_API_KEY');
       expect(result.stdout).toContain('TELEGRAM_BOT_TOKEN');
       expect(result.stdout).toContain('RESEND_API_KEY');
+      expect(result.stdout).toContain('WEB_READER_API_KEY');
+      expect(result.stdout).toContain('Rerun npm run setup after editing agent/.env.');
     });
   });
 });

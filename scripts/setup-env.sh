@@ -516,6 +516,9 @@ NODE
   echo "  - TELEGRAM_BOT_TOKEN   (social-media-agent)"
   echo "  - RESEND_API_KEY       (send-email tool)"
   echo "  - MAESTRO_ENABLED      (qa-android-agent)"
+  echo "  - WEB_READER_API_KEY   (read_web_page)"
+  echo ""
+  echo "Rerun npm run setup after editing agent/.env."
   echo ""
   echo "Next step: npm run dev:sh"
 }

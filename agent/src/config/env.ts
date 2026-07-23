@@ -20,6 +20,7 @@ const envSchema = z.object({
 
   SEARXNG_BASE_URL: z.string().default(''),
   SEARXNG_API_KEY: z.string().default(''),
+  WEB_READER_API_KEY: z.string().default(''),
 
   CHEKKU_DEFAULT_AGENT_ID: z.string().default('main-agent'),
   CHEKKU_LOCAL_USER_ID: z.string().default('local-user'),

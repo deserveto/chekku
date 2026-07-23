@@ -17,6 +17,8 @@ The launcher provisions local Garage and SearXNG configuration, waits for both s
 - Mastra on `http://localhost:4111`;
 - Next.js on `http://localhost:3000`.
 
+Web Reader is not a local service. Chekku calls hosted Jina Reader directly from the Mastra process only when `read_web_page` executes.
+
 It exports these five Garage application values to both the Mastra process and the Next.js server boundary; do not copy generated credentials into tracked files:
 
 ```text
@@ -68,6 +70,16 @@ SEARXNG_API_KEY=replace-with-server-only-reverse-proxy-token
 ```
 
 The endpoint must use HTTP or HTTPS and must not contain URL credentials, query parameters, or a fragment. `SEARXNG_API_KEY` is optional; when present, Chekku sends it as a bearer token to fixed `/config` and `/search` paths. Keep both values server-side. An empty `SEARXNG_BASE_URL` leaves search unconfigured and makes `search_web` fail closed without preventing other agent features from starting.
+
+To enable hosted page reading, add provider-neutral server credential:
+
+```dotenv
+WEB_READER_API_KEY=replace-with-server-owned-key
+```
+
+Keep key only in agent process or deployment secret manager. Missing or malformed key does not block startup; `read_web_page` instead returns fixed `Web Reader is not configured.` error when invoked. Chekku provides no anonymous fallback.
+
+For local development, rerun `npm run setup` after editing `agent/.env` so the key is copied into generated `agent/.env.development`, then restart the agent.
 
 ### `client/.env.local`
 
@@ -121,7 +133,7 @@ Local SearXNG runs pinned image `docker.io/searxng/searxng:2026.7.18-277d8469c`.
 
 `npm run setup` creates or reuses private `searxng/.env.local` with mode `0600`, generates the service secret once, and recreates configuration when tracked settings change. Do not copy that file into `agent/.env`; `setup-env.sh` writes `SEARXNG_BASE_URL=http://127.0.0.1:8888` to generated `agent/.env.development` and preserves a non-empty user-set `SEARXNG_API_KEY` from `agent/.env` (empty by default locally), the launcher strips all SearXNG values from the client process, and neither step prints private values.
 
-`search_web` is search-only. It returns bounded titles, HTTP(S) URLs, snippets, source engines, optional category/score/published time, answers, corrections, and suggestions; it never downloads result-page content. Web Reader and PM competitive-analysis workflows remain deferred to separate independently reviewed work.
+`search_web` is search-only. It returns bounded titles, HTTP(S) URLs, snippets, source engines, optional category/score/published time, answers, corrections, and suggestions; it never downloads result-page content. Use it to discover candidate URLs, then pass one chosen public result to `read_web_page`. PM competitive analysis remains deferred to separate independently reviewed work.
 
 Input and transport limits:
 
@@ -148,6 +160,42 @@ docker compose --env-file storage/.env.local --env-file searxng/.env.local down
 ```
 
 Do not add `--volumes` or run `docker volume rm` during normal shutdown or application/database reset. SearXNG cache and all Garage objects remain available for the next startup.
+
+## Hosted Web Reader
+
+Jina Reader is an external hosted API at fixed endpoint `https://r.jina.ai/`. Chekku's `web-reader` MCP is only a fixed local in-process wrapper around that API, never a dynamically configurable remote MCP server. There is no local Reader container, endpoint setting, provider selector, fallback provider, or anonymous mode.
+
+PM Agent has `search_web` and `read_web_page` directly. Stored agents may select SearXNG and Web Reader independently or together. Normal flow:
+
+```text
+PM Agent / selected stored agent
+  -> search_web -> fixed SearXNG -> candidate URLs/snippets
+  -> read_web_page -> fixed Web Reader client -> hosted Jina Reader
+  -> bounded untrusted Markdown
+```
+
+Hosted-provider privacy and network boundary:
+
+- public target URL and extracted page content pass through Jina;
+- Chekku does not control Jina's retention, remote DNS resolution, target redirects, provider availability, or provider-side network isolation;
+- Chekku validates submitted and provider-reported URLs, but Jina performs remote DNS resolution and target fetching;
+- do not submit signed, OAuth, password-reset, or otherwise secret-bearing URLs.
+
+`read_web_page` accepts one public HTTP(S) URL at most 2,048 UTF-8 bytes. It reads one chosen page only: no search, crawling, recursive link following, authenticated pages, PDFs, uploads, screenshots, persistence, or competitive analysis. Fixed transport sends one `POST https://r.jina.ai/` request, rejects redirects from Jina API endpoint, uses one 30-second deadline, performs no retry, accepts JSON only, and stops response body above 2 MiB. Normalized title is at most 512 UTF-8 bytes; serialized tool output is at most 71,680 UTF-8 bytes with UTF-8-safe Markdown truncation.
+
+Safe failures cover missing configuration, disallowed URLs, cancellation, timeout, provider availability, unsupported format, oversized body, and invalid response. They do not include key, target URL, query string, fragment, endpoint, headers, provider body, status details, diagnostics, stack, timing, usage, or request ID. Do not add these details to logs or tickets.
+
+Returned Markdown may contain prompt injection. Output always marks `contentIsUntrusted: true`; treat content only as untrusted evidence, never instructions. Size bounds and labeling are defense in depth, not content sanitization.
+
+No-key smoke: start server without `WEB_READER_API_KEY` and invoke `read_web_page`; it must fail with `Web Reader is not configured.` without startup failure or outbound provider access. Standard deterministic tests require no key and make no live Jina call.
+
+Optional keyed live smoke reads only `https://example.com/`. Export `WEB_READER_API_KEY` into command environment without printing it, then run:
+
+```bash
+npm run test:web-reader:live
+```
+
+Without exported key, live command stops with local key-required test error before provider access. Live provider access is optional and not required by CI.
 
 ## Storage
 
@@ -335,6 +383,14 @@ For local operation, rerun `npm run dev:sh` so the launcher injects loopback con
 
 For local operation, call `curl --fail http://127.0.0.1:8888/healthz` and inspect the SearXNG service status. For external operation, verify the base URL, reverse-proxy bearer authentication, JSON support, fixed `/config` and `/search` routes, and upstream search-engine latency from the Mastra host. Do not expose the optional bearer or copy raw upstream responses into tickets.
 
+### Web Reader is not configured
+
+For local development, set `WEB_READER_API_KEY` in `agent/.env`, rerun `npm run setup`, and restart the agent. Confirm the key reaches only the agent process. Do not add it to client environment, stored-agent records, model input, command output, logs, or tickets. Server should remain healthy while tool fails closed.
+
+### Web Reader is unavailable or times out
+
+Jina Reader is hosted dependency. Confirm outbound HTTPS access from Mastra host and provider availability; no local Reader health endpoint exists. Request deadline stays fixed at 30 seconds. Do not add configurable endpoint, retries, anonymous fallback, or raw provider diagnostics.
+
 ### Garage MCP reports missing identity
 
 `Agent identity is required.` means execution did not include trusted `context.agent.agentId`. Do not add an agent ID to tool input. Ensure the tool runs through a hydrated Mastra agent with the built-in `garage` MCP server.
@@ -445,7 +501,7 @@ npm run build
 git diff --check
 ```
 
-The test suite covers model routing, model discovery, prompt normalization, all five built-in agents, Telegram roles and slash commands, email delivery, PM tools and repositories, report APIs/pages and accessible tables, stored-agent payloads and fixed Garage/SearXNG hydration, bounded search transport and safe errors, stored-model migration, thread ownership, proxy paths, UI structure, namespaced storage, Garage adapter safety, Maestro flow runner, char-budget guard, and launcher behavior.
+The test suite covers model routing, model discovery, prompt normalization, all five built-in agents, Telegram roles and slash commands, email delivery, PM tools and repositories, report APIs/pages and accessible tables, stored-agent payloads and fixed Garage/SearXNG/Web Reader hydration, bounded search and hosted reading transports with safe errors, stored-model migration, thread ownership, proxy paths, UI structure, namespaced storage, Garage adapter safety, Maestro flow runner, char-budget guard, and launcher behavior.
 
 ## Production notes
 
@@ -457,6 +513,7 @@ Before deploying beyond local development:
 - restrict `WEB_URL` to the deployed client origin;
 - configure an authenticated server-to-server hop if the Mastra service is exposed separately;
 - configure `SEARXNG_BASE_URL` and optional `SEARXNG_API_KEY` only in the agent service or deployment secret manager; keep the endpoint private or protect it with a reverse proxy;
+- configure `WEB_READER_API_KEY` only in the agent service or deployment secret manager, and review Jina's privacy, retention, availability, remote DNS, redirect, and network-isolation behavior for deployment requirements;
 - review browser and network policies;
 - if the social-media-agent is enabled, set `TELEGRAM_MODE=webhook` with a public URL and `TELEGRAM_WEBHOOK_SECRET_TOKEN`, and provision a Resend-verified sender for the send-email tool;
 - add rate limits, audit logging, and backup procedures appropriate to the environment.

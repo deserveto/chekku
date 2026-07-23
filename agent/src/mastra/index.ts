@@ -16,6 +16,7 @@ import {
 import { OpenAICompatibleGateway } from './gateways/openai-compatible.js';
 import { garageMcpServer } from './mcp/garage-mcp-server.js';
 import { searxngMcpServer } from './mcp/searxng-mcp-server.js';
+import { webReaderMcpServer } from './mcp/web-reader-mcp-server.js';
 import { healthRoute } from './routes/health.js';
 import { modelsRoute } from './routes/models.js';
 import { storedAgentTools } from './tools/registry.js';
@@ -35,6 +36,7 @@ export const mastra = new Mastra({
   mcpServers: {
     garage: garageMcpServer,
     searxng: searxngMcpServer,
+    'web-reader': webReaderMcpServer,
   },
   tools: storedAgentTools,
   storage,
