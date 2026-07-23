@@ -503,6 +503,30 @@ git diff --check
 
 The test suite covers model routing, model discovery, prompt normalization, all five built-in agents, Telegram roles and slash commands, email delivery, PM tools and repositories, report APIs/pages and accessible tables, stored-agent payloads and fixed Garage/SearXNG/Web Reader hydration, bounded search and hosted reading transports with safe errors, stored-model migration, thread ownership, proxy paths, UI structure, namespaced storage, Garage adapter safety, Maestro flow runner, char-budget guard, and launcher behavior.
 
+## Production run
+
+`npm run prod` builds both workspaces and starts them together:
+
+```bash
+npm ci
+npm run prod
+```
+
+This is equivalent to `npm run build && npm run start`. To run them separately (for staged deploys or build hosts):
+
+```bash
+npm run build
+npm run start
+```
+
+`npm run start` runs `mastra start` (agent) and `next start` (client) side by side via `concurrently`. It does not provision local Docker services; production must reach Garage, SearXNG, and the model endpoint as external services or pre-provisioned infrastructure.
+
+Environment differences from local development:
+
+- `mastra start` loads `agent/.env` directly, not the generated `agent/.env.development` used by `mastra dev`. Put production values in `agent/.env` or a deployment secret manager; do not rely on `npm run setup` to copy them.
+- `client/.env.local` is read in both modes unchanged.
+- Set a durable LibSQL-compatible `DATABASE_URL` and token before first start.
+
 ## Production notes
 
 Before deploying beyond local development:
