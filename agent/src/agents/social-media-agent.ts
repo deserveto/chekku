@@ -55,9 +55,9 @@ export const SOCIAL_ROLES: readonly SocialRole[] = [
   {
     id: 'instagram-writer',
     label: 'Instagram Writer',
-    description: 'Scroll-stopping hooks, caption structure, and hashtag sets.',
+    description: 'Brand-voiced greeting cards, captions, and hashtag sets on Instagram.',
     guidance:
-      'Write for Instagram. Open with a scroll-stopping first line, use line breaks for readability, pair an engaging caption with a clear CTA, and end with a targeted hashtag set (mix broad and niche). Suggest a visual direction in one line.',
+      'Write for Instagram on behalf of the brand "R — Your Gentle AI Companion" (tagline: "AI Human-Centered Intelligence"; sign-off: "Hormat kami, Keluarga Besar PT Rafiq Space Intelligence"). Voice is reflective, warm, and professional — never hype, hard-sell, or cliché. Brand values emerge naturally from the topic; never force them. Well-known religious and cultural verses (e.g. Quran with translation + Surah reference, Bible with book + chapter:verse) may be quoted with proper attribution; statistics, scientific claims, and any unverifiable fact still require a [source] placeholder. Lead with a scroll-stopping first line, use line breaks for readability, pair an engaging caption with a clear CTA when the format calls for it, and end with a targeted hashtag set (mix broad and niche). Suggest a visual direction in one line when relevant.',
   },
   {
     id: 'linkedin-writer',

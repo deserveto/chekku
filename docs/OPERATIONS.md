@@ -339,11 +339,22 @@ Get a key at [resend.com](https://resend.com). The default `onboarding@resend.de
 
 ```dotenv
 SOCIAL_DRAFT_REVIEW_EMAIL=social-reviewer@example.com
+# Optional but recommended — drives Stage 2 trending research:
+SEARXNG_BASE_URL=http://localhost:8080
+SEARXNG_API_KEY=
+# Optional — movable feasts (Idul Fitri, Idul Adha, 1 Muharram, etc.).
+# Defaults to the public api-hari-libur instance; unset to opt out.
+PUBLIC_HOLIDAY_API_BASE_URL=https://api-hari-libur.vercel.app/api
+#PUBLIC_HOLIDAY_CACHE_DIR=src/mastra/calendar/.cache
 ```
 
-The `weekly-social-drafts` workflow fires every Monday at 09:00 Asia/Jakarta via Mastra's built-in scheduler (no separate registration). One run produces exactly two Instagram drafts: up to two fixed-date awareness days in the current Jakarta week, filled out by a deterministic evergreen-pillar rotation. Each caption is drafted through `social-media-agent` with the `instagram-writer` role pinned, then saved to the `social-media-agent` Garage namespace under `social-posts/<postId>/`. The run then emails a review link per draft to `SOCIAL_DRAFT_REVIEW_EMAIL`.
+The `weekly-social-drafts` workflow fires every Monday at 09:00 Asia/Jakarta via Mastra's built-in scheduler (no separate registration). One run drafts 2 base Instagram captions plus, when the week contains a holiday, 1 bonus awareness post (total 2–3 drafts). Base slots come from SearXNG trending research (snippet-only, no page crawling) and are filled out by the deterministic evergreen-pillar rotation when research yields fewer than 2 topics. Trending results that overlap the chosen awareness day are skipped so the bonus and a base slot do not duplicate the same theme. Each caption is drafted through `social-media-agent` with the `instagram-writer` role pinned, then saved to the `social-media-agent` Garage namespace under `social-posts/<postId>/`. The run then emails a review link per draft to `SOCIAL_DRAFT_REVIEW_EMAIL`.
 
-`SOCIAL_DRAFT_REVIEW_EMAIL` must be set per environment — there is no default. When unset, the workflow still drafts and saves both posts but skips the email step, recording `emailSent: false` and `emailError: 'SOCIAL_DRAFT_REVIEW_EMAIL is not set...'` in the run output. The workflow also needs `RESEND_API_KEY` for delivery and the five `GARAGE_*` values for persistence. Other email delivery failures are recorded in the run output (`emailSent: false`, `emailError`) without failing the run; saved drafts remain readable at `/social-posts` and `/social-posts/[postId]`. Stage 1 uses the hardcoded awareness-day calendar in `agent/src/mastra/workflows/special-days.ts`; movable feasts are intentionally excluded for deterministic scheduling.
+`SOCIAL_DRAFT_REVIEW_EMAIL` must be set per environment — there is no default. When unset, the workflow still drafts and saves posts but skips the email step, recording `emailSent: false` and `emailError: 'SOCIAL_DRAFT_REVIEW_EMAIL is not set...'` in the run output. The workflow also needs `RESEND_API_KEY` for delivery and the five `GARAGE_*` values for persistence. Other email delivery failures are recorded in the run output (`emailSent: false`, `emailError`) without failing the run; saved drafts remain readable at `/social-posts` and `/social-posts/[postId]`.
+
+`SEARXNG_BASE_URL` is optional. When unset (or when every research query fails), the workflow degrades to exactly 2 evergreen pillars with no awareness-day bonus and records a `researchNote` on the run output — research failure is never fatal.
+
+`PUBLIC_HOLIDAY_API_BASE_URL` resolves movable feasts (Idul Fitri, Idul Adha, 1 Muharram / Tahun Baru Islam, Isra Mi'raj, Maulid Nabi, Nyepi, Paskah, Waisak, Natal) so the awareness-day bonus is no longer limited to the fixed-date `SPECIAL_DAYS` calendar. The API response is cached per year under `PUBLIC_HOLIDAY_CACHE_DIR` (default `agent/src/mastra/calendar/.cache/`, gitignored) so a single fire does not re-fetch 30+ years of data. When unset or unreachable, the workflow falls back to fixed-date entries only (Hari Kartini, Hari Guru Nasional, Hari Bumi, etc.) — observance days still produce a bonus, movable feasts do not.
 
 Review interfaces:
 
