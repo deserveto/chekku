@@ -503,6 +503,32 @@ git diff --check
 
 The test suite covers model routing, model discovery, prompt normalization, all five built-in agents, Telegram roles and slash commands, email delivery, PM tools and repositories, report APIs/pages and accessible tables, stored-agent payloads and fixed Garage/SearXNG/Web Reader hydration, bounded search and hosted reading transports with safe errors, stored-model migration, thread ownership, proxy paths, UI structure, namespaced storage, Garage adapter safety, Maestro flow runner, char-budget guard, and launcher behavior.
 
+## Production run
+
+`npm run prod` builds both workspaces and starts them together:
+
+```bash
+npm ci
+npm run prod
+```
+
+This is equivalent to `npm run build && npm run start`. To run them separately (for staged deploys or build hosts):
+
+```bash
+npm run build
+npm run start
+```
+
+`npm run start` runs `mastra start` (agent) and `next start` (client) side by side via `concurrently`. It does not provision local Docker services; production must reach Garage, SearXNG, and the model endpoint as external services or pre-provisioned infrastructure.
+
+Environment differences from local development:
+
+- `mastra start` loads `agent/.env` directly, not the generated `agent/.env.development` used by `mastra dev`. `npm run setup` (`scripts/setup-env.sh`) is an interactive local bootstrap: it prompts for `LLM_API_KEY` and the other runtime values and writes them straight into `agent/.env`. It is not a production secrets pipeline; provision production secrets through a deployment secret manager rather than an interactive local script.
+- Under `mastra start`, the server process cwd is `agent/.mastra/output` (Mastra spawns the built bundle there), not the agent workspace. `MAESTRO_WORKSPACE` and `MAESTRO_ARTIFACT_DIR` resolve relative to that cwd, so the `../maestro` and `../artifacts/maestro` defaults would land under `agent/.maestro/` and `agent/.mastra/artifacts/`. Use absolute paths in production, as the `mastra dev` note above already requires.
+- Server-only variables in `client/.env.local` are read at `next start` runtime, but `NEXT_PUBLIC_*` variables are inlined into the browser bundle at `next build` time, not at `next start`. `NEXT_PUBLIC_APP_URL` is consumed by `'use client'` code (`client/src/lib/mastra-client.ts`), so when build and start run on separate hosts the shipped bundle keeps the build-host origin and every `/api/agent/*` call targets the wrong place unless `NEXT_PUBLIC_APP_URL` is set to the production origin at build time.
+
+See Production notes below for the durable `DATABASE_URL`, deployed origin, and secret-manager checklist.
+
 ## Production notes
 
 Before deploying beyond local development:
