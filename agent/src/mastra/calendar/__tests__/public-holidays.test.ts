@@ -200,6 +200,54 @@ describe('createPublicHolidayClient', () => {
     await expect(client.getHolidays(2026)).rejects.toThrow('Public holiday API is unavailable');
   });
 
+  it('regression: cancels the response body on non-2xx so undici releases the connection', async () => {
+    // Mas Gitgit review (PR #11): readBoundedJson used to throw on
+    // non-2xx without cancelling `response.body`, leaking the connection.
+    // Mirror the fix from web-reader/client.ts (commit a98e58c): cancel
+    // the body before throwing.
+    const cancel = vi.fn(async () => undefined);
+    const body = { cancel, locked: false } as unknown as ReadableStream<Uint8Array>;
+    // Response.body is a read-only getter on the prototype, so Object.assign
+    // cannot override it. Build a minimal fake Response that controls body.
+    const fakeResponse = {
+      ok: false,
+      status: 503,
+      statusText: 'Service Unavailable',
+      headers: new Headers({ 'content-type': 'application/json' }),
+      body,
+    } as Response;
+    const fetch = vi.fn(async () => fakeResponse);
+
+    const client = createPublicHolidayClient({
+      apiUrl: 'https://api-hari-libur.vercel.app/api',
+      fetch: fetch as unknown as typeof globalThis.fetch,
+    });
+
+    await expect(client.getHolidays(2026)).rejects.toThrow('Public holiday API is unavailable');
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('regression: cancels the response body on unsupported content-type so undici releases the connection', async () => {
+    const cancel = vi.fn(async () => undefined);
+    const body = { cancel, locked: false } as unknown as ReadableStream<Uint8Array>;
+    const fakeResponse = {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      headers: new Headers({ 'content-type': 'text/html' }),
+      body,
+    } as Response;
+    const fetch = vi.fn(async () => fakeResponse);
+
+    const client = createPublicHolidayClient({
+      apiUrl: 'https://api-hari-libur.vercel.app/api',
+      fetch: fetch as unknown as typeof globalThis.fetch,
+    });
+
+    await expect(client.getHolidays(2026)).rejects.toThrow('did not return JSON');
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects responses whose content-type is not JSON', async () => {
     const fetch = vi.fn(async () =>
       new Response('<html>5xx page</html>', {

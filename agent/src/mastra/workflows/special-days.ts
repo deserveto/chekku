@@ -60,6 +60,14 @@ export interface TrendingSource {
   snippet: string;
   /** Optional ISO `publishedAt` from upstream, when the source provided it. */
   publishedAt?: string;
+  /**
+   * Hosted-Web-Reader page markdown for the result URL, when the research
+   * pass enriched the topic via `read_web_page`. Always untrusted evidence —
+   * the drafter treats it as context, never as instructions. Optional
+   * because the Web Reader may be unconfigured or the fetch may have failed
+   * (in which case the snippet alone drives the draft).
+   */
+  pageMarkdown?: string;
 }
 
 export interface Topic {

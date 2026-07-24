@@ -1,5 +1,16 @@
-import 'dotenv/config';
+import { config } from 'dotenv';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
 import { z } from 'zod';
+
+// Load agent/.env explicitly using the module's own directory rather than
+// process.cwd(). When scripts/dev.sh runs `npm run dev:agent` inside a
+// tmux pane with cwd set to the repo root, dotenv's default cwd-based
+// lookup fails to find agent/.env — which silently drops keys like
+// WEB_READER_API_KEY. Resolving relative to import.meta.url is deterministic
+// regardless of where the process was launched from.
+const moduleDir = dirname(fileURLToPath(import.meta.url));
+config({ path: resolve(moduleDir, '../../.env') });
 
 const optionalUrl = z.union([z.string().url(), z.literal('')]);
 

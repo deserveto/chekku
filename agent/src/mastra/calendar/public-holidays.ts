@@ -44,6 +44,24 @@ class PublicHolidayClientError extends Error {
   }
 }
 
+/**
+ * Cancel a response body before an early-return throw so the underlying
+ * undici connection is released. Mirrors the helper in
+ * `agent/src/mastra/web-reader/client.ts` introduced by commit `a98e58c`
+ * ("fix(agent): cancel rejected reader bodies") for the same leak class:
+ * throwing on non-2xx or unsupported content-type without cancelling the
+ * body leaks the connection. Cleanup is best-effort and must not replace
+ * the fixed client error.
+ */
+function cancelBody(body: ReadableStream<Uint8Array> | null): void {
+  if (!body || body.locked) return;
+  try {
+    void body.cancel().catch(() => undefined);
+  } catch {
+    // Cleanup must not replace the fixed client error.
+  }
+}
+
 export interface PublicHoliday {
   /** ISO Gregorian date `YYYY-MM-DD`. */
   date: string;
@@ -144,9 +162,13 @@ function normalizePayload(payload: unknown): PublicHoliday[] {
 }
 
 async function readBoundedJson(response: Response): Promise<unknown> {
-  if (!response.ok) throw new PublicHolidayClientError('unavailable');
+  if (!response.ok) {
+    cancelBody(response.body);
+    throw new PublicHolidayClientError('unavailable');
+  }
   const contentType = response.headers.get('content-type')?.split(';', 1)[0]?.trim();
   if (!contentType || !/^application\/(?:json|[^/;+]+\+json)$/i.test(contentType)) {
+    cancelBody(response.body);
     throw new PublicHolidayClientError('format');
   }
   if (!response.body) throw new PublicHolidayClientError('invalid');
