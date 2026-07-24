@@ -247,6 +247,10 @@ Local file: `client/.env.local`
 | `npm run test:web-reader:live` | Optionally read `https://example.com/` through hosted Jina Reader; requires `WEB_READER_API_KEY`. |
 | `npm run check` | Run typecheck, lint, and tests. |
 | `npm run build` | Build Mastra and Next.js for production. |
+| `npm run start` | Start the built Mastra and Next.js servers together. Requires a prior `npm run build`. |
+| `npm run start:agent` | Start only the built Mastra server. |
+| `npm run start:client` | Start only the built Next.js client. |
+| `npm run prod` | Build, then start both servers. Does not provision local Garage or SearXNG; production must reach them as external services. |
 
 The client uses system font stacks, so `next build` does not download fonts from Google. Mastra production builds still install the generated server bundle dependencies and therefore require access to the configured npm registry.
 
