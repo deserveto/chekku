@@ -523,9 +523,11 @@ npm run start
 
 Environment differences from local development:
 
-- `mastra start` loads `agent/.env` directly, not the generated `agent/.env.development` used by `mastra dev`. Put production values in `agent/.env` or a deployment secret manager; do not rely on `npm run setup` to copy them.
-- `client/.env.local` is read in both modes unchanged.
-- Set a durable LibSQL-compatible `DATABASE_URL` and token before first start.
+- `mastra start` loads `agent/.env` directly, not the generated `agent/.env.development` used by `mastra dev`. `npm run setup` (`scripts/setup-env.sh`) is an interactive local bootstrap: it prompts for `LLM_API_KEY` and the other runtime values and writes them straight into `agent/.env`. It is not a production secrets pipeline; provision production secrets through a deployment secret manager rather than an interactive local script.
+- Under `mastra start`, the server process cwd is `agent/.mastra/output` (Mastra spawns the built bundle there), not the agent workspace. `MAESTRO_WORKSPACE` and `MAESTRO_ARTIFACT_DIR` resolve relative to that cwd, so the `../maestro` and `../artifacts/maestro` defaults would land under `agent/.maestro/` and `agent/.mastra/artifacts/`. Use absolute paths in production, as the `mastra dev` note above already requires.
+- Server-only variables in `client/.env.local` are read at `next start` runtime, but `NEXT_PUBLIC_*` variables are inlined into the browser bundle at `next build` time, not at `next start`. `NEXT_PUBLIC_APP_URL` is consumed by `'use client'` code (`client/src/lib/mastra-client.ts`), so when build and start run on separate hosts the shipped bundle keeps the build-host origin and every `/api/agent/*` call targets the wrong place unless `NEXT_PUBLIC_APP_URL` is set to the production origin at build time.
+
+See Production notes below for the durable `DATABASE_URL`, deployed origin, and secret-manager checklist.
 
 ## Production notes
 
