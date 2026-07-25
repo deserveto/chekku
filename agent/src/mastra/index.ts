@@ -13,6 +13,7 @@ import {
   socialMediaAgent,
   registerSocialSlashCommands,
 } from '../agents/social-media-agent.js';
+import { socialMediaStrategistAgent } from '../agents/social-media-strategist-agent.js';
 import { OpenAICompatibleGateway } from './gateways/openai-compatible.js';
 import { garageMcpServer } from './mcp/garage-mcp-server.js';
 import { searxngMcpServer } from './mcp/searxng-mcp-server.js';
@@ -31,7 +32,7 @@ const storage = new LibSQLStore({
 });
 
 export const mastra = new Mastra({
-  agents: { mainAgent, pmAgent, qaWebAgent, qaAndroidAgent, socialMediaAgent },
+  agents: { mainAgent, pmAgent, qaWebAgent, qaAndroidAgent, socialMediaAgent, socialMediaStrategistAgent },
   workflows: { weeklySocialDrafts },
   mcpServers: {
     garage: garageMcpServer,

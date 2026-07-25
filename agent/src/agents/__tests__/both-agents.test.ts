@@ -4,6 +4,7 @@ import { pmAgent } from '../pm-agent.js';
 import { qaWebAgent } from '../qa-web-agent.js';
 import { qaAndroidAgent } from '../qa-android-agent.js';
 import { socialMediaAgent } from '../social-media-agent.js';
+import { socialMediaStrategistAgent } from '../social-media-strategist-agent.js';
 
 describe('main-agent (general Chekku Assistant)', () => {
   it('has id main-agent', () => {
@@ -144,9 +145,16 @@ describe('qa-android-agent (Maestro Android QA)', () => {
   });
 });
 
-describe('agent differentiation (all five agents)', () => {
+describe('agent differentiation (all six agents)', () => {
   it('has mutually distinct ids', () => {
-    const ids = [mainAgent.id, pmAgent.id, qaWebAgent.id, qaAndroidAgent.id, socialMediaAgent.id];
+    const ids = [
+      mainAgent.id,
+      pmAgent.id,
+      qaWebAgent.id,
+      qaAndroidAgent.id,
+      socialMediaAgent.id,
+      socialMediaStrategistAgent.id,
+    ];
     expect(new Set(ids).size).toBe(ids.length);
   });
 });
