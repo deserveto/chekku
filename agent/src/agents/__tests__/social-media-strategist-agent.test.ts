@@ -143,3 +143,23 @@ describe('social-media-strategist-agent (instructions)', () => {
     }
   });
 });
+
+describe('social-media-strategist-agent (Telegram independence)', () => {
+  it('does not wire any channels', () => {
+    expect(socialMediaStrategistAgent.getChannels()).toBeNull();
+  });
+
+  it('does not expose a Telegram configuration flag', async () => {
+    const mod = await import('../social-media-strategist-agent.js');
+    expect(mod).not.toHaveProperty('isTelegramConfigured');
+    expect(mod).not.toHaveProperty('registerSocialSlashCommands');
+  });
+
+  it('does not read TELEGRAM_* environment variables at module load', async () => {
+    const source = await import('node:fs/promises').then((fs) =>
+      fs.readFile('agent/src/agents/social-media-strategist-agent.ts', 'utf8'),
+    );
+    expect(source).not.toMatch(/TELEGRAM_/);
+    expect(source).not.toMatch(/createTelegramAdapter/);
+  });
+});
