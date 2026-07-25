@@ -94,7 +94,7 @@ describe('social-media-strategist-agent (memory, context protection, tools)', ()
   it('binds the context limiter and char-budget guard input processors', async () => {
     const processors = await socialMediaStrategistAgent.listConfiguredInputProcessors();
     const ids = processors.map((p) => (p as { id?: unknown })?.id).filter((id): id is string => typeof id === 'string');
-    expect(ids).toEqual(expect.arrayContaining(['token-limiter', 'char-budget-guard']));
+    expect(ids).toEqual(['token-limiter', 'char-budget-guard']);
   });
 
   it('exposes search_web and read_web_page', async () => {
