@@ -27,6 +27,7 @@ Chekku contains three npm workspaces: a Next.js client, a Mastra agent server, a
 │ - qa-web-agent                             │        │
 │ - qa-android-agent                         │        │
 │ - social-media-agent                       │        │
+│ - social-media-strategist-agent            │        │
 │                                            │        │
 │ Memory + LibSQLStore                       │        │
 │ Calculator + current-time + email tools    │        │
@@ -62,7 +63,7 @@ PM Agent / selected stored agent
 
 `agent/src/mastra/index.ts` creates the single `Mastra` instance and registers:
 
-- `mainAgent`, `pmAgent`, `qaWebAgent`, `qaAndroidAgent`, and `socialMediaAgent`;
+- `mainAgent`, `pmAgent`, `qaWebAgent`, `qaAndroidAgent`, `socialMediaAgent`, and `socialMediaStrategistAgent`;
 - `storedAgentTools` (`calculatorTool`, `getCurrentTimeTool`, and `sendEmailTool`) for stored-agent hydration;
 - `garageMcpServer` for generic agent-isolated object storage;
 - `searxngMcpServer` for fixed read-only web search by selected stored agents;
@@ -112,6 +113,16 @@ Users drive it from the chat platform with slash commands:
 - `/switch <role>` — switch between `general`, `x-writer`, `instagram-writer`, `linkedin-writer`, and `tiktok-writer`.
 
 The active role is held in-memory keyed by `${platform}:${userId}`. The agent reads the role from the channel context on `requestContext` and rebuilds its instructions on each turn. Phase scope is drafting and planning only; destination-platform publishing is a later phase.
+
+### Social Media Strategist
+
+`social-media-strategist-agent` is a code-defined planning and research agent. It shares the common server model, Mastra Memory, and the standard context-limiter plus char-budget-guard stack used by `main-agent` and `pm-agent`. It binds the reusable `search_web` and `read_web_page` tools directly (the same tools PM Agent binds), and nothing else.
+
+Its conversational workflow is: interview the user to identify the brand, project, product, or person the strategy is for; perform optional web research when it would strengthen a decision; draft a Content Strategy Brief using a generic section template; ask explicitly for review; revise the existing brief on feedback; treat the brief as the source of truth only after explicit user approval; then offer a Content Plan whose shape derives from the approved brief. The agent is a strategist — it does not produce final platform-specific copy.
+
+The agent is independent of `social-media-agent`. It does not wire a Telegram channel, does not register slash commands, and does not participate in the scheduled `weekly-social-drafts` workflow. It is designed to be attached later to a separate Social Media Supervisor as a clean Mastra Agent instance.
+
+The Strategist keeps approved strategies inside its Mastra Memory thread only. Durable strategy persistence (a `storage/src/strategy-briefs.ts` helper plus a `save_strategy_to_garage` tool registered only on this agent, mirroring the PM report pattern) is deferred to a separately reviewed change. Markdown-based brand-product knowledge is also deferred: in v1 brand knowledge arrives as ordinary user messages, and a future Social Media Supervisor will pass curated Markdown context through an `agent.generate(messages, { instructions })` override, the same mechanism `weekly-social-drafts` uses to pin the Instagram role on `socialMediaAgent`.
 
 ### PM Agent
 

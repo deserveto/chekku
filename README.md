@@ -26,6 +26,7 @@ Chekku provides a focused interface for managing agents, creating agent-specific
 - **SearXNG search** — fixed read-only `search_web` capability for PM Agent and selectable stored agents, with server-owned endpoint configuration and bounded result snippets.
 - **Hosted Web Reader** — fixed read-only `read_web_page` capability for one chosen public page, returning bounded untrusted Markdown through hosted Jina Reader.
 - **Social media agent** — role-switchable content assistant reachable over Telegram (X, Instagram, LinkedIn, TikTok roles).
+- **Social media strategist** — research-backed planning agent that drafts a Content Strategy Brief for any brand or product, refines it on review, and (after approval) produces a Content Plan grounded in the approved brief.
 - **Scheduled social drafts** — a weekly Monday 09:00 Asia/Jakarta workflow drafts two Instagram posts from awareness days and evergreen pillars, saves them to Garage, and emails a review link.
 - **Hosted-vLLM compatibility** — final prompt normalization keeps system messages at the beginning.
 - **Local-first storage** — agent definitions, versions, memory, and threads live in LibSQL.
@@ -49,6 +50,7 @@ Next.js client :3000
   │     ├── qa-web-agent                                              │
   │     ├── qa-android-agent (Maestro, optional)                      │
   │     ├── social-media-agent (Telegram channel)                     │
+  │     ├── social-media-strategist-agent (research + planning)       │
   │     ├── @mastra/editor stored agents                              │
   │     ├── Mastra Memory + LibSQLStore                               │
   │     ├── calculator + current-time + email tools                   │
@@ -260,7 +262,7 @@ The client uses system font stacks, so `next build` does not download fonts from
 .
 ├── agent/                  # Mastra server and agent runtime
 │   └── src/
-│       ├── agents/         # main, PM, QA Web, and Social Media agents
+│       ├── agents/         # main, PM, QA Web, Social Media, and Social Media Strategist agents
 │       ├── config/         # environment and middleware
 │       ├── mastra/
 │       │   ├── gateways/   # OpenAI-compatible gateway and normalization
