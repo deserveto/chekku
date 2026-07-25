@@ -108,3 +108,38 @@ describe('social-media-strategist-agent (memory, context protection, tools)', ()
     expect(Object.keys(tools).sort()).toEqual(['read_web_page', 'search_web']);
   });
 });
+
+describe('social-media-strategist-agent (instructions)', () => {
+  it('describes the interview → brief → review → approval → content-plan workflow', async () => {
+    const instructions = await socialMediaStrategistAgent.getInstructions();
+
+    const requiredAnchors = [
+      'Social Media Strategist',
+      'Content Strategy Brief',
+      'Content Plan',
+      'interview',
+      'review',
+      'approval',
+      'search_web',
+      'read_web_page',
+      'untrusted',
+    ];
+
+    for (const anchor of requiredAnchors) {
+      expect(instructions).toContain(anchor);
+    }
+  });
+
+  it('keeps the strategist out of final platform-specific copy writing', async () => {
+    const instructions = await socialMediaStrategistAgent.getInstructions();
+    expect(instructions).toContain('strategist');
+    expect((instructions as string).toLowerCase()).toContain('not the final');
+  });
+
+  it('does not hardcode any Rafiqspace-style example values', async () => {
+    const instructions = await socialMediaStrategistAgent.getInstructions();
+    for (const excluded of EXCLUDED_EXAMPLE_VALUES) {
+      expect(instructions).not.toContain(excluded);
+    }
+  });
+});
