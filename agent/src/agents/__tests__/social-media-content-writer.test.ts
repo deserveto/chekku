@@ -15,26 +15,26 @@ import {
   unknownCommandReply,
   isTelegramConfigured,
   registerSocialSlashCommands,
-} from '../social-media-agent.js';
-import { socialMediaAgent } from '../social-media-agent.js';
+} from '../social-media-content-writer.js';
+import { socialMediaContentWriter } from '../social-media-content-writer.js';
 import type { Chat, SlashCommandEvent } from 'chat';
 
-describe('social-media-agent (Telegram-backed social assistant)', () => {
-  it('has id social-media-agent', () => {
-    expect(socialMediaAgent.id).toBe('social-media-agent');
+describe('social-media-content-writer (Telegram-backed content writer)', () => {
+  it('has id social-media-content-writer', () => {
+    expect(socialMediaContentWriter.id).toBe('social-media-content-writer');
   });
 
-  it('has name Chekku Social', () => {
-    expect(socialMediaAgent.name).toBe('Chekku Social');
+  it('has name Social Media Content Writer', () => {
+    expect(socialMediaContentWriter.name).toBe('Social Media Content Writer');
   });
 
   it('has Mastra memory for channel context', async () => {
-    const memory = await socialMediaAgent.getMemory();
+    const memory = await socialMediaContentWriter.getMemory();
     expect(memory).toBeDefined();
   });
 
   it('binds get-current-time and send-email tools', async () => {
-    const tools = await socialMediaAgent.listTools();
+    const tools = await socialMediaContentWriter.listTools();
     expect(Object.keys(tools).sort()).toEqual([
       'getCurrentTimeTool',
       'sendEmailTool',
@@ -244,18 +244,18 @@ describe('Telegram optional boot (issue #1 regression)', () => {
 
   it('imports without throwing and omits channels when TELEGRAM_BOT_TOKEN is unset', async () => {
     vi.stubEnv('TELEGRAM_BOT_TOKEN', '');
-    const mod = await import('../social-media-agent.js');
-    expect(mod.socialMediaAgent.id).toBe('social-media-agent');
+    const mod = await import('../social-media-content-writer.js');
+    expect(mod.socialMediaContentWriter.id).toBe('social-media-content-writer');
     expect(mod.isTelegramConfigured).toBe(false);
-    expect(mod.socialMediaAgent.getChannels()).toBeNull();
+    expect(mod.socialMediaContentWriter.getChannels()).toBeNull();
     vi.unstubAllEnvs();
   });
 
   it('wires the Telegram channel when TELEGRAM_BOT_TOKEN is set', async () => {
     vi.stubEnv('TELEGRAM_BOT_TOKEN', 'test-token');
-    const mod = await import('../social-media-agent.js');
+    const mod = await import('../social-media-content-writer.js');
     expect(mod.isTelegramConfigured).toBe(true);
-    expect(mod.socialMediaAgent.getChannels()).not.toBeNull();
+    expect(mod.socialMediaContentWriter.getChannels()).not.toBeNull();
     vi.unstubAllEnvs();
   });
 

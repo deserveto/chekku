@@ -3,6 +3,16 @@ import { randomBytes } from 'node:crypto';
 import { createNamespacedObjectStorage } from './namespaced-objects.ts';
 import type { ObjectStorage } from './objects.ts';
 
+/**
+ * Fixed Garage storage namespace for social posts.
+ *
+ * This is the storage namespace string, decoupled from the agent identity:
+ * after the Social Media Supervisor refactor the drafting agent's id is
+ * `social-media-content-writer`, but posts continue to live under this
+ * historical namespace so existing objects stay readable. The
+ * `weekly-social-drafts` workflow pins this value explicitly when writing via
+ * the Garage MCP tool; do not change it without migrating existing posts.
+ */
 export const SOCIAL_MEDIA_AGENT_ID = 'social-media-agent';
 
 export type SocialPlatform = 'instagram';

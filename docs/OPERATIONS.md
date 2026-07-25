@@ -311,7 +311,7 @@ Common failures:
 - **No device** — the agent returns a Blocked result; start an emulator or connect a device and re-run.
 - **Flow not found** — confirm the logical name maps to `<workspace>/<suite>/<flow>.yaml` and that the file is a regular file inside the workspace.
 
-## Telegram channel (social-media-agent)
+## Telegram channel (social-media-content-writer)
 
 ```dotenv
 TELEGRAM_BOT_TOKEN=
@@ -351,7 +351,7 @@ PUBLIC_HOLIDAY_API_BASE_URL=https://api-hari-libur.vercel.app/api
 WEB_READER_API_KEY=
 ```
 
-The `weekly-social-drafts` workflow fires every Monday at 09:00 Asia/Jakarta via Mastra's built-in scheduler (no separate registration). One run drafts 2 base Instagram captions plus, when the week contains a holiday, 1 bonus awareness post (total 2–3 drafts). Base slots come from SearXNG trending research; when `WEB_READER_API_KEY` is set, each chosen topic is also enriched with the hosted Web Reader's page markdown (single-page read per topic, parallel, bounded — per-topic fetch failure falls back to snippet only). Remaining base slots are filled from the deterministic evergreen-pillar rotation when research yields fewer than 2 topics. Trending results that overlap the chosen awareness day are skipped so the bonus and a base slot do not duplicate the same theme. Each caption is drafted through `social-media-agent` with the `instagram-writer` role pinned, then saved to the `social-media-agent` Garage namespace under `social-posts/<postId>/`. The run then emails a review link per draft to `SOCIAL_DRAFT_REVIEW_EMAIL`.
+The `weekly-social-drafts` workflow fires every Monday at 09:00 Asia/Jakarta via Mastra's built-in scheduler (no separate registration). One run drafts 2 base Instagram captions plus, when the week contains a holiday, 1 bonus awareness post (total 2–3 drafts). Base slots come from SearXNG trending research; when `WEB_READER_API_KEY` is set, each chosen topic is also enriched with the hosted Web Reader's page markdown (single-page read per topic, parallel, bounded — per-topic fetch failure falls back to snippet only). Remaining base slots are filled from the deterministic evergreen-pillar rotation when research yields fewer than 2 topics. Trending results that overlap the chosen awareness day are skipped so the bonus and a base slot do not duplicate the same theme. Each caption is drafted through the `social-media-content-writer` agent with the `instagram-writer` role pinned, then saved to the fixed `social-media-agent` Garage namespace (the `SOCIAL_MEDIA_AGENT_ID` storage constant, decoupled from the agent identity) under `social-posts/<postId>/`. The run then emails a review link per draft to `SOCIAL_DRAFT_REVIEW_EMAIL`.
 
 `SOCIAL_DRAFT_REVIEW_EMAIL` must be set per environment — there is no default. When unset, the workflow still drafts and saves posts but skips the email step, recording `emailSent: false` and `emailError: 'SOCIAL_DRAFT_REVIEW_EMAIL is not set...'` in the run output. The workflow also needs `RESEND_API_KEY` for delivery and the five `GARAGE_*` values for persistence. Other email delivery failures are recorded in the run output (`emailSent: false`, `emailError`) without failing the run; saved drafts remain readable at `/social-posts` and `/social-posts/[postId]`.
 
@@ -529,5 +529,5 @@ Before deploying beyond local development:
 - configure `SEARXNG_BASE_URL` and optional `SEARXNG_API_KEY` only in the agent service or deployment secret manager; keep the endpoint private or protect it with a reverse proxy;
 - configure `WEB_READER_API_KEY` only in the agent service or deployment secret manager, and review Jina's privacy, retention, availability, remote DNS, redirect, and network-isolation behavior for deployment requirements;
 - review browser and network policies;
-- if the social-media-agent is enabled, set `TELEGRAM_MODE=webhook` with a public URL and `TELEGRAM_WEBHOOK_SECRET_TOKEN`, and provision a Resend-verified sender for the send-email tool;
+- if the social-media-content-writer (Telegram) is enabled, set `TELEGRAM_MODE=webhook` with a public URL and `TELEGRAM_WEBHOOK_SECRET_TOKEN`, and provision a Resend-verified sender for the send-email tool;
 - add rate limits, audit logging, and backup procedures appropriate to the environment.

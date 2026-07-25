@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { buildInstructionsForRole } from '../../../agents/social-media-agent.js';
+import { buildInstructionsForRole } from '../../../agents/social-media-content-writer.js';
 import type { SearxngSearchOutput, SearxngSearchResult } from '../../searxng/client.js';
 import type { SendEmailInput } from '../../tools/send-email.js';
 import type { Topic } from '../special-days.js';

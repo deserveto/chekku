@@ -30,7 +30,8 @@ describe('agent server routes', () => {
       'pmAgent',
       'qaAndroidAgent',
       'qaWebAgent',
-      'socialMediaAgent',
+      'socialMediaContentWriter',
+      'socialMediaSupervisorAgent',
     ]);
     expect(
       Object.keys(mastra.listWorkflows()).filter((key) => !key.endsWith('-input-processor')),

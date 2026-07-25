@@ -11,16 +11,27 @@ import { getServerModel } from '../providers/model.js';
 import { providerContextSchema, type ProviderContext } from './context.js';
 
 /**
- * Social Media Agent
+ * Social Media Content Writer
  *
- * A generic, role-switchable social media assistant exposed over a Mastra
- * channel (Telegram today, other platforms later). Users drive it from a chat
+ * The drafting sub-agent under the Social Media Supervisor. A generic,
+ * role-switchable social media content writer exposed over a Mastra channel
+ * (Telegram today, other platforms later). Users drive it from a chat
  * platform: they ask it to draft / repurpose / schedule posts, and switch the
  * active "role" to tune voice for a specific platform via slash commands
  * (`/switch`, `/roles`, `/role`, `/help`).
  *
  * Phase scope: the agent drafts and plans posts inside the chat. Actual
  * publishing to destination platforms is a later phase.
+ *
+ * The Telegram channel and slash commands stay on this agent (not the
+ * supervisor) for this refactor; the supervisor delegates to it via the
+ * Mastra `agents` sub-agent field.
+ *
+ * Storage namespace note: social posts live under the fixed Garage namespace
+ * `social-media-agent` (see `SOCIAL_MEDIA_AGENT_ID` in `@chekku/storage`),
+ * which is decoupled from this agent's identity string. The workflow pins that
+ * namespace explicitly when writing; the agent itself does not attach the
+ * Garage MCP tools.
  *
  * Model routing uses the same Chekku gateway as the other agents
  * (`getServerModel()`); provider fallbacks and API keys live entirely
@@ -240,7 +251,7 @@ export const handleSocialSlashCommands: ChannelHandler = async (
  * and pointed at /help. This matches the onDirectMessage path, so behavior is
  * consistent across both entry points.
  *
- * Called from `agent/src/mastra/index.ts` once `socialMediaAgent.getChannels().sdk`
+ * Called from `agent/src/mastra/index.ts` once `socialMediaContentWriter.getChannels().sdk`
  * is available.
  */
 export function registerSocialSlashCommands(sdk: Chat): void {
@@ -326,11 +337,11 @@ export function buildInstructionsForRole(roleId: string): string {
 // Agent
 // ---------------------------------------------------------------------------
 
-const socialMediaAgentConfig: AgentConfig<string, ToolsInput, undefined, ProviderContext> = {
-  id: 'social-media-agent',
-  name: 'Chekku Social',
+const socialMediaContentWriterConfig: AgentConfig<string, ToolsInput, undefined, ProviderContext> = {
+  id: 'social-media-content-writer',
+  name: 'Social Media Content Writer',
   description:
-    'Generic, role-switchable social media assistant. Drafts, repurposes, and plans posts for X, Instagram, LinkedIn, and TikTok. Reachable over Telegram when TELEGRAM_BOT_TOKEN is configured.',
+    'Social media content writer and drafting sub-agent under the Social Media Supervisor. Drafts, repurposes, and plans posts for X, Instagram, LinkedIn, and TikTok. Reachable over Telegram when TELEGRAM_BOT_TOKEN is configured.',
   model: () => getServerModel(),
   requestContextSchema: providerContextSchema,
   memory: createAgentMemory(),
@@ -355,4 +366,4 @@ const socialMediaAgentConfig: AgentConfig<string, ToolsInput, undefined, Provide
     buildInstructions(getActiveRole(extractResourceId(requestContext))),
 };
 
-export const socialMediaAgent = new Agent(socialMediaAgentConfig);
+export const socialMediaContentWriter = new Agent(socialMediaContentWriterConfig);

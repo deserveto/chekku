@@ -7,7 +7,7 @@ import {
 } from '@chekku/storage';
 import { z } from 'zod';
 
-import { socialMediaAgent, buildInstructionsForRole } from '../../agents/social-media-agent.js';
+import { socialMediaContentWriter, buildInstructionsForRole } from '../../agents/social-media-content-writer.js';
 import { env } from '../../config/env.js';
 import {
   createPublicHolidayClient,
@@ -59,7 +59,7 @@ import { researchTrendingTopics, type ReadPageFn, type SearchFn } from './trendi
  * it, while keeping canonical post id / key / metadata construction
  * deterministic via `buildSocialPostMetadata`.
  *
- * The drafter reuses `socialMediaAgent` so the Instagram voice stays a single
+ * The drafter reuses `socialMediaContentWriter` so the Instagram voice stays a single
  * source of truth (the `instagram-writer` role). Because the workflow runs
  * outside any chat channel, the role cannot be resolved from channel context;
  * we pin it by overriding the agent's instructions via `generate(..., {
@@ -424,7 +424,7 @@ export interface WeeklySocialDraftsDeps {
 }
 
 const defaultGenerate: DraftGenerateFn = (prompt, instructions) =>
-  socialMediaAgent.generate(prompt, { instructions }).then((result) => result.text);
+  socialMediaContentWriter.generate(prompt, { instructions }).then((result) => result.text);
 
 const defaultCreateText: CreateTextFn = (key, text) =>
   defaultCreateTextTool.execute!({ key, text }, SOCIAL_AGENT_CONTEXT).then(() => undefined);

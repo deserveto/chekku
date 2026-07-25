@@ -48,7 +48,8 @@ Next.js client :3000
   │     │                 read_web_page ────────────────────────────┐
   │     ├── qa-web-agent                                              │
   │     ├── qa-android-agent (Maestro, optional)                      │
-  │     ├── social-media-agent (Telegram channel)                     │
+  │     ├── social-media-content-writer (Telegram channel)            │
+  │     ├── social-media-supervisor-agent (routes to content writer)  │
   │     ├── @mastra/editor stored agents                              │
   │     ├── Mastra Memory + LibSQLStore                               │
   │     ├── calculator + current-time + email tools                   │
@@ -161,12 +162,12 @@ For an existing checkout, rerun `npm run setup` after every `git pull` to pick u
 
 #### Optional integrations
 
-- **Telegram (social-media-agent)** — create a bot with [@BotFather](https://t.me/BotFather), then set `TELEGRAM_BOT_TOKEN`. Keep `TELEGRAM_MODE=polling` for local dev; switch to `webhook` with `TELEGRAM_WEBHOOK_SECRET_TOKEN` for production.
+- **Telegram (social-media-content-writer)** — create a bot with [@BotFather](https://t.me/BotFather), then set `TELEGRAM_BOT_TOKEN`. Keep `TELEGRAM_MODE=polling` for local dev; switch to `webhook` with `TELEGRAM_WEBHOOK_SECRET_TOKEN` for production.
 - **Email outbound (send-email tool)** — sign up at [resend.com](https://resend.com), set `RESEND_API_KEY`, and (for production) a Resend-verified sender in `RESEND_FROM_EMAIL`. The default `onboarding@resend.dev` sender only delivers to the account owner. Deliveries run directly (no approval gate).
 - **Android QA (qa-android-agent)** — install the [Maestro CLI](https://maestro.mobile.dev/) and ADB, start an emulator or connect a device, then set `MAESTRO_ENABLED=true`. Chekku, Maestro, ADB, and the device must run on the same machine.
 - **Hosted Web Reader** — set `WEB_READER_API_KEY` in `agent/.env`, rerun `npm run setup`, then restart the agent to enable `read_web_page`. Keep the key server-only; missing configuration does not block startup and fails only when the tool executes.
 
-These integrations are optional; Chekku boots fine without them. The `social-media-agent` binds the send-email tool and (when configured) the Telegram channel; stored agents can opt in from the builder's **Capabilities** section.
+These integrations are optional; Chekku boots fine without them. The `social-media-content-writer` binds the send-email tool and (when configured) the Telegram channel; the `social-media-supervisor-agent` routes to it as a sub-agent. Stored agents can opt in from the builder's **Capabilities** section.
 
 ### 3. Start Garage, SearXNG, and both application workspaces
 
@@ -208,7 +209,7 @@ Local file: `agent/.env`
 | `SEARXNG_BASE_URL` | Conditional | empty | Server-owned SearXNG base URL. `npm run dev:sh` supplies `http://127.0.0.1:8888`; set it explicitly for an external service. |
 | `SEARXNG_API_KEY` | No | empty | Optional server-only bearer token for an authenticated external SearXNG reverse proxy. |
 | `WEB_READER_API_KEY` | Conditional | empty | Server-owned hosted Web Reader credential. Required only when `read_web_page` executes. |
-| `TELEGRAM_BOT_TOKEN` | Conditional | empty | Bot token from [@BotFather](https://t.me/BotFather). Required when running `social-media-agent`. |
+| `TELEGRAM_BOT_TOKEN` | Conditional | empty | Bot token from [@BotFather](https://t.me/BotFather). Required when running `social-media-content-writer`. |
 | `TELEGRAM_MODE` | No | `polling` | Adapter mode: `polling` (dev, no tunnel), `webhook` (prod, public URL), or `auto`. |
 | `TELEGRAM_WEBHOOK_SECRET_TOKEN` | No | empty | Checked against `x-telegram-bot-api-secret-token`. Webhook mode only. |
 | `TELEGRAM_BOT_USERNAME` | No | empty | Override the bot username. Optional. |
@@ -295,7 +296,7 @@ These rules keep the repository from drifting back into parallel implementations
 9. Garage identity comes from trusted Mastra execution context, never tool input; browser code never accesses Garage directly.
 10. PM report semantics stay outside Garage MCP in code-defined `pm-agent` tools and the shared report repository.
 11. PM storage always binds to fixed `pm-agent`; persisted metadata contains relative `pm-reports/...` keys only.
-12. Social Media Agent keeps Telegram slash registration and direct email delivery in the single Mastra runtime.
+12. Social Media Content Writer keeps Telegram slash registration and direct email delivery in the single Mastra runtime; the Social Media Supervisor routes to it as a sub-agent.
 13. SearXNG MCP uses fixed ID `searxng` and exactly `search_web`; PM Agent receives the same reusable tool directly.
 14. `search_web` returns bounded result metadata and snippets only. It does not fetch result pages or promise competitive-analysis output.
 15. SearXNG endpoint and optional bearer configuration stay server-side; stored records contain only `mcpClients: { searxng: { tools: {} } }`.

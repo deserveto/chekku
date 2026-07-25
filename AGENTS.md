@@ -133,17 +133,25 @@ LLM_MODELS
 - `MAESTRO_ENABLED` defaults to `false`; the server boots normally without Maestro.
 - A failed Maestro MCP load (bad command, crashed subprocess, timeout, protocol error) is logged once with a `[qa-android-agent]` prefix and cached as empty for the lifetime of the server process; an operator must restart the agent server to retry.
 
-### Social Media Agent
+### Social Media Content Writer
 
-- Keep `social-media-agent` code-defined with Mastra Memory, Telegram channel integration, role switching, and the `send-email` tool.
+- Keep `social-media-content-writer` code-defined with Mastra Memory, Telegram channel integration, role switching, and the `send-email` tool.
+- It is the drafting sub-agent under the Social Media Supervisor (attached via the supervisor's `agents` field). The Telegram channel and `/help`, `/roles`, `/role`, `/switch` slash commands stay on this agent; the supervisor has no tools and only routes.
 - The `instagram-writer` role carries the brand identity ("R — Your Gentle AI Companion", tagline "AI Human-Centered Intelligence", sign-off "Hormat kami, Keluarga Besar PT Rafiq Space Intelligence"), the reflective/warm/professional tone guardrail, and the quote policy (well-known religious/cultural verses with attribution OK; statistics and unverifiable claims still require `[source]` placeholder). Do not move brand identity into env vars or the workflow prompt — the role is the single source of truth so Telegram chat output stays consistent with the scheduled workflow.
 - Preserve `/help`, `/roles`, `/role`, and `/switch` registration after `AgentChannels` initialization.
 - Telegram uses `TELEGRAM_BOT_TOKEN`, `TELEGRAM_MODE`, optional `TELEGRAM_BOT_USERNAME`, and optional `TELEGRAM_WEBHOOK_SECRET_TOKEN` only.
 - Email uses server-only `RESEND_API_KEY` and `RESEND_FROM_EMAIL`; never expose either to browser code.
 - Outbound email and channel actions run directly (no approval gate).
-- The scheduled `weekly-social-drafts` workflow drafts through `socialMediaAgent.generate(..., { instructions })` and pins the role via `buildInstructionsForRole('instagram-writer')`. The workflow runs outside any chat channel, so the role must not be resolved from channel `requestContext`. Telegram is not part of the scheduled flow.
+- The scheduled `weekly-social-drafts` workflow drafts through `socialMediaContentWriter.generate(..., { instructions })` and pins the role via `buildInstructionsForRole('instagram-writer')`. The workflow runs outside any chat channel, so the role must not be resolved from channel `requestContext`. Telegram is not part of the scheduled flow.
 - The workflow's `buildDraftPrompt` dispatches the format by topic kind. **Awareness days and evergreen pillars** use the structured greeting-card copy (header → "Selamat {day}" title → date line → opening → optional verse → "Poin-poin" brand-value bullets with `**[Value]:**` format → tagline → sign-off) — unchanged. **Trending topics** use a Folkative-style news caption (10-15 word visual headline for the image + 1-2 paragraph casual conversational caption + subtle CTA + emoji at end) with NO brand stamps, NO "Poin-poin" bullets, NO "Hormat kami" sign-off. Indonesian-first. The format split is intentional: awareness-day content suits the formal brand greeting-card voice; trending news needs the casual news-magazine voice to land with the audience.
 - Trending research filters results through two host checks: `BLOCKED_HOST_PATTERNS` drops social-media domains (TikTok/Instagram/YouTube/Facebook/etc.); `CREDIBLE_HOST_PATTERNS` requires recognized Indonesian + international news sources (Kompas, Detik, Tempo, CNN Indonesia, BBC, Reuters, AP, etc.). A homepage/category filter further rejects `bbc.com/`, `bbc.com/indonesia`, requiring article paths with 2+ segments so the topic is a specific article, not an aggregator index.
+
+### Social Media Supervisor
+
+- Keep `social-media-supervisor-agent` code-defined with Mastra Memory and the context-safety processors (`createAgentMemory()`, `createAgentContextLimiter()`, and `createCharBudgetGuard()` wired LAST in `inputProcessors`).
+- The supervisor has no tools. It routes incoming requests to its sub-agents via Mastra's `agents` field and `network()` loop; it must not draft, repurpose, or plan content itself.
+- Attach the Content Writer as a sub-agent (`agents: { socialMediaContentWriter }`). Future sub-agents (e.g. Social Media Strategist) attach here, not on the Content Writer.
+- Active call paths opt into routing by invoking the supervisor; the Telegram channel and slash commands stay on the Content Writer for now, so the supervisor is exercised through the chat UI or future integrations.
 
 ### Client proxy and identity
 
