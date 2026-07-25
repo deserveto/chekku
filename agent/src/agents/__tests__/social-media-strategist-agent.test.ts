@@ -5,6 +5,65 @@ import {
   SOCIAL_MEDIA_STRATEGIST_AGENT_ID,
   socialMediaStrategistAgent,
 } from '../social-media-strategist-agent.js';
+import { STRATEGY_BRIEF_TEMPLATE, CONTENT_PLAN_GUIDANCE } from '../social-media-strategist-agent.js';
+
+const EXCLUDED_EXAMPLE_VALUES = [
+  'Rafiqspace',
+  'Rafiq',
+  'MeetPal',
+  'Agentic AI',
+  'Sovereign AI',
+  'Responsible AI',
+  'Enterprise-Grade AI',
+  'Custom AI Solutions',
+  'McKinsey',
+  'BCG',
+  'Bain',
+  'BUMN',
+  'CEO / CIO / CTO',
+];
+
+describe('STRATEGY_BRIEF_TEMPLATE', () => {
+  const REQUIRED_SECTIONS = [
+    '# Content Strategy Brief',
+    '## Objective',
+    '## Target Audience',
+    '## Key Topics',
+    '## Product / Service Focus',
+    '## Content Style',
+    '## Deliverables',
+    '## Success Goal',
+    '## Expected Output',
+  ];
+
+  it('contains every required section heading', () => {
+    for (const heading of REQUIRED_SECTIONS) {
+      expect(STRATEGY_BRIEF_TEMPLATE).toContain(heading);
+    }
+  });
+
+  it('uses generic placeholders, never hardcoded example values', () => {
+    for (const excluded of EXCLUDED_EXAMPLE_VALUES) {
+      expect(STRATEGY_BRIEF_TEMPLATE).not.toContain(excluded);
+    }
+  });
+});
+
+describe('CONTENT_PLAN_GUIDANCE', () => {
+  it('states that the plan shape derives from the approved brief', () => {
+    expect(CONTENT_PLAN_GUIDANCE).toContain('approved brief');
+  });
+
+  it('forbids hardcoded post or week counts', () => {
+    expect(CONTENT_PLAN_GUIDANCE).toContain('never hardcode');
+  });
+
+  it('uses generic placeholders, never hardcoded example values', () => {
+    for (const excluded of EXCLUDED_EXAMPLE_VALUES) {
+      expect(CONTENT_PLAN_GUIDANCE).not.toContain(excluded);
+    }
+  });
+});
 
 describe('social-media-strategist-agent (registration and identity)', () => {
   it('exposes the stable agent id constant', () => {
