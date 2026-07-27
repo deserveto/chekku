@@ -66,17 +66,17 @@ beforeEach(() => {
 });
 
 describe('competitive analyses list page', () => {
-  it('renders a labeled keyboard-scrollable table with analysis metadata', async () => {
+  it('renders report cards in a labeled list with analysis metadata', async () => {
     const markup = renderToStaticMarkup(await CompetitiveAnalysesPage());
 
-    expect(markup).toContain('class="studio-report-table-wrap studio-panel"');
-    expect(markup).toContain('tabindex="0"');
-    expect(markup).toContain('role="region"');
+    expect(markup).toContain('class="studio-report-grid"');
+    expect(markup).toContain('role="list"');
     expect(markup).toContain('aria-label="Saved competitive analyses"');
+    expect(markup).toContain('studio-report-card');
     expect(markup).toContain(`/reports/competitive/${analysisId}`);
-    expect(markup).toContain('<td>GPT</td>');
-    expect(markup).toContain('<td>5</td>');
-    expect(markup).toContain('<td>6</td>');
+    expect(markup).toContain('<h3>GPT</h3>');
+    expect(markup).toContain('<dd>5</dd>');
+    expect(markup).toContain('<dd>6</dd>');
   });
 
   it('renders exact empty state', async () => {

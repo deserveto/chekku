@@ -47,37 +47,47 @@ export default async function CompetitiveAnalysesPage() {
             </div>
           ) : (
             <div
-              className="studio-report-table-wrap studio-panel"
-              tabIndex={0}
-              role="region"
+              className="studio-report-grid"
+              role="list"
               aria-label="Saved competitive analyses"
             >
-              <table className="studio-report-table">
-                <thead>
-                  <tr>
-                    <th>Analysis ID</th>
-                    <th>Created</th>
-                    <th>Anchor product</th>
-                    <th>Competitors</th>
-                    <th>Sources</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {analyses.map((analysis) => (
-                    <tr key={analysis.analysisId}>
-                      <td>
-                        <Link href={`/reports/competitive/${encodeURIComponent(analysis.analysisId)}`}>
-                          {analysis.analysisId}
-                        </Link>
-                      </td>
-                      <td>{formatPmReportCreatedAt(analysis.createdAt)}</td>
-                      <td>{analysis.anchorProduct}</td>
-                      <td>{analysis.competitorNames.length}</td>
-                      <td>{analysis.sourceCount}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              {analyses.map((analysis) => (
+                <article className="studio-report-card" role="listitem" key={analysis.analysisId}>
+                  <div className="studio-agent-card-top">
+                    <span className="studio-agent-glyph" aria-hidden="true">◎</span>
+                    <span className="studio-source-badge">Market</span>
+                  </div>
+
+                  <div>
+                    <h3>{analysis.anchorProduct}</h3>
+                    <code>{analysis.analysisId}</code>
+                  </div>
+
+                  <dl className="studio-agent-meta">
+                    <div>
+                      <dt>Created</dt>
+                      <dd>{formatPmReportCreatedAt(analysis.createdAt)}</dd>
+                    </div>
+                    <div>
+                      <dt>Competitors</dt>
+                      <dd>{analysis.competitorNames.length}</dd>
+                    </div>
+                    <div>
+                      <dt>Sources</dt>
+                      <dd>{analysis.sourceCount}</dd>
+                    </div>
+                  </dl>
+
+                  <div className="studio-card-actions">
+                    <Link
+                      className="studio-button studio-button-primary"
+                      href={`/reports/competitive/${encodeURIComponent(analysis.analysisId)}`}
+                    >
+                      View analysis
+                    </Link>
+                  </div>
+                </article>
+              ))}
             </div>
           )}
         </section>

@@ -19,6 +19,7 @@ Chekku provides a focused interface for managing agents, creating agent-specific
 - **Agent Studio** — browse code-defined and stored agents from one registry.
 - **Stored-agent builder** — create, edit, delete, and hydrate agents through `@mastra/editor`.
 - **Agent-isolated history** — each agent owns its own Memory threads and conversation list.
+- **Slash-command picker** — typing `/` at the start of the chat input opens the active agent's user-invocable skills; selecting one inserts `/<skill-name> ` (for example, `/competitive-analysis gpt vs claude vs gemini`), and Enter sends through the normal path.
 - **OpenAI-compatible models** — connect Rafiqspace LLM, LiteLLM, vLLM, or another compatible endpoint with server-only credentials.
 - **Browser QA agent** — navigate and inspect live websites using Mastra Agent Browser.
 - **Android QA agent** — drive Android apps through Maestro on a local emulator or device with allowlisted tools (flows run directly, no approval gate).

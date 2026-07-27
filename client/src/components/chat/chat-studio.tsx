@@ -10,9 +10,20 @@ import {
   useState,
 } from 'react';
 import { useRouter } from 'next/navigation';
+import { CommandMenu } from '@/components/chat/command-menu';
+import {
+  commandFilterText,
+  isCommandInput,
+  resolveCommandKey,
+  selectSkillByIndex,
+} from '@/components/chat/command-picker';
 import { MarkdownMessage } from '@/components/markdown-message';
 import { ResizableSidebar } from '@/components/studio/resizable-sidebar';
 import { BrandMark } from '@/components/ui/brand-mark';
+import {
+  listAgentSkills,
+  type AgentSkillSummary,
+} from '@/lib/agent-skills';
 import { buildChatHref } from '@/lib/chat-route';
 import {
   listAgentThreads,
@@ -89,6 +100,9 @@ export function ChatStudio({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [tools, setTools] = useState<ToolEvent[]>([]);
   const [input, setInput] = useState('');
+  const [commandOpen, setCommandOpen] = useState(false);
+  const [commandIndex, setCommandIndex] = useState(0);
+  const [skills, setSkills] = useState<AgentSkillSummary[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -181,6 +195,23 @@ export function ChatStudio({
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, tools]);
+
+  useEffect(() => {
+    let cancelled = false;
+    listAgentSkills(agentId).then((result) => {
+      if (!cancelled) setSkills(result);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [agentId]);
+
+  const filteredSkills = useMemo(() => {
+    const filterText = commandFilterText(input);
+    if (filterText === '' || filterText === 'skills') return skills;
+    const needle = filterText.toLowerCase();
+    return skills.filter((s) => s.name.toLowerCase().includes(needle));
+  }, [input, skills]);
 
   const startNew = useCallback(
     (nextAgentId: string = agentId) => {
@@ -433,9 +464,43 @@ export function ChatStudio({
     void sendMessage(input);
   };
 
-  const keyDown = (
-    event: KeyboardEvent<HTMLTextAreaElement>,
-  ) => {
+  const applySelection = (name: string) => {
+    setInput(`/${name} `);
+    setCommandOpen(false);
+    setCommandIndex(0);
+  };
+
+  const selectCommand = () => {
+    const name = selectSkillByIndex(
+      commandIndex,
+      filteredSkills.map((s) => s.name),
+    );
+    if (name) applySelection(name);
+  };
+
+  const keyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    const action = resolveCommandKey(
+      event.key,
+      commandOpen,
+      filteredSkills.length > 0,
+    );
+    if (action !== 'default') event.preventDefault();
+    if (action === 'next') {
+      setCommandIndex((i) => i + 1);
+      return;
+    }
+    if (action === 'prev') {
+      setCommandIndex((i) => i - 1);
+      return;
+    }
+    if (action === 'select') {
+      selectCommand();
+      return;
+    }
+    if (action === 'close') {
+      setCommandOpen(false);
+      return;
+    }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       void sendMessage(input);
@@ -724,19 +789,34 @@ export function ChatStudio({
           )}
 
           <form className="chat-composer" onSubmit={submit}>
-            <textarea
-              ref={textareaRef}
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              onKeyDown={keyDown}
-              placeholder={
-                modelReady
-                  ? `Message ${currentAgent?.name || agentId}…`
-                  : 'Configure the server model first…'
-              }
-              disabled={!modelReady || isStreaming}
-              rows={1}
-            />
+            <div className="chat-composer__input">
+              {commandOpen && filteredSkills.length > 0 ? (
+                <CommandMenu
+                  commands={filteredSkills}
+                  activeIndex={commandIndex}
+                  onSelect={applySelection}
+                />
+              ) : null}
+              <textarea
+                ref={textareaRef}
+                value={input}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setInput(value);
+                  const isCommand = isCommandInput(value);
+                  setCommandOpen(isCommand);
+                  if (isCommand) setCommandIndex(0);
+                }}
+                onKeyDown={keyDown}
+                placeholder={
+                  modelReady
+                    ? `Message ${currentAgent?.name || agentId}…`
+                    : 'Configure the server model first…'
+                }
+                disabled={!modelReady || isStreaming}
+                rows={1}
+              />
+            </div>
 
             <footer>
               <div>

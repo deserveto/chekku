@@ -22,14 +22,46 @@ export default async function ReportsPage() {
         <section className="studio-section">
           <div className="studio-report-choice-grid">
             <Link className="studio-report-choice studio-panel" href="/reports/weekly">
-              <p className="studio-eyebrow">Risk review</p>
+              <div className="studio-agent-card-top">
+                <span className="studio-agent-glyph" aria-hidden="true">◇</span>
+                <span className="studio-source-badge">Risk review</span>
+              </div>
               <h2>Weekly Reports</h2>
-              <p>Review saved engineering weekly analyses and risk ratings.</p>
+              <p>Review saved engineering weekly analyses, risk ratings, and original weekly input.</p>
+              <dl className="studio-agent-meta">
+                <div>
+                  <dt>Type</dt>
+                  <dd>Risk review</dd>
+                </div>
+                <div>
+                  <dt>Curated by</dt>
+                  <dd>PM Agent</dd>
+                </div>
+              </dl>
+              <div className="studio-card-actions">
+                <span className="studio-button studio-button-primary" aria-hidden="true">Browse reports →</span>
+              </div>
             </Link>
             <Link className="studio-report-choice studio-panel" href="/reports/competitive">
-              <p className="studio-eyebrow">Market research</p>
+              <div className="studio-agent-card-top">
+                <span className="studio-agent-glyph" aria-hidden="true">◎</span>
+                <span className="studio-source-badge">Market research</span>
+              </div>
               <h2>Competitive Analyses</h2>
               <p>Review saved product comparisons, feature matrices, and recommendations.</p>
+              <dl className="studio-agent-meta">
+                <div>
+                  <dt>Type</dt>
+                  <dd>Market research</dd>
+                </div>
+                <div>
+                  <dt>Curated by</dt>
+                  <dd>PM Agent</dd>
+                </div>
+              </dl>
+              <div className="studio-card-actions">
+                <span className="studio-button studio-button-primary" aria-hidden="true">Browse analyses →</span>
+              </div>
             </Link>
           </div>
         </section>

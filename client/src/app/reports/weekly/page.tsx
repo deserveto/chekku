@@ -46,35 +46,43 @@ export default async function WeeklyReportsPage() {
             </div>
           ) : (
             <div
-              className="studio-report-table-wrap studio-panel"
-              tabIndex={0}
-              role="region"
+              className="studio-report-grid"
+              role="list"
               aria-label="Saved PM reports"
             >
-              <table className="studio-report-table">
-                <thead>
-                  <tr>
-                    <th>Report id</th>
-                    <th>Created</th>
-                    <th>Rating</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {reports.map((report) => (
-                    <tr key={report.reportId}>
-                      <td>
-                        <Link href={`/reports/${encodeURIComponent(report.reportId)}`}>
-                          {report.reportId}
-                        </Link>
-                      </td>
-                      <td>{formatPmReportCreatedAt(report.createdAt)}</td>
-                      <td>{report.rating}/10</td>
-                      <td>{report.status}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              {reports.map((report) => (
+                <article className="studio-report-card" role="listitem" key={report.reportId}>
+                  <div className="studio-agent-card-top">
+                    <span className="studio-agent-glyph" aria-hidden="true">◇</span>
+                    <span className="studio-source-badge">{report.status}</span>
+                  </div>
+
+                  <div>
+                    <h3>{formatPmReportCreatedAt(report.createdAt)}</h3>
+                    <code>{report.reportId}</code>
+                  </div>
+
+                  <dl className="studio-agent-meta">
+                    <div>
+                      <dt>Rating</dt>
+                      <dd>{report.rating}/10</dd>
+                    </div>
+                    <div>
+                      <dt>Status</dt>
+                      <dd>{report.status}</dd>
+                    </div>
+                  </dl>
+
+                  <div className="studio-card-actions">
+                    <Link
+                      className="studio-button studio-button-primary"
+                      href={`/reports/${encodeURIComponent(report.reportId)}`}
+                    >
+                      View report
+                    </Link>
+                  </div>
+                </article>
+              ))}
             </div>
           )}
         </section>

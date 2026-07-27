@@ -67,6 +67,16 @@ describe('requested UI structure', () => {
     expect(chatStudio).not.toContain('const suggestions');
   });
 
+  it('keeps the slash-command picker intentional and not re-banned', () => {
+    // The retired suggestion grid stays banned above, but the command menu
+    // is the intentional replacement — pin it so it cannot be accidentally
+    // removed by a future suggestion-grid cleanup.
+    expect(chatStudio).toContain('CommandMenu');
+    expect(chatStudio).toContain(
+      "from '@/components/chat/command-menu'",
+    );
+  });
+
   it('keeps builder actions in normal document flow', () => {
     const rule = css.match(/\.studio-builder-footer\s*\{([\s\S]*?)\}/)?.[1] ?? '';
     expect(rule).not.toContain('position: sticky');
@@ -138,13 +148,13 @@ describe('requested UI structure', () => {
     expect(competitiveAnalysisDetailPage).not.toContain("from '@chekku/storage'");
   });
 
-  it('keeps report tables accessible and renders competitive Markdown through shared wrapper', () => {
-    expect(reportListPage).toContain('className="studio-report-table-wrap studio-panel"');
-    expect(reportListPage).toContain('tabIndex={0}');
+  it('keeps report lists accessible as card grids and renders competitive Markdown through shared wrapper', () => {
+    expect(reportListPage).toContain('className="studio-report-grid"');
     expect(reportListPage).toContain('aria-label="Saved PM reports"');
-    expect(competitiveAnalysisListPage).toContain('className="studio-report-table-wrap studio-panel"');
-    expect(competitiveAnalysisListPage).toContain('tabIndex={0}');
+    expect(reportListPage).toContain('studio-report-card');
+    expect(competitiveAnalysisListPage).toContain('className="studio-report-grid"');
     expect(competitiveAnalysisListPage).toContain('aria-label="Saved competitive analyses"');
+    expect(competitiveAnalysisListPage).toContain('studio-report-card');
     expect(competitiveAnalysisDetailPage).toContain('<MarkdownMessage content={analysis.analysisMarkdown} />');
   });
 

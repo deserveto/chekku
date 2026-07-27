@@ -89,23 +89,20 @@ describe('reports landing page', () => {
 });
 
 describe('weekly reports list page', () => {
-  it('renders its table in a labeled keyboard-scrollable region', async () => {
+  it('renders report cards in a labeled list region', async () => {
     const markup = renderToStaticMarkup(await WeeklyReportsPage());
 
-    expect(markup).toContain('class="studio-report-table-wrap studio-panel"');
-    expect(markup).toContain('tabindex="0"');
-    expect(markup).toContain('role="region"');
+    expect(markup).toContain('class="studio-report-grid"');
+    expect(markup).toContain('role="list"');
     expect(markup).toContain('aria-label="Saved PM reports"');
+    expect(markup).toContain('studio-report-card');
   });
 
-  it('gives the report table region a visible focus style', () => {
+  it('gives report cards a visible hover lift', () => {
     const css = readFileSync(new URL('../studio.css', import.meta.url), 'utf8');
-    const focusRule = css.match(
-      /\.studio-report-table-wrap:focus-visible\s*\{([^}]*)\}/,
-    )?.[1];
+    const hoverRule = css.match(/\.studio-report-card:hover\s*\{([^}]*)\}/)?.[1];
 
-    expect(focusRule).toContain('outline: 1px solid var(--studio-ink)');
-    expect(focusRule).toContain('outline-offset: 2px');
+    expect(hoverRule).toContain('transform: translateY(-2px)');
   });
 
   it.each([
@@ -117,7 +114,7 @@ describe('weekly reports list page', () => {
 
     const markup = renderToStaticMarkup(await WeeklyReportsPage());
 
-    expect(markup).toContain(`<td>${expected}</td>`);
+    expect(markup).toContain(expected);
     expect(markup).not.toContain('Invalid Date');
   });
 
