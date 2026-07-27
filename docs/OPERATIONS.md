@@ -133,7 +133,7 @@ Local SearXNG runs pinned image `docker.io/searxng/searxng:2026.7.18-277d8469c`.
 
 `npm run setup` creates or reuses private `searxng/.env.local` with mode `0600`, generates the service secret once, and recreates configuration when tracked settings change. Do not copy that file into `agent/.env`; `setup-env.sh` writes `SEARXNG_BASE_URL=http://127.0.0.1:8888` to generated `agent/.env.development` and preserves a non-empty user-set `SEARXNG_API_KEY` from `agent/.env` (empty by default locally), the launcher strips all SearXNG values from the client process, and neither step prints private values.
 
-`search_web` is search-only. It returns bounded titles, HTTP(S) URLs, snippets, source engines, optional category/score/published time, answers, corrections, and suggestions; it never downloads result-page content. Use it to discover candidate URLs, then pass one chosen public result to `read_web_page`. PM competitive analysis remains deferred to separate independently reviewed work.
+`search_web` is search-only. It returns bounded titles, HTTP(S) URLs, snippets, source engines, optional category/score/published time, answers, corrections, and suggestions; it never downloads result-page content. Use it to discover candidate URLs, then pass one chosen public result to `read_web_page`. PM Agent's competitive skill owns selection, synthesis, and persistence; search does not.
 
 Input and transport limits:
 
@@ -181,7 +181,7 @@ Hosted-provider privacy and network boundary:
 - Chekku validates submitted and provider-reported URLs, but Jina performs remote DNS resolution and target fetching;
 - do not submit signed, OAuth, password-reset, or otherwise secret-bearing URLs.
 
-`read_web_page` accepts one public HTTP(S) URL at most 2,048 UTF-8 bytes. It reads one chosen page only: no search, crawling, recursive link following, authenticated pages, PDFs, uploads, screenshots, persistence, or competitive analysis. Fixed transport sends one `POST https://r.jina.ai/` request, rejects redirects from Jina API endpoint, uses one 30-second deadline, performs no retry, accepts JSON only, and stops response body above 2 MiB. Normalized title is at most 512 UTF-8 bytes; serialized tool output is at most 71,680 UTF-8 bytes with UTF-8-safe Markdown truncation.
+`read_web_page` accepts one public HTTP(S) URL at most 2,048 UTF-8 bytes. It reads one chosen page only: no search, crawling, recursive link following, authenticated pages, PDFs, uploads, screenshots, persistence, or built-in competitive orchestration. Fixed transport sends one `POST https://r.jina.ai/` request, rejects redirects from Jina API endpoint, uses one 30-second deadline, performs no retry, accepts JSON only, and stops response body above 2 MiB. Normalized title is at most 512 UTF-8 bytes; serialized tool output is at most 71,680 UTF-8 bytes with UTF-8-safe Markdown truncation.
 
 Safe failures cover missing configuration, disallowed URLs, cancellation, timeout, provider availability, unsupported format, oversized body, and invalid response. They do not include key, target URL, query string, fragment, endpoint, headers, provider body, status details, diagnostics, stack, timing, usage, or request ID. Do not add these details to logs or tickets.
 
@@ -196,6 +196,46 @@ npm run test:web-reader:live
 ```
 
 Without exported key, live command stops with local key-required test error before provider access. Live provider access is optional and not required by CI.
+
+## PM competitive analysis
+
+PM Agent exposes `weekly-report-analysis` and `competitive-analysis` as user-invocable skills. Weekly analysis behavior and `pmr_...` links remain unchanged. Competitive prompts may use slash convention or natural language:
+
+```text
+/competitive-analysis GPT vs Claude vs Gemini
+Compare Product X with similar incident-management platforms
+Run competitive analysis for Product X in SMB accounting, focusing on automation
+```
+
+First named product is anchor. Later named products are mandatory seeds. PM Agent expands fewer than five competitors to five through seven and asks user to narrow more than seven supplied competitors. One run uses at most five `search_web` calls (`maxResults: 10`, page 1), eight `read_web_page` calls, and one save. URLs come only from user input or search results. No crawler, recursive link following, QA-browser fallback, authenticated targets, PDFs, uploads, cookies, custom headers, signed URLs, alternate provider, new endpoint, or new credential exists.
+
+PM Agent enforces the 5/8/1 caps at tool-execute time (`withCompetitiveResearchBudget`), so over-budget calls reject without provider access regardless of what the model requests. Failed `search_web` and `read_web_page` calls consume slots; a failed `save_competitive_analysis_to_garage` call does not consume the save slot (only a successful save counts), so a save can be retried after a validation or transient error. `Web Reader is not configured.` latches the run terminal, so further Reader calls reject immediately without provider access; availability, timeout, and page-specific failures may consume remaining slots. The model may still request a blocked tool, but the call is rejected locally and cheaply.
+
+Complete report requires anchor plus five to seven competitors, each backed by one successfully read official/primary page. Search snippets are discovery-only. Reader Markdown is untrusted evidence and page-authored instructions must be ignored. Material claims use inline primary-source links. Feature cells use `Yes`, `Partial`, `No`, or `Unknown`; missing mention is `Unknown`, never `No`.
+
+Completed Markdown sections are:
+
+```text
+# Competitive Analysis: <anchor product>
+## Executive Summary
+## Scope and Competitor Selection
+## Product Profiles
+## Feature Matrix
+## Gaps and Opportunities
+## Risks and Confidence
+## Recommendations
+## Sources
+```
+
+If minimum evidence cannot be met within budget, PM Agent returns `Incomplete Competitive Analysis: <anchor product>`, identifies missing evidence and suggested user action, and does not save or emit `Saved analysisId:`. Complete work saves once. Save failure does not discard completed analysis; response adds one short safe failure line.
+
+Chat retrieval phrases should explicitly distinguish domains, for example `list saved competitive analyses` or `view pca_...`. Generic `list saved reports` remains weekly for compatibility. `pca_...` selects competitive detail; `pmr_...` selects weekly detail.
+
+## Chat slash-command picker
+
+Typing `/` as the first character of the chat input opens a keyboard-navigable picker listing the active agent's user-invocable skills. Arrow keys move the highlight, Enter or Tab inserts `/<skill-name> `, and Escape closes the picker without inserting. The picker filters skills by name as you continue typing after the slash (case-insensitive substring). Skills come from the active agent only: the client fetches the agent's serialized record through the same-origin `/api/agent/*` proxy and reads the `.skills` array, keeping only entries whose `user-invocable` flag is not `false`. Agents with no user-invocable skills show no rows and the picker stays closed. Inserting a skill does not send — finish the arguments and press Enter to dispatch through the normal message path, for example `/competitive-analysis gpt vs claude vs gemini`. The picker is client-only and adds no backend route.
+
+Optional live smoke: configure existing SearXNG and Web Reader values without printing them, run one benign public competitive request, confirm six to eight evidenced products, inline citations, one source mapping per product, and successful save/list/view. Do not use compromised or pasted keys. Live providers are optional and CI never requires them. Competitive analysis introduces no environment variables.
 
 ## Storage
 
@@ -252,16 +292,38 @@ Generated IDs and all repository, PM tool, and public report boundaries use `pmr
 
 Report interfaces:
 
-- `/reports` lists report ID, created time, risk rating, and status newest first.
+- `/reports` groups weekly and competitive report views.
+- `/reports/weekly` lists weekly report ID, created time, risk rating, and status newest first.
 - `/reports/[reportId]` renders saved analysis, metadata, then original weekly input.
 - `GET /api/storage/pm-reports` returns `{ reports }` after server identity validation.
 - `GET /api/storage/pm-reports/[reportId]` returns input, analysis, and metadata after identity and ID validation.
 
 All four report interfaces call `client/src/server/pm-reports.ts` directly in the Next.js server and use the temporary server-side `CHEKKU_LOCAL_USER_ID` seam. They do not pass through Mastra. Chat PM tool calls separately pass through `/api/agent/*` and Mastra. Browser code never contacts Garage. Missing identity returns 403; invalid IDs return 400 or page not-found; missing reports return 404; storage failures return bounded 503 responses without provider details.
 
-When PM Agent lists reports in chat, its code-defined list tool generates a deterministic GFM table and the agent returns it unchanged. Rows contain URL-encoded relative report links, compact UTC timestamps, ratings, and statuses. Links open in a new tab with `rel="noreferrer"`. Chat and `/reports` tables are labeled keyboard-focusable regions with visible focus styles and horizontal scrolling on narrow screens. Empty lists return `No saved reports found.` exactly; invalid stored timestamps remain visible rather than breaking the list.
+When PM Agent lists weekly reports in chat, its code-defined list tool generates a deterministic GFM table and agent returns it unchanged. Rows contain URL-encoded relative report links, compact UTC timestamps, ratings, and statuses. Links open in a new tab with `rel="noreferrer"`. Chat and `/reports/weekly` tables are labeled keyboard-focusable regions with visible focus styles and horizontal scrolling on narrow screens. Empty lists return `No saved reports found.` exactly; invalid stored timestamps remain visible rather than breaking the list.
 
 PM report tools are not exposed by Garage MCP. Generic stored-agent Garage access remains exactly `create_text_object`, `get_text_object`, `list_text_objects`, `replace_text_object`, and `delete_object`. Garage v2.3 external-writer race limitations above apply to PM writes as well.
+
+### Competitive analysis objects
+
+Competitive tools and `client/src/server/competitive-analyses.ts` use same fixed `pm-agent` namespace but separate logical objects:
+
+```text
+competitive-analyses/<analysisId>/request.md
+competitive-analyses/<analysisId>/analysis.md
+competitive-analyses/<analysisId>/metadata.json
+```
+
+IDs use `pca_YYYYMMDDHHMMSS_<8 lowercase hex>` and enforce `^pca_[0-9]{14}_[0-9a-f]{8}$`. Metadata writes last, retains only canonical relative keys and bounded product data, and derives product/source counts. Save input requires five to seven unique competitors plus exactly one unique normalized public source URL for anchor and every competitor. Presentation-only `analysisUrl` and `analysesMarkdown` never enter storage or view output.
+
+Competitive interfaces:
+
+- `/reports/competitive` lists analysis ID, created time, anchor, competitor count, and source count newest first.
+- `/reports/competitive/[analysisId]` renders analysis, metadata, then original request.
+- `GET /api/storage/competitive-analyses` returns `{ analyses }` after server identity validation.
+- `GET /api/storage/competitive-analyses/[analysisId]` returns request, analysis, and metadata after identity and ID validation.
+
+Competitive chat lists return deterministic `analysesMarkdown` unchanged. Empty text is exactly `No saved competitive analyses found.` Lists and feature matrices use same accessible horizontal-scroll wrapper as weekly tables. Missing identity returns 403; invalid IDs return 400 or page not-found; missing analyses return 404; storage failures return fixed 503 messages without physical keys or provider details.
 
 ## Browser operation
 
@@ -411,7 +473,13 @@ Jina Reader is hosted dependency. Confirm outbound HTTPS access from Mastra host
 
 ### PM report is unavailable
 
-Confirm the report ID uses canonical public format and all five `GARAGE_*` values reach both agent and Next.js server processes. PM Agent can save through the agent process while `/reports` still fails if the client server lacks Garage configuration. Do not copy generated credentials into tracked files or bypass the fixed `pm-agent` namespace.
+Confirm report ID uses canonical `pmr_...` or `pca_...` format and all five `GARAGE_*` values reach both agent and Next.js server processes. PM Agent can save through agent process while report pages fail if client server lacks Garage configuration. Check `/reports/weekly` for weekly lists and `/reports/competitive` for competitive lists. Do not copy generated credentials into tracked files or bypass fixed `pm-agent` namespace.
+
+### Competitive analysis is incomplete
+
+This is not storage failure. Inspect named missing products/evidence and suggested action. Supply an official public product page, replace an agent-selected candidate, or change mandatory seed set, then rerun. Do not lower five-competitor minimum, treat search snippets as evidence, infer `No` from silence, or manually persist partial output.
+
+An incomplete response must start with `# Incomplete Competitive Analysis: <anchor product>`, make claims only from successful current-run reads, omit save calls, and contain no `Saved analysisId:`. Unevidenced products may appear only as missing-evidence entries with safe failure context and suggested action.
 
 ### Garage object storage is not configured
 
@@ -515,7 +583,7 @@ npm run build
 git diff --check
 ```
 
-The test suite covers model routing, model discovery, prompt normalization, all five built-in agents, Telegram roles and slash commands, email delivery, PM tools and repositories, report APIs/pages and accessible tables, stored-agent payloads and fixed Garage/SearXNG/Web Reader hydration, bounded search and hosted reading transports with safe errors, stored-model migration, thread ownership, proxy paths, UI structure, namespaced storage, Garage adapter safety, Maestro flow runner, char-budget guard, and launcher behavior.
+The test suite covers model routing, model discovery, prompt normalization, all five built-in agents, Telegram roles and slash commands, email delivery, weekly and competitive PM skills/tools/repositories, report APIs/pages and accessible tables, stored-agent payloads and fixed Garage/SearXNG/Web Reader hydration, bounded search and hosted reading transports with safe errors, stored-model migration, thread ownership, proxy paths, UI structure, namespaced storage, Garage adapter safety, Maestro flow runner, char-budget guard, and launcher behavior.
 
 ## Production run
 

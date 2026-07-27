@@ -37,8 +37,11 @@ function readOptionalSource(path: string): string {
     return '';
   }
 }
-const reportListPage = readOptionalSource('../app/reports/page.tsx');
+const reportLandingPage = readOptionalSource('../app/reports/page.tsx');
+const reportListPage = readOptionalSource('../app/reports/weekly/page.tsx');
 const reportDetailPage = readOptionalSource('../app/reports/[reportId]/page.tsx');
+const competitiveAnalysisListPage = readOptionalSource('../app/reports/competitive/page.tsx');
+const competitiveAnalysisDetailPage = readOptionalSource('../app/reports/competitive/[analysisId]/page.tsx');
 
 describe('requested UI structure', () => {
   it('lets each sidebar place its collapse control in the brand row', () => {
@@ -62,6 +65,16 @@ describe('requested UI structure', () => {
     expect(chatStudio).not.toContain('Chat with a stored agent');
     expect(chatStudio).not.toContain('chat-suggestion-grid');
     expect(chatStudio).not.toContain('const suggestions');
+  });
+
+  it('keeps the slash-command picker intentional and not re-banned', () => {
+    // The retired suggestion grid stays banned above, but the command menu
+    // is the intentional replacement — pin it so it cannot be accidentally
+    // removed by a future suggestion-grid cleanup.
+    expect(chatStudio).toContain('CommandMenu');
+    expect(chatStudio).toContain(
+      "from '@/components/chat/command-menu'",
+    );
   });
 
   it('keeps builder actions in normal document flow', () => {
@@ -108,13 +121,41 @@ describe('requested UI structure', () => {
     expect(reportListPage).toContain('role="alert"');
   });
 
+  it('groups weekly and competitive report routes without changing weekly detail URLs', () => {
+    expect(reportLandingPage).toContain("export const dynamic = 'force-dynamic'");
+    expect(reportLandingPage).toContain('href="/reports/weekly"');
+    expect(reportLandingPage).toContain('href="/reports/competitive"');
+    expect(reportListPage).toContain('href={`/reports/${encodeURIComponent(report.reportId)}`}');
+    expect(competitiveAnalysisListPage).toContain(
+      'href={`/reports/competitive/${encodeURIComponent(analysis.analysisId)}`}',
+    );
+  });
+
   it('keeps Garage report access server-only', () => {
+    expect(reportLandingPage).not.toContain("'use client'");
     expect(reportListPage).not.toContain("'use client'");
     expect(reportDetailPage).not.toContain("'use client'");
+    expect(competitiveAnalysisListPage).not.toContain("'use client'");
+    expect(competitiveAnalysisDetailPage).not.toContain("'use client'");
     expect(reportListPage).toContain("from '@/server/pm-reports'");
     expect(reportDetailPage).toContain("from '@/server/pm-reports'");
+    expect(competitiveAnalysisListPage).toContain("from '@/server/competitive-analyses'");
+    expect(competitiveAnalysisDetailPage).toContain("from '@/server/competitive-analyses'");
+    expect(reportLandingPage).not.toContain("from '@chekku/storage'");
     expect(reportListPage).not.toContain("from '@chekku/storage'");
     expect(reportDetailPage).not.toContain("from '@chekku/storage'");
+    expect(competitiveAnalysisListPage).not.toContain("from '@chekku/storage'");
+    expect(competitiveAnalysisDetailPage).not.toContain("from '@chekku/storage'");
+  });
+
+  it('keeps report lists accessible as card grids and renders competitive Markdown through shared wrapper', () => {
+    expect(reportListPage).toContain('className="studio-report-grid"');
+    expect(reportListPage).toContain('aria-label="Saved PM reports"');
+    expect(reportListPage).toContain('studio-report-card');
+    expect(competitiveAnalysisListPage).toContain('className="studio-report-grid"');
+    expect(competitiveAnalysisListPage).toContain('aria-label="Saved competitive analyses"');
+    expect(competitiveAnalysisListPage).toContain('studio-report-card');
+    expect(competitiveAnalysisDetailPage).toContain('<MarkdownMessage content={analysis.analysisMarkdown} />');
   });
 
   it('reserves the PM built-in id in the shared identity set', () => {

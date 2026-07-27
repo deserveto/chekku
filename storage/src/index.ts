@@ -29,6 +29,17 @@ export {
   type SavePmReportInput,
 } from './pm-reports.ts';
 export {
+  competitiveAnalysisKeysFor,
+  createCompetitiveAnalysisId,
+  createCompetitiveAnalysisStorage,
+  getCompetitiveAnalysis,
+  listCompetitiveAnalyses,
+  saveCompetitiveAnalysis,
+  type CompetitiveAnalysisMetadata,
+  type CompetitiveAnalysisReadResult,
+  type SaveCompetitiveAnalysisInput,
+} from './competitive-analyses.ts';
+export {
   SOCIAL_MEDIA_AGENT_ID,
   buildSocialPostMetadata,
   createPostId,

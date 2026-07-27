@@ -1,6 +1,7 @@
 import type { ObjectStorage } from '@chekku/storage';
 import { describe, expect, it } from 'vitest';
 
+import { escapeMarkdownTableCell, formatStoredCreatedAt } from './markdown-table.js';
 import {
   createListPmReportsFromGarageTool,
   createSavePmReportToGarageTool,
@@ -60,6 +61,14 @@ const report = (reportId: string, createdAt: string, rating: number, status: 'ON
 });
 
 describe('PM report tools', () => {
+  it('shares weekly-safe table and timestamp formatting without changing output', () => {
+    expect(escapeMarkdownTableCell('bad\r\n|www.example')).toBe(
+      'bad\\r\\n\\|w&#8203;ww\\.&#8203;example',
+    );
+    expect(formatStoredCreatedAt('2026-07-15T11:26:42.702Z')).toBe('2026-07-15 11:26 UTC');
+    expect(formatStoredCreatedAt('not|a\\date')).toBe('not\\|a\\\\date');
+  });
+
   it('formats report lists as deterministic Markdown tables', () => {
     expect(formatPmReportsMarkdown([
       report('pmr_20260715112642_00000001', '2026-07-15T11:26:42.702Z', 8, 'IN-DANGER'),
