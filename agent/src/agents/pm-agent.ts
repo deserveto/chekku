@@ -1,5 +1,6 @@
 import { Agent, type AgentConfig, type ToolsInput } from '@mastra/core/agent';
 
+import { createCompetitiveResearchGuard } from '../mastra/processors/competitive-research-guard.js';
 import { createAgentContextLimiter, createAgentMemory, createCharBudgetGuard } from '../mastra/processors/context-limit.js';
 import { getServerModel } from '../providers/model.js';
 import {
@@ -9,6 +10,7 @@ import {
 } from '../mastra/tools/competitive-analysis-tools.js';
 import { searchWebTool } from '../mastra/tools/searxng-search.js';
 import { readWebPageTool } from '../mastra/tools/web-reader.js';
+import { withCompetitiveResearchBudget } from '../mastra/tools/competitive-research-budget.js';
 import {
   listPmReportsFromGarageTool,
   savePmReportToGarageTool,
@@ -37,18 +39,22 @@ const pmAgentConfig: AgentConfig<string, ToolsInput, undefined, ProviderContext>
   model: () => getServerModel(),
   requestContextSchema: providerContextSchema,
   tools: {
-    save_competitive_analysis_to_garage: saveCompetitiveAnalysisToGarageTool,
+    save_competitive_analysis_to_garage: withCompetitiveResearchBudget('save_competitive_analysis_to_garage', saveCompetitiveAnalysisToGarageTool),
     list_competitive_analyses_from_garage: listCompetitiveAnalysesFromGarageTool,
     view_competitive_analysis_from_garage: viewCompetitiveAnalysisFromGarageTool,
     save_pm_report_to_garage: savePmReportToGarageTool,
     list_pm_reports_from_garage: listPmReportsFromGarageTool,
     view_pm_report_from_garage: viewPmReportFromGarageTool,
-    search_web: searchWebTool,
-    read_web_page: readWebPageTool,
+    search_web: withCompetitiveResearchBudget('search_web', searchWebTool),
+    read_web_page: withCompetitiveResearchBudget('read_web_page', readWebPageTool),
   },
   skills: [weeklyReportAnalysisSkill, competitiveAnalysisSkill],
   memory: createAgentMemory(),
-  inputProcessors: [createAgentContextLimiter(), createCharBudgetGuard()],
+  inputProcessors: [
+    createCompetitiveResearchGuard(),
+    createAgentContextLimiter(),
+    createCharBudgetGuard(),
+  ],
   defaultOptions: { maxSteps: 18 },
   instructions,
 };

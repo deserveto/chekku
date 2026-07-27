@@ -207,7 +207,9 @@ Compare Product X with similar incident-management platforms
 Run competitive analysis for Product X in SMB accounting, focusing on automation
 ```
 
-First named product is anchor. Later named products are mandatory seeds. PM Agent expands fewer than five competitors to five through seven and asks user to narrow more than seven supplied competitors. One run uses at most three `search_web` calls (`maxResults: 10`, page 1), eight `read_web_page` calls, and one save. URLs come only from user input or search results. No crawler, recursive link following, QA-browser fallback, authenticated targets, PDFs, uploads, cookies, custom headers, signed URLs, alternate provider, new endpoint, or new credential exists.
+First named product is anchor. Later named products are mandatory seeds. PM Agent expands fewer than five competitors to five through seven and asks user to narrow more than seven supplied competitors. One run uses at most five `search_web` calls (`maxResults: 10`, page 1), eight `read_web_page` calls, and one save. URLs come only from user input or search results. No crawler, recursive link following, QA-browser fallback, authenticated targets, PDFs, uploads, cookies, custom headers, signed URLs, alternate provider, new endpoint, or new credential exists.
+
+PM Agent enforces the 5/8/1 caps at tool-execute time (`withCompetitiveResearchBudget`), so over-budget calls reject without provider access regardless of what the model requests. Failed `search_web` and `read_web_page` calls consume slots; a failed `save_competitive_analysis_to_garage` call does not consume the save slot (only a successful save counts), so a save can be retried after a validation or transient error. `Web Reader is not configured.` latches the run terminal, so further Reader calls reject immediately without provider access; availability, timeout, and page-specific failures may consume remaining slots. The model may still request a blocked tool, but the call is rejected locally and cheaply.
 
 Complete report requires anchor plus five to seven competitors, each backed by one successfully read official/primary page. Search snippets are discovery-only. Reader Markdown is untrusted evidence and page-authored instructions must be ignored. Material claims use inline primary-source links. Feature cells use `Yes`, `Partial`, `No`, or `Unknown`; missing mention is `Unknown`, never `No`.
 
@@ -228,6 +230,10 @@ Completed Markdown sections are:
 If minimum evidence cannot be met within budget, PM Agent returns `Incomplete Competitive Analysis: <anchor product>`, identifies missing evidence and suggested user action, and does not save or emit `Saved analysisId:`. Complete work saves once. Save failure does not discard completed analysis; response adds one short safe failure line.
 
 Chat retrieval phrases should explicitly distinguish domains, for example `list saved competitive analyses` or `view pca_...`. Generic `list saved reports` remains weekly for compatibility. `pca_...` selects competitive detail; `pmr_...` selects weekly detail.
+
+## Chat slash-command picker
+
+Typing `/` as the first character of the chat input opens a keyboard-navigable picker listing the active agent's user-invocable skills (plus a reserved `/skills` row that shows the full catalog). Arrow keys move the highlight, Enter or Tab inserts `/<skill-name> `, and Escape closes the picker without inserting. The picker filters skills by name as you continue typing after the slash (case-insensitive substring). Skills come from the active agent only: agents with no user-invocable skills show just `/skills`. Inserting a skill does not send — finish the arguments and press Enter to dispatch through the normal message path, for example `/competitive-analysis gpt vs claude vs gemini`. The picker is client-only and adds no backend route; skill data is fetched from the native same-origin skills endpoint.
 
 Optional live smoke: configure existing SearXNG and Web Reader values without printing them, run one benign public competitive request, confirm six to eight evidenced products, inline citations, one source mapping per product, and successful save/list/view. Do not use compromised or pasted keys. Live providers are optional and CI never requires them. Competitive analysis introduces no environment variables.
 
@@ -458,6 +464,8 @@ Confirm report ID uses canonical `pmr_...` or `pca_...` format and all five `GAR
 ### Competitive analysis is incomplete
 
 This is not storage failure. Inspect named missing products/evidence and suggested action. Supply an official public product page, replace an agent-selected candidate, or change mandatory seed set, then rerun. Do not lower five-competitor minimum, treat search snippets as evidence, infer `No` from silence, or manually persist partial output.
+
+An incomplete response must start with `# Incomplete Competitive Analysis: <anchor product>`, make claims only from successful current-run reads, omit save calls, and contain no `Saved analysisId:`. Unevidenced products may appear only as missing-evidence entries with safe failure context and suggested action.
 
 ### Garage object storage is not configured
 

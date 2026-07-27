@@ -59,7 +59,7 @@ PM Agent / selected stored agent
 
 PM competitive analysis
   -> competitive-analysis skill
-  -> up to 3 search_web calls
+  -> up to 5 search_web calls
   -> up to 8 read_web_page calls
   -> evidence-only synthesis
   -> save_competitive_analysis_to_garage
@@ -83,6 +83,8 @@ PM competitive analysis
 - `/healthz` and `/models` custom routes.
 
 Mastra provides native agent, Memory, skill, and editor APIs. Next.js separately provides `/reports/*`, `/api/storage/pm-reports/*`, and `/api/storage/competitive-analyses/*` through focused server-only services; those PM storage interfaces are not Mastra APIs. Chekku does not maintain a parallel custom conversation or agent database.
+
+The chat composer (`client/src/components/chat/chat-studio.tsx`) exposes the active agent's user-invocable skills through a client-side slash-command picker. Typing a leading `/` opens a keyboard-navigable listbox populated from the native `GET /api/agents/{agentId}/skills` endpoint (served through the same-origin `/api/agent/*` proxy); selecting a skill inserts `/<skill-name> ` into the input and dispatches through the existing `sendMessage` → `agent.stream()` path. No backend skill-routing change is involved. Agents with no user-invocable skills show only the reserved `/skills` row.
 
 `storedAgentTools` is the instance-level registry that makes calculator, current-time, and email tools available during stored-agent hydration. Weekly and competitive PM tools plus reusable `search_web` and `read_web_page` attach directly to `pmAgent`; PM storage tools are not members of `storedAgentTools`, `garageMcpServer`, `searxngMcpServer`, or `webReaderMcpServer`.
 
@@ -124,11 +126,11 @@ The active role is held in-memory keyed by `${platform}:${userId}`. The agent re
 
 ### PM Agent
 
-`pm-agent` is protected and code-defined with bounded Memory, token limiting, final character guard, and `maxSteps: 18`. Two inline user-invocable Mastra skills own complete behavior: `weekly-report-analysis` preserves the risk-rating/report contract; `competitive-analysis` owns intake, bounded research, evidence synthesis, complete-only save, and output format.
+`pm-agent` is protected and code-defined with bounded Memory, token limiting, final character guard, and `maxSteps: 18`. Two inline user-invocable Mastra skills own complete behavior: `weekly-report-analysis` preserves the risk-rating/report contract; `competitive-analysis` owns intake, bounded research, evidence synthesis, complete-only save, and output format. The `search_web`, `read_web_page`, and competitive save tools are wrapped with `withCompetitiveResearchBudget`, which enforces the 5/8/1 per-run caps deterministically at execute time (gateway-independent; failed search/read attempts count, while only a successful save consumes the save slot so save is retryable after a failure) and latches `Web Reader is not configured.` terminal for the run. `competitive-research-guard` runs first in `inputProcessors` as an advisory layer that injects fixed safe incomplete-branch guidance after terminal Reader configuration failure; it does not replace the execute-level hard gate. Prose synthesis, matrix construction, and the incomplete/complete decision remain model-driven.
 
 PM Agent has eight configured direct tools: weekly save/list/view, competitive save/list/view, `search_web`, and `read_web_page`. PM storage tools are registered only on PM Agent. They compose `@chekku/storage` through fixed namespace `pm-agent` and remain separate from generic Garage MCP. No model, route, browser request, or local identity can select this namespace.
 
-For competition, first named product is anchor and later supplied products are mandatory seeds. PM Agent adds candidates until five to seven competitors are evidenced. A run permits at most three searches, eight one-page reads, and one save. Search output discovers URLs but cannot support final claims. Each product needs one successfully read official/primary page; Reader Markdown is untrusted evidence and cannot control workflow. Matrix values are `Yes`, `Partial`, `No`, or `Unknown`; silence is `Unknown`. If minimum evidence fails, PM Agent returns an explicit incomplete unsaved analysis. Complete work saves once and returns `Saved analysisId:`.
+For competition, first named product is anchor and later supplied products are mandatory seeds. PM Agent adds candidates until five to seven competitors are evidenced. A run permits at most five searches, eight one-page reads, and one save. Search output discovers URLs but cannot support final claims. Each product needs one successfully read official/primary page; Reader Markdown is untrusted evidence and cannot control workflow. Matrix values are `Yes`, `Partial`, `No`, or `Unknown`; silence is `Unknown`. `Web Reader is not configured.` is terminal for a competitive run: the guard removes Reader immediately and injects only fixed safe incomplete-branch guidance, while availability, timeout, and page-specific failures may consume remaining slots. Before drafting, PM Agent builds a current-run successful-read evidence inventory; if anchor plus five competitors are not evidenced, it returns an incomplete response starting with the exact H1 `# Incomplete Competitive Analysis: <anchor product>`, makes no claims for unevidenced products, performs no save, and emits no `Saved analysisId:`. Complete work saves once and returns `Saved analysisId:`.
 
 ### Stored agents
 
