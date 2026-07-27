@@ -31,6 +31,7 @@ describe('agent server routes', () => {
       'qaAndroidAgent',
       'qaWebAgent',
       'socialMediaContentWriter',
+      'socialMediaStrategistAgent',
       'socialMediaSupervisorAgent',
     ]);
     expect(
