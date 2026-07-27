@@ -10,7 +10,10 @@ import { z } from 'zod';
 // WEB_READER_API_KEY. Resolving relative to import.meta.url is deterministic
 // regardless of where the process was launched from.
 const moduleDir = dirname(fileURLToPath(import.meta.url));
-config({ path: resolve(moduleDir, '../../.env') });
+// `quiet: true` suppresses dotenv v17's `◇ injected env (N) from path // tip: …`
+// promotional log line, which would otherwise pollute server startup output
+// and trip startup-silence assertions in the web-reader/searxng tests.
+config({ path: resolve(moduleDir, '../../.env'), quiet: true });
 
 const optionalUrl = z.union([z.string().url(), z.literal('')]);
 
