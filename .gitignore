@@ -19,6 +19,7 @@ build/
 dist/
 .mastra/
 agent/src/mastra/public/
+agent/src/mastra/calendar/.cache/
 .turbo/
 .cache/
 coverage/

@@ -1,5 +1,19 @@
-import 'dotenv/config';
+import { config } from 'dotenv';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
 import { z } from 'zod';
+
+// Load agent/.env explicitly using the module's own directory rather than
+// process.cwd(). When scripts/dev.sh runs `npm run dev:agent` inside a
+// tmux pane with cwd set to the repo root, dotenv's default cwd-based
+// lookup fails to find agent/.env — which silently drops keys like
+// WEB_READER_API_KEY. Resolving relative to import.meta.url is deterministic
+// regardless of where the process was launched from.
+const moduleDir = dirname(fileURLToPath(import.meta.url));
+// `quiet: true` suppresses dotenv v17's `◇ injected env (N) from path // tip: …`
+// promotional log line, which would otherwise pollute server startup output
+// and trip startup-silence assertions in the web-reader/searxng tests.
+config({ path: resolve(moduleDir, '../../.env'), quiet: true });
 
 const optionalUrl = z.union([z.string().url(), z.literal('')]);
 
@@ -21,6 +35,16 @@ const envSchema = z.object({
   SEARXNG_BASE_URL: z.string().default(''),
   SEARXNG_API_KEY: z.string().default(''),
   WEB_READER_API_KEY: z.string().default(''),
+
+  // Public Holiday Indonesia API base URL. Optional — when unset, the
+  // weekly-social-drafts workflow falls back to the hardcoded SPECIAL_DAYS
+  // calendar only (no movable feasts like Idul Fitri / Idul Adha).
+  PUBLIC_HOLIDAY_API_BASE_URL: z.string().default('https://api-hari-libur.vercel.app/api'),
+
+  // Local filesystem directory for the per-year holiday cache. Relative to
+  // the agent workspace working directory. The directory and its contents
+  // are gitignored generated state.
+  PUBLIC_HOLIDAY_CACHE_DIR: z.string().default('src/mastra/calendar/.cache'),
 
   CHEKKU_DEFAULT_AGENT_ID: z.string().default('main-agent'),
   CHEKKU_LOCAL_USER_ID: z.string().default('local-user'),
