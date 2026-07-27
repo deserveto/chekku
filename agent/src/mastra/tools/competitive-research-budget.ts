@@ -11,6 +11,7 @@ const TOOL_LIMITS: Readonly<Record<string, number>> = {
 interface BudgetBucket {
   counts: Map<string, number>;
   terminalReaderConfig: boolean;
+  runSignature: string | null;
 }
 
 const buckets = new Map<string, BudgetBucket>();
@@ -23,10 +24,27 @@ function getBucket(agentId: string, threadId: string): BudgetBucket {
   const key = bucketKey(agentId, threadId);
   let bucket = buckets.get(key);
   if (!bucket) {
-    bucket = { counts: new Map(), terminalReaderConfig: false };
+    bucket = { counts: new Map(), terminalReaderConfig: false, runSignature: null };
     buckets.set(key, bucket);
   }
   return bucket;
+}
+
+function computeRunSignature(messages: unknown): string | null {
+  if (!Array.isArray(messages)) return null;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (!m || typeof m !== 'object') continue;
+    if ((m as { role?: string }).role !== 'user') continue;
+    const msg = m as { id?: string; content?: unknown };
+    if (typeof msg.id === 'string' && msg.id.length > 0) return `id:${msg.id}`;
+    try {
+      return `idx:${i}:${JSON.stringify(msg.content ?? '').slice(0, 80)}`;
+    } catch {
+      return `idx:${i}`;
+    }
+  }
+  return null;
 }
 
 function isReaderConfigurationError(value: unknown): boolean {
@@ -42,7 +60,7 @@ function isReaderConfigurationError(value: unknown): boolean {
 }
 
 interface AgentRunContext {
-  agent?: { agentId?: string; threadId?: string };
+  agent?: { agentId?: string; threadId?: string; messages?: unknown };
   abortSignal?: AbortSignal;
 }
 
@@ -66,6 +84,13 @@ export function withCompetitiveResearchBudget<T>(
       return originalExecute(input as never, context as never);
     }
     const bucket = getBucket(agentId, threadId);
+
+    const runSignature = computeRunSignature(ctx.agent?.messages);
+    if (runSignature !== null && bucket.runSignature !== runSignature) {
+      bucket.counts.clear();
+      bucket.terminalReaderConfig = false;
+      bucket.runSignature = runSignature;
+    }
 
     if (isReader && bucket.terminalReaderConfig) {
       throw new Error(READER_CONFIGURATION_MESSAGE);

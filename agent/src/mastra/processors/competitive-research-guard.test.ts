@@ -121,4 +121,37 @@ describe('competitive research guard', () => {
     expect(decision.activeTools).toEqual(tools);
     expect(decision.terminalConfigurationFailure).toBe(false);
   });
+
+  it('scopes counts to the current run (after the most recent user role)', () => {
+    const priorRun = [
+      msg('user', [{ type: 'text', text: 'first competitive analysis' }]),
+      msg('assistant', [toolInvocation('search_web')]),
+      msg('assistant', [toolInvocation('search_web')]),
+      msg('assistant', [toolInvocation('search_web')]),
+      msg('assistant', [toolInvocation('search_web')]),
+      msg('assistant', [toolInvocation('search_web')]),
+    ];
+    const currentRun = [
+      msg('user', [{ type: 'text', text: 'second competitive analysis' }]),
+      msg('assistant', [toolInvocation('search_web')]),
+      msg('assistant', [toolInvocation('search_web')]),
+    ];
+    const decision = getCompetitiveResearchDecision([...priorRun, ...currentRun], tools);
+
+    expect(decision.activeTools).toContain('search_web');
+  });
+
+  it('scopes terminal reader configuration failure to the current run', () => {
+    const priorRun = [
+      msg('user', [{ type: 'text', text: 'first competitive analysis' }]),
+      msg('assistant', [readerErrorInvocation('configuration', 'Web Reader is not configured.')]),
+    ];
+    const currentRun = [
+      msg('user', [{ type: 'text', text: 'second competitive analysis' }]),
+    ];
+    const decision = getCompetitiveResearchDecision([...priorRun, ...currentRun], tools);
+
+    expect(decision.terminalConfigurationFailure).toBe(false);
+    expect(decision.activeTools).toContain('read_web_page');
+  });
 });

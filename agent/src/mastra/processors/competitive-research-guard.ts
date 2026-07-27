@@ -60,6 +60,15 @@ function extractParts(message: ResearchMessage): ToolInvocationPart[] {
   return [];
 }
 
+function sliceCurrentRun(messages: readonly ResearchMessage[]): readonly ResearchMessage[] {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === 'user') {
+      return messages.slice(i);
+    }
+  }
+  return messages;
+}
+
 export function getCompetitiveResearchDecision(
   messages: readonly ResearchMessage[],
   availableTools: readonly string[],
@@ -67,7 +76,8 @@ export function getCompetitiveResearchDecision(
   const counts = new Map<string, number>();
   let terminalConfigurationFailure = false;
 
-  for (const message of messages) {
+  const currentRun = sliceCurrentRun(messages);
+  for (const message of currentRun) {
     for (const part of extractParts(message)) {
       const invocation = part?.toolInvocation;
       if (!invocation || typeof invocation.toolName !== 'string') continue;

@@ -80,7 +80,7 @@ PM Agent / selected stored agent
   -> bounded untrusted Markdown
 
 Competitive-analysis request
-  -> up to 3 searches -> up to 8 chosen-page reads
+  -> up to 5 searches -> up to 8 chosen-page reads
   -> evidence-only comparison -> one complete-only save
 
 SearXNG uses a server-owned endpoint (Mastra-only configuration):
@@ -368,7 +368,7 @@ Invoke either by natural language or prompt convention:
 Compare Product X with similar incident-management platforms
 ```
 
-Fewer than five supplied competitors are expanded automatically. More than seven supplied competitors requires narrowing before research. A run uses at most three `search_web` calls, eight one-page `read_web_page` calls, and one competitive save. Search discovers candidates but does not read pages. Reader content is untrusted evidence, never instructions. Every included product needs one successfully read official/primary page; missing feature mention is `Unknown`, not `No`. Incomplete work is clearly labeled and never saved.
+Fewer than five supplied competitors are expanded automatically. More than seven supplied competitors requires narrowing before research. A run uses at most five `search_web` calls, eight one-page `read_web_page` calls, and one competitive save. Search discovers candidates but does not read pages. Reader content is untrusted evidence, never instructions. Every included product needs one successfully read official/primary page; missing feature mention is `Unknown`, not `No`. Incomplete work is clearly labeled and never saved.
 
 PM Agent has eight direct tools: the three weekly save/list/view tools, three competitive save/list/view tools, `search_web`, and `read_web_page`. PM-only tools never enter Garage, SearXNG, Web Reader, or stored-agent registries; fixed MCP contracts remain unchanged.
 

@@ -98,4 +98,60 @@ describe('withCompetitiveResearchBudget', () => {
     for (let i = 0; i < 10; i++) await execOf(tool)({}, {});
     expect(calls).toBe(10);
   });
+
+  it('resets the budget when a new user message arrives in the same thread', async () => {
+    let calls = 0;
+    const tool = withCompetitiveResearchBudget('search_web', makeTool(async () => { calls++; return { ok: true }; }));
+    const ctxWith = (textContent: string) => ({
+      agent: {
+        agentId: 'pm-agent',
+        threadId: 'cap-reset',
+        messages: [{ id: `u-${textContent}`, role: 'user', content: textContent }],
+      },
+    });
+
+    for (let i = 0; i < 5; i++) {
+      await execOf(tool)({}, ctxWith('first competitive analysis'));
+    }
+    await expect(execOf(tool)({}, ctxWith('first competitive analysis'))).rejects.toThrow(/budget exhausted/);
+
+    for (let i = 0; i < 5; i++) {
+      await execOf(tool)({}, ctxWith('second competitive analysis'));
+    }
+    await expect(execOf(tool)({}, ctxWith('second competitive analysis'))).rejects.toThrow(/budget exhausted/);
+
+    expect(calls).toBe(10);
+  });
+
+  it('resets the save slot when a new user message arrives in the same thread', async () => {
+    let calls = 0;
+    const tool = withCompetitiveResearchBudget(
+      'save_competitive_analysis_to_garage',
+      makeTool(async () => { calls++; return { analysisId: `pca_${calls}` }; }),
+    );
+    const ctxWith = (textContent: string) => ({
+      agent: {
+        agentId: 'pm-agent',
+        threadId: 'cap-save-reset',
+        messages: [{ id: `u-${textContent}`, role: 'user', content: textContent }],
+      },
+    });
+
+    await execOf(tool)({}, ctxWith('first competitive analysis'));
+    await expect(execOf(tool)({}, ctxWith('first competitive analysis'))).rejects.toThrow(/already been saved/);
+
+    const second = await execOf(tool)({}, ctxWith('second competitive analysis'));
+    expect(second).toEqual({ analysisId: 'pca_2' });
+    expect(calls).toBe(2);
+  });
+
+  it('does not reset when messages are absent (preserves legacy per-thread accounting)', async () => {
+    let calls = 0;
+    const tool = withCompetitiveResearchBudget('search_web', makeTool(async () => { calls++; return { ok: true }; }));
+    for (let i = 0; i < 5; i++) {
+      await execOf(tool)({}, ctx('cap-no-messages'));
+    }
+    await expect(execOf(tool)({}, ctx('cap-no-messages'))).rejects.toThrow(/budget exhausted/);
+    expect(calls).toBe(5);
+  });
 });
