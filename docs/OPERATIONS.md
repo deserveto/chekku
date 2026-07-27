@@ -373,7 +373,7 @@ Common failures:
 - **No device** — the agent returns a Blocked result; start an emulator or connect a device and re-run.
 - **Flow not found** — confirm the logical name maps to `<workspace>/<suite>/<flow>.yaml` and that the file is a regular file inside the workspace.
 
-## Telegram channel (social-media-agent)
+## Telegram channel (social-media-content-writer)
 
 ```dotenv
 TELEGRAM_BOT_TOKEN=
@@ -401,11 +401,25 @@ Get a key at [resend.com](https://resend.com). The default `onboarding@resend.de
 
 ```dotenv
 SOCIAL_DRAFT_REVIEW_EMAIL=social-reviewer@example.com
+# Optional but recommended — drives Stage 2 trending research:
+SEARXNG_BASE_URL=http://localhost:8080
+SEARXNG_API_KEY=
+# Optional — movable feasts (Idul Fitri, Idul Adha, 1 Muharram, etc.).
+# Defaults to the public api-hari-libur instance; unset to opt out.
+PUBLIC_HOLIDAY_API_BASE_URL=https://api-hari-libur.vercel.app/api
+#PUBLIC_HOLIDAY_CACHE_DIR=src/mastra/calendar/.cache
+# Optional — enriches each chosen trending topic with the hosted Web Reader's
+# page markdown. Unset = snippet-only (same as before Phase 2b).
+WEB_READER_API_KEY=
 ```
 
-The `weekly-social-drafts` workflow fires every Monday at 09:00 Asia/Jakarta via Mastra's built-in scheduler (no separate registration). One run produces exactly two Instagram drafts: up to two fixed-date awareness days in the current Jakarta week, filled out by a deterministic evergreen-pillar rotation. Each caption is drafted through `social-media-agent` with the `instagram-writer` role pinned, then saved to the `social-media-agent` Garage namespace under `social-posts/<postId>/`. The run then emails a review link per draft to `SOCIAL_DRAFT_REVIEW_EMAIL`.
+The `weekly-social-drafts` workflow fires every Monday at 09:00 Asia/Jakarta via Mastra's built-in scheduler (no separate registration). One run drafts 2 base Instagram captions plus, when the week contains a holiday, 1 bonus awareness post (total 2–3 drafts). Base slots come from SearXNG trending research; when `WEB_READER_API_KEY` is set, each chosen topic is also enriched with the hosted Web Reader's page markdown (single-page read per topic, parallel, bounded — per-topic fetch failure falls back to snippet only). Remaining base slots are filled from the deterministic evergreen-pillar rotation when research yields fewer than 2 topics. Trending results that overlap the chosen awareness day are skipped so the bonus and a base slot do not duplicate the same theme. Each caption is drafted through the `social-media-content-writer` agent with the `instagram-writer` role pinned, then saved to the fixed `social-media-agent` Garage namespace (the `SOCIAL_MEDIA_AGENT_ID` storage constant, decoupled from the agent identity) under `social-posts/<postId>/`. The run then emails a review link per draft to `SOCIAL_DRAFT_REVIEW_EMAIL`.
 
-`SOCIAL_DRAFT_REVIEW_EMAIL` must be set per environment — there is no default. When unset, the workflow still drafts and saves both posts but skips the email step, recording `emailSent: false` and `emailError: 'SOCIAL_DRAFT_REVIEW_EMAIL is not set...'` in the run output. The workflow also needs `RESEND_API_KEY` for delivery and the five `GARAGE_*` values for persistence. Other email delivery failures are recorded in the run output (`emailSent: false`, `emailError`) without failing the run; saved drafts remain readable at `/social-posts` and `/social-posts/[postId]`. Stage 1 uses the hardcoded awareness-day calendar in `agent/src/mastra/workflows/special-days.ts`; movable feasts are intentionally excluded for deterministic scheduling.
+`SOCIAL_DRAFT_REVIEW_EMAIL` must be set per environment — there is no default. When unset, the workflow still drafts and saves posts but skips the email step, recording `emailSent: false` and `emailError: 'SOCIAL_DRAFT_REVIEW_EMAIL is not set...'` in the run output. The workflow also needs `RESEND_API_KEY` for delivery and the five `GARAGE_*` values for persistence. Other email delivery failures are recorded in the run output (`emailSent: false`, `emailError`) without failing the run; saved drafts remain readable at `/social-posts` and `/social-posts/[postId]`.
+
+`SEARXNG_BASE_URL` is optional. When unset (or when every research query fails), the workflow degrades to exactly 2 evergreen pillars with no awareness-day bonus and records a `researchNote` on the run output — research failure is never fatal.
+
+`PUBLIC_HOLIDAY_API_BASE_URL` resolves movable feasts (Idul Fitri, Idul Adha, 1 Muharram / Tahun Baru Islam, Isra Mi'raj, Maulid Nabi, Nyepi, Paskah, Waisak, Natal) so the awareness-day bonus is no longer limited to the fixed-date `SPECIAL_DAYS` calendar. The API response is cached per year under `PUBLIC_HOLIDAY_CACHE_DIR` (default `agent/src/mastra/calendar/.cache/`, gitignored) so a single fire does not re-fetch 30+ years of data. When unset or unreachable, the workflow falls back to fixed-date entries only (Hari Kartini, Hari Guru Nasional, Hari Bumi, etc.) — observance days still produce a bonus, movable feasts do not.
 
 Review interfaces:
 
@@ -571,6 +585,32 @@ git diff --check
 
 The test suite covers model routing, model discovery, prompt normalization, all five built-in agents, Telegram roles and slash commands, email delivery, weekly and competitive PM skills/tools/repositories, report APIs/pages and accessible tables, stored-agent payloads and fixed Garage/SearXNG/Web Reader hydration, bounded search and hosted reading transports with safe errors, stored-model migration, thread ownership, proxy paths, UI structure, namespaced storage, Garage adapter safety, Maestro flow runner, char-budget guard, and launcher behavior.
 
+## Production run
+
+`npm run prod` builds both workspaces and starts them together:
+
+```bash
+npm ci
+npm run prod
+```
+
+This is equivalent to `npm run build && npm run start`. To run them separately (for staged deploys or build hosts):
+
+```bash
+npm run build
+npm run start
+```
+
+`npm run start` runs `mastra start` (agent) and `next start` (client) side by side via `concurrently`. It does not provision local Docker services; production must reach Garage, SearXNG, and the model endpoint as external services or pre-provisioned infrastructure.
+
+Environment differences from local development:
+
+- `mastra start` loads `agent/.env` directly, not the generated `agent/.env.development` used by `mastra dev`. `npm run setup` (`scripts/setup-env.sh`) is an interactive local bootstrap: it prompts for `LLM_API_KEY` and the other runtime values and writes them straight into `agent/.env`. It is not a production secrets pipeline; provision production secrets through a deployment secret manager rather than an interactive local script.
+- Under `mastra start`, the server process cwd is `agent/.mastra/output` (Mastra spawns the built bundle there), not the agent workspace. `MAESTRO_WORKSPACE` and `MAESTRO_ARTIFACT_DIR` resolve relative to that cwd, so the `../maestro` and `../artifacts/maestro` defaults would land under `agent/.maestro/` and `agent/.mastra/artifacts/`. Use absolute paths in production, as the `mastra dev` note above already requires.
+- Server-only variables in `client/.env.local` are read at `next start` runtime, but `NEXT_PUBLIC_*` variables are inlined into the browser bundle at `next build` time, not at `next start`. `NEXT_PUBLIC_APP_URL` is consumed by `'use client'` code (`client/src/lib/mastra-client.ts`), so when build and start run on separate hosts the shipped bundle keeps the build-host origin and every `/api/agent/*` call targets the wrong place unless `NEXT_PUBLIC_APP_URL` is set to the production origin at build time.
+
+See Production notes below for the durable `DATABASE_URL`, deployed origin, and secret-manager checklist.
+
 ## Production notes
 
 Before deploying beyond local development:
@@ -583,5 +623,5 @@ Before deploying beyond local development:
 - configure `SEARXNG_BASE_URL` and optional `SEARXNG_API_KEY` only in the agent service or deployment secret manager; keep the endpoint private or protect it with a reverse proxy;
 - configure `WEB_READER_API_KEY` only in the agent service or deployment secret manager, and review Jina's privacy, retention, availability, remote DNS, redirect, and network-isolation behavior for deployment requirements;
 - review browser and network policies;
-- if the social-media-agent is enabled, set `TELEGRAM_MODE=webhook` with a public URL and `TELEGRAM_WEBHOOK_SECRET_TOKEN`, and provision a Resend-verified sender for the send-email tool;
+- if the social-media-content-writer (Telegram) is enabled, set `TELEGRAM_MODE=webhook` with a public URL and `TELEGRAM_WEBHOOK_SECRET_TOKEN`, and provision a Resend-verified sender for the send-email tool;
 - add rate limits, audit logging, and backup procedures appropriate to the environment.

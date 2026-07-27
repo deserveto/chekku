@@ -10,30 +10,31 @@ import {
   normalizeCommandWord,
   listRolesText,
   buildInstructions,
+  buildInstructionsForRole,
   HELP_TEXT,
   unknownCommandReply,
   isTelegramConfigured,
   registerSocialSlashCommands,
-} from '../social-media-agent.js';
-import { socialMediaAgent } from '../social-media-agent.js';
+} from '../social-media-content-writer.js';
+import { socialMediaContentWriter } from '../social-media-content-writer.js';
 import type { Chat, SlashCommandEvent } from 'chat';
 
-describe('social-media-agent (Telegram-backed social assistant)', () => {
-  it('has id social-media-agent', () => {
-    expect(socialMediaAgent.id).toBe('social-media-agent');
+describe('social-media-content-writer (Telegram-backed content writer)', () => {
+  it('has id social-media-content-writer', () => {
+    expect(socialMediaContentWriter.id).toBe('social-media-content-writer');
   });
 
-  it('has name Chekku Social', () => {
-    expect(socialMediaAgent.name).toBe('Chekku Social');
+  it('has name Social Media Content Writer', () => {
+    expect(socialMediaContentWriter.name).toBe('Social Media Content Writer');
   });
 
   it('has Mastra memory for channel context', async () => {
-    const memory = await socialMediaAgent.getMemory();
+    const memory = await socialMediaContentWriter.getMemory();
     expect(memory).toBeDefined();
   });
 
   it('binds get-current-time and send-email tools', async () => {
-    const tools = await socialMediaAgent.listTools();
+    const tools = await socialMediaContentWriter.listTools();
     expect(Object.keys(tools).sort()).toEqual([
       'getCurrentTimeTool',
       'sendEmailTool',
@@ -67,6 +68,44 @@ describe('getRole', () => {
 
   it('falls back to general for undefined', () => {
     expect(getRole(undefined).id).toBe('general');
+  });
+});
+
+describe('instagram-writer brand identity (scheduled-workflow source of truth)', () => {
+  // The instagram-writer role is the voice the weekly-social-drafts workflow
+  // pins via buildInstructionsForRole('instagram-writer'). The brand identity
+  // strings below are surfaced in every greeting-card draft, so they must
+  // live in the role guidance itself (not just in the workflow prompt).
+  const role = getRole('instagram-writer');
+
+  it('carries the R brand name, tagline, and sign-off', () => {
+    expect(role.guidance).toContain('R — Your Gentle AI Companion');
+    expect(role.guidance).toContain('AI Human-Centered Intelligence');
+    expect(role.guidance).toContain('Keluarga Besar PT Rafiq Space Intelligence');
+  });
+
+  it('pins the reflective, non-promotional tone guardrail', () => {
+    expect(role.guidance).toContain('reflective');
+    expect(role.guidance).toContain('warm');
+    expect(role.guidance).toContain('professional');
+    expect(role.guidance).toContain('never hype');
+  });
+
+  it('allows well-known religious/cultural verses with attribution', () => {
+    expect(role.guidance).toContain('Quran');
+    expect(role.guidance).toContain('Surah reference');
+    expect(role.guidance).toContain('attribution');
+  });
+
+  it('keeps the [source] placeholder rule for unverifiable claims', () => {
+    expect(role.guidance).toContain('[source] placeholder');
+    expect(role.guidance).toContain('statistics');
+  });
+
+  it('surfaces the brand identity in buildInstructions for the workflow', () => {
+    const instructions = buildInstructionsForRole('instagram-writer');
+    expect(instructions).toContain('R — Your Gentle AI Companion');
+    expect(instructions).toContain('Keluarga Besar PT Rafiq Space Intelligence');
   });
 });
 
@@ -205,18 +244,18 @@ describe('Telegram optional boot (issue #1 regression)', () => {
 
   it('imports without throwing and omits channels when TELEGRAM_BOT_TOKEN is unset', async () => {
     vi.stubEnv('TELEGRAM_BOT_TOKEN', '');
-    const mod = await import('../social-media-agent.js');
-    expect(mod.socialMediaAgent.id).toBe('social-media-agent');
+    const mod = await import('../social-media-content-writer.js');
+    expect(mod.socialMediaContentWriter.id).toBe('social-media-content-writer');
     expect(mod.isTelegramConfigured).toBe(false);
-    expect(mod.socialMediaAgent.getChannels()).toBeNull();
+    expect(mod.socialMediaContentWriter.getChannels()).toBeNull();
     vi.unstubAllEnvs();
   });
 
   it('wires the Telegram channel when TELEGRAM_BOT_TOKEN is set', async () => {
     vi.stubEnv('TELEGRAM_BOT_TOKEN', 'test-token');
-    const mod = await import('../social-media-agent.js');
+    const mod = await import('../social-media-content-writer.js');
     expect(mod.isTelegramConfigured).toBe(true);
-    expect(mod.socialMediaAgent.getChannels()).not.toBeNull();
+    expect(mod.socialMediaContentWriter.getChannels()).not.toBeNull();
     vi.unstubAllEnvs();
   });
 

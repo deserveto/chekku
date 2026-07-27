@@ -5,6 +5,7 @@ import {
   EVERGREEN_PILLARS,
   evergreenPillarsForWeek,
   pickTopics,
+  selectBonusAwarenessDayForWeek,
   selectTopicsForWeek,
   specialDaysForWeek,
   weekDates,
@@ -170,6 +171,56 @@ describe('selectTopicsForWeek', () => {
 
   it('is deterministic for the same instant', () => {
     expect(selectTopicsForWeek(mondayDecember)).toEqual(selectTopicsForWeek(mondayDecember));
+  });
+});
+
+describe('selectBonusAwarenessDayForWeek', () => {
+  it('returns undefined for a week without awareness days', async () => {
+    expect(await selectBonusAwarenessDayForWeek(friday)).toBeUndefined();
+  });
+
+  it('returns the first awareness day for the week', async () => {
+    expect((await selectBonusAwarenessDayForWeek(mondayAugust))?.name).toBe('Hari Kemerdekaan Republik Indonesia');
+    expect((await selectBonusAwarenessDayForWeek(mondayDecember))?.name).toBe('Hari Ibu');
+  });
+
+  it('keeps national holidays (e.g. Independence Day) eligible as a bonus', async () => {
+    const bonus = await selectBonusAwarenessDayForWeek(mondayAugust);
+    expect(bonus).toBeDefined();
+    expect(bonus!.date).toBe('08-17');
+    expect(bonus!.source).toBe('fixed');
+  });
+
+  it('resolves across the year boundary', async () => {
+    expect((await selectBonusAwarenessDayForWeek(mondayYearBoundary))?.name).toBe('Tahun Baru Masehi');
+  });
+
+  it('prefers public-holiday-api entries over fixed-date entries on the same date', async () => {
+    const now = new Date('2026-03-21T09:00:00+07:00'); // Friday of Idul Fitri week
+    const apiHolidays = [
+      { date: '2026-03-21', name: 'Hari Raya Idul Fitri', hijriYear: 1447, description: 'Hari Raya Idul Fitri 1447 Hijriyah' },
+    ];
+    const bonus = await selectBonusAwarenessDayForWeek(now, { publicHolidays: apiHolidays });
+    expect(bonus).toBeDefined();
+    expect(bonus!.name).toBe('Hari Raya Idul Fitri');
+    expect(bonus!.hijriYear).toBe(1447);
+    expect(bonus!.source).toBe('public-holiday-api');
+  });
+
+  it('returns the earliest date when both API and fixed sources have entries in the same week', async () => {
+    const now = new Date('2026-12-21T09:00:00+07:00'); // week of Hari Ibu (12-22) and Natal (12-25)
+    const apiHolidays = [
+      { date: '2026-12-25', name: 'Hari Raya Natal' },
+    ];
+    const bonus = await selectBonusAwarenessDayForWeek(now, { publicHolidays: apiHolidays });
+    expect(bonus!.name).toBe('Hari Ibu'); // 12-22 earlier than 12-25
+    expect(bonus!.source).toBe('fixed');
+  });
+
+  it('falls back to fixed-date when publicHolidays is empty', async () => {
+    const bonus = await selectBonusAwarenessDayForWeek(mondayAugust, { publicHolidays: [] });
+    expect(bonus!.name).toBe('Hari Kemerdekaan Republik Indonesia');
+    expect(bonus!.source).toBe('fixed');
   });
 });
 
