@@ -27,6 +27,7 @@ Chekku provides a focused interface for managing agents, creating agent-specific
 - **SearXNG search** — fixed read-only `search_web` capability for PM Agent and selectable stored agents, with server-owned endpoint configuration and bounded result snippets.
 - **Hosted Web Reader** — fixed read-only `read_web_page` capability for one chosen public page, returning bounded untrusted Markdown through hosted Jina Reader.
 - **Social media agent** — role-switchable content assistant reachable over Telegram (X, Instagram, LinkedIn, TikTok roles).
+- **Social media strategist** — research-backed planning agent that drafts a Content Strategy Brief for any brand or product, refines it on review, and (after approval) produces a Content Plan grounded in the approved brief.
 - **Scheduled social drafts** — a weekly Monday 09:00 Asia/Jakarta workflow drafts two Instagram posts from awareness days and evergreen pillars, saves them to Garage, and emails a review link.
 - **Hosted-vLLM compatibility** — final prompt normalization keeps system messages at the beginning.
 - **Local-first storage** — agent definitions, versions, memory, and threads live in LibSQL.
@@ -50,7 +51,8 @@ Next.js client :3000
   │     ├── qa-web-agent                                              │
   │     ├── qa-android-agent (Maestro, optional)                      │
   │     ├── social-media-content-writer (Telegram channel)            │
-  │     ├── social-media-supervisor-agent (routes to content writer)  │
+  │     ├── social-media-supervisor-agent (routes to sub-agents)      │
+  │     ├── social-media-strategist-agent (research + planning)        │
   │     ├── @mastra/editor stored agents                              │
   │     ├── Mastra Memory + LibSQLStore                               │
   │     ├── calculator + current-time + email tools                   │
@@ -266,7 +268,7 @@ The client uses system font stacks, so `next build` does not download fonts from
 .
 ├── agent/                  # Mastra server and agent runtime
 │   └── src/
-│       ├── agents/         # main, PM, QA Web, and Social Media agents
+│       ├── agents/         # main, PM, QA Web, Social Media, and Social Media Strategist agents
 │       ├── config/         # environment and middleware
 │       ├── mastra/
 │       │   ├── gateways/   # OpenAI-compatible gateway and normalization
@@ -305,7 +307,7 @@ These rules keep the repository from drifting back into parallel implementations
 9. Garage identity comes from trusted Mastra execution context, never tool input; browser code never accesses Garage directly.
 10. Weekly and competitive PM semantics stay outside Garage MCP in code-defined `pm-agent` skills/tools and separate shared repositories.
 11. PM storage always binds to fixed `pm-agent`; persisted metadata contains only relative `pm-reports/...` or `competitive-analyses/...` keys.
-12. Social Media Content Writer keeps Telegram slash registration and direct email delivery in the single Mastra runtime; the Social Media Supervisor routes to it as a sub-agent.
+12. Social Media Content Writer keeps Telegram slash registration and direct email delivery in the single Mastra runtime; the Social Media Supervisor routes to it and to the Social Media Strategist as sub-agents.
 13. SearXNG MCP uses fixed ID `searxng` and exactly `search_web`; PM Agent receives the same reusable tool directly.
 14. `search_web` returns bounded result metadata and snippets only. PM Agent, not search, orchestrates competitive analysis.
 15. SearXNG endpoint and optional bearer configuration stay server-side; stored records contain only `mcpClients: { searxng: { tools: {} } }`.

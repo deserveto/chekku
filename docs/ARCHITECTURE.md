@@ -28,6 +28,7 @@ Chekku contains three npm workspaces: a Next.js client, a Mastra agent server, a
 │ - qa-android-agent                         │        │
 │ - social-media-content-writer              │        │
 │ - social-media-supervisor-agent            │        │
+│ - social-media-strategist-agent            │        │
 │                                            │        │
 │ Memory + LibSQLStore                       │        │
 │ Calculator + current-time + email tools    │        │
@@ -72,7 +73,7 @@ PM competitive analysis
 
 `agent/src/mastra/index.ts` creates the single `Mastra` instance and registers:
 
-- `mainAgent`, `pmAgent`, `qaWebAgent`, `qaAndroidAgent`, `socialMediaContentWriter`, and `socialMediaSupervisorAgent`;
+- `mainAgent`, `pmAgent`, `qaWebAgent`, `qaAndroidAgent`, `socialMediaContentWriter`, `socialMediaSupervisorAgent`, and `socialMediaStrategistAgent`;
 - `storedAgentTools` (`calculatorTool`, `getCurrentTimeTool`, and `sendEmailTool`) for stored-agent hydration;
 - `garageMcpServer` for generic agent-isolated object storage;
 - `searxngMcpServer` for fixed read-only web search by selected stored agents;
@@ -127,7 +128,17 @@ The active role is held in-memory keyed by `${platform}:${userId}`. The agent re
 
 ### Social Media Supervisor
 
-`social-media-supervisor-agent` is the routing agent for the social-media surface. It has no tools of its own and delegates drafting/repurposing/planning requests to the Content Writer sub-agent via Mastra's `agents` field. The supervisor binds Memory and the same context-safety processors as the other code agents so its own turns stay bounded. Active call paths opt into routing by invoking the supervisor; Telegram stays on the Content Writer for this phase. The Social Media Strategist sub-agent (planned) will attach here in a later phase.
+`social-media-supervisor-agent` is the routing agent for the social-media surface. It has no tools of its own and delegates drafting/repurposing/planning requests to its sub-agents via Mastra's `agents` field. The supervisor binds Memory and the same context-safety processors as the other code agents so its own turns stay bounded. Active call paths opt into routing by invoking the supervisor; Telegram stays on the Content Writer for this phase. It attaches two sub-agents today: the Content Writer (platform-post drafting/repurposing/planning) and the Strategist (Content Strategy Brief and Content Plan research/interviews).
+
+### Social Media Strategist
+
+`social-media-strategist-agent` is a code-defined planning and research agent and the second sub-agent under the Social Media Supervisor. It shares the common server model, Mastra Memory, and the standard context-limiter plus char-budget-guard stack used by `main-agent` and `pm-agent`. It binds the reusable `search_web` and `read_web_page` tools directly (the same tools PM Agent binds), and nothing else.
+
+Its conversational workflow is: interview the user to identify the brand, project, product, or person the strategy is for; perform optional web research when it would strengthen a decision; draft a Content Strategy Brief using a generic section template; ask explicitly for review; revise the existing brief on feedback; treat the brief as the source of truth only after explicit user approval; then offer a Content Plan whose shape derives from the approved brief. The agent is a strategist — it does not produce final platform-specific copy.
+
+The Strategist is independent of the Content Writer. It does not wire a Telegram channel, does not register slash commands, and does not participate in the scheduled `weekly-social-drafts` workflow. The supervisor routes strategy/brief/content-plan requests to it via Mastra's `agents` field.
+
+The Strategist keeps approved strategies inside its Mastra Memory thread only. Durable strategy persistence (a `storage/src/strategy-briefs.ts` helper plus a `save_strategy_to_garage` tool registered only on this agent, mirroring the PM report pattern) is deferred to a separately reviewed change. Markdown-based brand-product knowledge is also deferred: in v1 brand knowledge arrives as ordinary user messages, and the supervisor (or a future caller) may pass curated Markdown context through an `agent.generate(messages, { instructions })` override, the same mechanism `weekly-social-drafts` uses to pin the Instagram role on `socialMediaContentWriter`.
 
 ### PM Agent
 

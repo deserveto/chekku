@@ -13,6 +13,7 @@ import {
   socialMediaContentWriter,
   registerSocialSlashCommands,
 } from '../agents/social-media-content-writer.js';
+import { socialMediaStrategistAgent } from '../agents/social-media-strategist-agent.js';
 import { socialMediaSupervisorAgent } from '../agents/social-media-supervisor-agent.js';
 import { OpenAICompatibleGateway } from './gateways/openai-compatible.js';
 import { garageMcpServer } from './mcp/garage-mcp-server.js';
@@ -38,6 +39,7 @@ export const mastra = new Mastra({
     qaWebAgent,
     qaAndroidAgent,
     socialMediaContentWriter,
+    socialMediaStrategistAgent,
     socialMediaSupervisorAgent,
   },
   workflows: { weeklySocialDrafts },
