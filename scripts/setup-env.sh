@@ -466,6 +466,7 @@ run_prompts() {
   prompt_for_env "$AGENT_ENV_FILE" LLM_DEFAULT_MODEL "qwen3.6-35b-a3b-fast" default
   prompt_for_env "$AGENT_ENV_FILE" LLM_DISPLAY_NAME "Rafiqspace LLM" default
   prompt_for_env "$AGENT_ENV_FILE" LLM_MODELS "qwen3.6-35b-a3b-fast,qwen3.6-35b-a3b" default
+  prompt_for_env "$AGENT_ENV_FILE" LLM_IMAGE_MODEL "gemini-3.1-flash-image" default
   prompt_for_env "$AGENT_ENV_FILE" TELEGRAM_BOT_TOKEN "" optional
   prompt_for_env "$AGENT_ENV_FILE" RESEND_API_KEY "" optional
   prompt_for_env "$AGENT_ENV_FILE" RESEND_FROM_EMAIL "Chekku <onboarding@resend.dev>" default
@@ -517,6 +518,7 @@ NODE
   echo "  - RESEND_API_KEY       (send-email tool)"
   echo "  - MAESTRO_ENABLED      (qa-android-agent)"
   echo "  - WEB_READER_API_KEY   (read_web_page)"
+  echo "  - LLM_IMAGE_MODEL      (visual-content-agent generate_image)"
   echo ""
   echo "Rerun npm run setup after editing agent/.env."
   echo ""

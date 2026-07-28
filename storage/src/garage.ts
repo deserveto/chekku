@@ -9,8 +9,9 @@ import {
 
 import {
   ObjectStorageError,
+  type BinaryObjectResult,
+  type BinaryObjectStorage,
   type ObjectListResult,
-  type ObjectStorage,
 } from './objects.ts';
 
 export interface GarageConfig {
@@ -131,6 +132,89 @@ async function bodyToString(body: unknown): Promise<string> {
   throw new ObjectStorageError('unavailable', SAFE_MESSAGES.unavailable);
 }
 
+/**
+ * Upper bound on a single binary object read. Mirrors the bounded-reader
+ * pattern used by the hosted Web Reader client: a streamed body that exceeds
+ * this cap is cancelled and surfaced as a safe `unavailable` error before the
+ * bytes ever reach the caller. The cap is well above any image the visual
+ * content pipeline produces (≤ 10 MiB) while keeping unbounded streams from
+ * consuming memory.
+ */
+const MAX_BINARY_BODY_BYTES = 16 * 1024 * 1024;
+
+interface BinaryObjectResponse {
+  Body?: unknown;
+  ContentType?: unknown;
+}
+
+async function readBoundedBytes(response: {
+  Body?: unknown;
+  ContentType?: unknown;
+}): Promise<BinaryObjectResult> {
+  const body = response.Body;
+  if (body == null) {
+    throw new ObjectStorageError('unavailable', SAFE_MESSAGES.unavailable);
+  }
+  let contentType: string | undefined;
+  if (typeof response.ContentType === 'string' && response.ContentType.length > 0) {
+    contentType = response.ContentType;
+  }
+
+  const collect = async (
+    source: ReadableStream<Uint8Array> | AsyncIterable<Uint8Array>,
+  ): Promise<Uint8Array> => {
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for await (const chunk of source as AsyncIterable<Uint8Array>) {
+      total += chunk.byteLength;
+      if (total > MAX_BINARY_BODY_BYTES) {
+        try {
+          await (source as ReadableStream<Uint8Array>).cancel?.();
+        } catch {
+          // Cleanup must not replace the fixed size error.
+        }
+        throw new ObjectStorageError('unavailable', SAFE_MESSAGES.unavailable);
+      }
+      chunks.push(chunk);
+    }
+    const merged = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return merged;
+  };
+
+  if (body instanceof Uint8Array) {
+    if (body.byteLength > MAX_BINARY_BODY_BYTES) {
+      throw new ObjectStorageError('unavailable', SAFE_MESSAGES.unavailable);
+    }
+    return { value: body, ...(contentType ? { contentType } : {}) };
+  }
+
+  if (body instanceof ReadableStream) {
+    const value = await collect(body);
+    return { value, ...(contentType ? { contentType } : {}) };
+  }
+
+  if (
+    typeof body === 'object' &&
+    body !== null &&
+    'transformToByteArray' in body &&
+    typeof body.transformToByteArray === 'function'
+  ) {
+    const bytes = await body.transformToByteArray();
+    const value = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    if (value.byteLength > MAX_BINARY_BODY_BYTES) {
+      throw new ObjectStorageError('unavailable', SAFE_MESSAGES.unavailable);
+    }
+    return { value, ...(contentType ? { contentType } : {}) };
+  }
+
+  throw new ObjectStorageError('unavailable', SAFE_MESSAGES.unavailable);
+}
+
 function createClient(config: GarageConfig): GarageClient {
   return new S3Client({
     endpoint: config.endpoint,
@@ -151,7 +235,7 @@ function boundedLimit(limit: number | undefined): number {
 export function createGarageObjectStorage(
   config: GarageConfig = readGarageConfig(),
   client: GarageClient = createClient(config),
-): ObjectStorage {
+): BinaryObjectStorage {
   const mutationTails = new Map<string, Promise<void>>();
   const mutate = async <T>(key: string, operation: () => Promise<T>): Promise<T> => {
     const previous = mutationTails.get(key) ?? Promise.resolve();
@@ -224,6 +308,52 @@ export function createGarageObjectStorage(
         return translateError(error);
       }
     },
+    async createBytes(key, value, contentType) {
+      await mutate(key, async () => {
+        if (await head(key)) {
+          throw new ObjectStorageError('already-exists', SAFE_MESSAGES.alreadyExists);
+        }
+        try {
+          await client.send(new PutObjectCommand({
+            Bucket: config.bucket,
+            Key: key,
+            Body: value,
+            ContentType: contentType,
+            IfNoneMatch: '*',
+          }));
+        } catch (error) {
+          translateError(error, true);
+        }
+      });
+    },
+    async replaceBytes(key, value, contentType) {
+      await mutate(key, async () => {
+        if (!await head(key)) {
+          throw new ObjectStorageError('not-found', SAFE_MESSAGES.notFound);
+        }
+        try {
+          await client.send(new PutObjectCommand({
+            Bucket: config.bucket,
+            Key: key,
+            Body: value,
+            ContentType: contentType,
+          }));
+        } catch (error) {
+          translateError(error);
+        }
+      });
+    },
+    async getBytes(key): Promise<BinaryObjectResult> {
+      try {
+        const response = await client.send(new GetObjectCommand({
+          Bucket: config.bucket,
+          Key: key,
+        })) as BinaryObjectResponse;
+        return await readBoundedBytes(response);
+      } catch (error) {
+        return translateError(error);
+      }
+    },
     exists: head,
     async delete(key) {
       await mutate(key, async () => {
@@ -257,9 +387,9 @@ export function createGarageObjectStorage(
   };
 }
 
-export function createLazyGarageObjectStorage(raw: RawEnv = process.env): ObjectStorage {
-  let storage: ObjectStorage | undefined;
-  const getStorage = (): ObjectStorage => {
+export function createLazyGarageObjectStorage(raw: RawEnv = process.env): BinaryObjectStorage {
+  let storage: BinaryObjectStorage | undefined;
+  const getStorage = (): BinaryObjectStorage => {
     storage ??= createGarageObjectStorage(readGarageConfig(raw));
     return storage;
   };
@@ -274,5 +404,10 @@ export function createLazyGarageObjectStorage(raw: RawEnv = process.env): Object
     exists: (key) => getStorage().exists(key),
     delete: (key) => getStorage().delete(key),
     listKeys: (prefix, options) => getStorage().listKeys(prefix, options),
+    createBytes: (key, value, contentType) =>
+      getStorage().createBytes(key, value, contentType),
+    replaceBytes: (key, value, contentType) =>
+      getStorage().replaceBytes(key, value, contentType),
+    getBytes: (key) => getStorage().getBytes(key),
   };
 }

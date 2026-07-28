@@ -556,6 +556,42 @@ body.studio-sidebar-resizing * {
   padding: clamp(18px, 3vw, 30px);
 }
 
+.studio-report-header-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.studio-approve {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.studio-visual {
+  margin: 18px 0 0;
+}
+
+.studio-visual-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  border: 1px solid var(--studio-border);
+}
+
+.studio-visual-meta {
+  margin-top: 10px;
+  font-size: 0.85rem;
+  color: var(--studio-muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
 .studio-report-markdown {
   margin-top: 18px;
   color: var(--studio-body);

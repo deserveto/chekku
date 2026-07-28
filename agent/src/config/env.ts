@@ -32,6 +32,15 @@ const envSchema = z.object({
   LLM_DISPLAY_NAME: z.string().default('OpenAI-compatible endpoint'),
   LLM_MODELS: z.string().default(''),
 
+  // Fixed image-generation model invoked by the Visual Content Agent's
+  // `generate_image` tool. The model never comes from tool/model input.
+  // Empty/unset → the tool fails closed with a fixed configuration error.
+  LLM_IMAGE_MODEL: z.string().default('gemini-3.1-flash-image'),
+  // Narrowly-scoped server-only path under LLM_BASE_URL for image generation.
+  // Defaults to the OpenAI Images API standard path; override only when the
+  // configured gateway exposes images under a different path.
+  LLM_IMAGE_ENDPOINT_PATH: z.string().default('/images/generations'),
+
   SEARXNG_BASE_URL: z.string().default(''),
   SEARXNG_API_KEY: z.string().default(''),
   WEB_READER_API_KEY: z.string().default(''),

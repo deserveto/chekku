@@ -1,17 +1,28 @@
 import { describe, expect, it } from 'vitest';
 
 import { createNamespacedObjectStorage } from './namespaced-objects.ts';
-import type { ObjectStorage } from './objects.ts';
+import type { BinaryObjectResult, BinaryObjectStorage, ObjectStorage } from './objects.ts';
 import {
   SOCIAL_MEDIA_AGENT_ID,
+  attachVisualAsset,
   buildSocialPostMetadata,
+  buildVisualAsset,
   createPostId,
   createSocialPostStorage,
+  createVisualAssetId,
+  extensionForMimeType,
   getSocialPost,
+  isVisualAssetId,
   keysFor,
   listSocialPosts,
   parseSocialPostTimestamp,
+  readVisualAssetBytes,
+  updateSocialPostStatus,
+  visualAssetImageUrl,
+  visualAssetKeys,
+  VISUAL_ASSET_ID_RE,
   type SocialPostMetadata,
+  type SocialVisualAsset,
 } from './social-posts.ts';
 
 const postMarkdown = `**Hook:** Hari Guru bukan sekadar tanggal.
@@ -22,8 +33,9 @@ const briefMarkdown = 'Topik: Hari Guru (25 Nov). Tujuan: apresiasi guru. Platfo
 
 function createMemoryStorage() {
   const objects = new Map<string, string>();
+  const bytes = new Map<string, { value: Uint8Array; contentType?: string }>();
   const writes: Array<{ method: 'create' | 'replace'; key: string; value: string; contentType?: string }> = [];
-  const storage: ObjectStorage = {
+  const storage: BinaryObjectStorage = {
     async createText(key, value, contentType) {
       if (objects.has(key)) throw new Error(`Already exists: ${key}`);
       writes.push({ method: 'create', key, value, contentType });
@@ -39,18 +51,31 @@ function createMemoryStorage() {
       return value;
     },
     async exists(key) {
-      return objects.has(key);
+      return objects.has(key) || bytes.has(key);
     },
     async delete(key) {
       objects.delete(key);
+      bytes.delete(key);
     },
     async listKeys(prefix, options) {
-      const keys = [...objects.keys()].filter((key) => key.startsWith(prefix));
+      const keys = [...objects.keys(), ...bytes.keys()].filter((key) => key.startsWith(prefix));
       const limit = options?.limit ?? keys.length;
       return { keys: keys.slice(0, limit), truncated: keys.length > limit };
     },
+    async createBytes(key, value, contentType) {
+      if (bytes.has(key)) throw new Error(`Already exists: ${key}`);
+      bytes.set(key, { value: new Uint8Array(value), contentType });
+    },
+    async replaceBytes(key, value, contentType) {
+      bytes.set(key, { value: new Uint8Array(value), contentType });
+    },
+    async getBytes(key): Promise<BinaryObjectResult> {
+      const entry = bytes.get(key);
+      if (!entry) throw new Error(`Missing object: ${key}`);
+      return { value: new Uint8Array(entry.value), ...(entry.contentType ? { contentType: entry.contentType } : {}) };
+    },
   };
-  return { objects, storage, writes };
+  return { objects, bytes, storage, writes };
 }
 
 /**
@@ -366,5 +391,415 @@ describe('social post storage', () => {
     expect(() => keysFor(postId)).toThrow(`Invalid social post id: ${postId}`);
     expect(() => buildSocialPostMetadata({ postMarkdown, briefMarkdown, topic: 'Topic', postId })).toThrow(`Invalid social post id: ${postId}`);
     await expect(getSocialPost(storage, postId)).rejects.toThrow(`Invalid social post id: ${postId}`);
+  });
+});
+
+describe('visual asset helpers', () => {
+  it('builds a canonical visual asset id from a UTC timestamp', () => {
+    expect(createVisualAssetId(new Date('2026-07-28T11:26:42.000Z'))).toMatch(/^sva_20260728112642_[0-9a-f]{8}$/);
+  });
+
+  it('recognizes canonical visual asset ids', () => {
+    expect(isVisualAssetId('sva_20260728112642_deadbeef')).toBe(true);
+    expect(isVisualAssetId('sva_legacy')).toBe(false);
+    expect(isVisualAssetId('')).toBe(false);
+  });
+
+  it.each(['image/png', 'image/jpeg', 'image/webp'] as const)(
+    'maps %s to its file extension',
+    (mimeType) => {
+      expect(extensionForMimeType(mimeType)).toMatch(/^(png|jpg|webp)$/);
+    },
+  );
+
+  it('derives deterministic object key and application url from ids and mime type', () => {
+    const postId = 'smp_20260713120000_00000001';
+    const assetId = 'sva_20260728120000_0000000a';
+    expect(visualAssetKeys(postId, assetId, 'image/png')).toEqual({
+      objectKey: 'social-posts/smp_20260713120000_00000001/visuals/sva_20260728120000_0000000a.png',
+      imageUrl: '/api/storage/social-posts/smp_20260713120000_00000001/visuals/sva_20260728120000_0000000a',
+    });
+    expect(visualAssetImageUrl(postId, assetId)).toBe(
+      '/api/storage/social-posts/smp_20260713120000_00000001/visuals/sva_20260728120000_0000000a',
+    );
+  });
+
+  it('rejects invalid ids and mime types before producing keys', () => {
+    expect(() => visualAssetKeys('smp_legacy', 'sva_20260728120000_0000000a', 'image/png')).toThrow(
+      'Invalid social post id: smp_legacy',
+    );
+    expect(() => visualAssetKeys('smp_20260713120000_00000001', 'sva_legacy', 'image/png')).toThrow(
+      'Invalid visual asset id: sva_legacy',
+    );
+    expect(() => visualAssetKeys('smp_20260713120000_00000001', 'sva_20260728120000_0000000a', 'image/gif' as never)).toThrow(
+      'Unsupported visual MIME type',
+    );
+  });
+
+  it('builds a pure visual asset with deterministic keys', () => {
+    const built = buildVisualAsset({
+      postId: 'smp_20260713120000_00000001',
+      assetId: 'sva_20260728120000_0000000a',
+      mimeType: 'image/jpeg',
+      prompt: 'warm sunlight on a desk',
+      model: 'gemini-3.1-flash-image',
+      width: 1024,
+      height: 1280,
+      generatedAt: '2026-07-28T12:00:00.000Z',
+    });
+
+    expect(built.asset).toEqual({
+      assetId: 'sva_20260728120000_0000000a',
+      objectKey: 'social-posts/smp_20260713120000_00000001/visuals/sva_20260728120000_0000000a.jpg',
+      imageUrl: '/api/storage/social-posts/smp_20260713120000_00000001/visuals/sva_20260728120000_0000000a',
+      mimeType: 'image/jpeg',
+      generatedAt: '2026-07-28T12:00:00.000Z',
+      model: 'gemini-3.1-flash-image',
+      prompt: 'warm sunlight on a desk',
+      width: 1024,
+      height: 1280,
+    });
+  });
+
+  it('rejects an oversized prompt before producing any keys', () => {
+    expect(() => buildVisualAsset({
+      postId: 'smp_20260713120000_00000001',
+      assetId: 'sva_20260728120000_0000000a',
+      mimeType: 'image/png',
+      prompt: 'x'.repeat(2_001),
+      model: 'gemini-3.1-flash-image',
+    })).toThrow('Visual prompt must be a string of at most 2,000 UTF-8 bytes.');
+  });
+});
+
+describe('visual asset metadata parsing', () => {
+  const postId = 'smp_20260715112642_00000008';
+  const validAsset = (overrides: Partial<SocialVisualAsset> = {}): SocialVisualAsset => ({
+    assetId: 'sva_20260728120000_0000000a',
+    objectKey: `social-posts/${postId}/visuals/sva_20260728120000_0000000a.png`,
+    imageUrl: `/api/storage/social-posts/${postId}/visuals/sva_20260728120000_0000000a`,
+    mimeType: 'image/png',
+    generatedAt: '2026-07-28T12:00:00.000Z',
+    model: 'gemini-3.1-flash-image',
+    prompt: 'soft morning light',
+    ...overrides,
+  });
+
+  function metadataWith(visual: unknown, activeId?: unknown) {
+    return {
+      postId,
+      createdAt: '2026-07-15T11:26:42.000Z',
+      platform: 'instagram',
+      topic: 'Topic',
+      status: 'APPROVED',
+      ...keysFor(postId),
+      ...(visual !== undefined ? { visualAssets: visual } : {}),
+      ...(activeId !== undefined ? { activeVisualAssetId: activeId } : {}),
+    };
+  }
+
+  it('parses legacy metadata without visuals unchanged', async () => {
+    const { objects, storage } = createMemoryStorage();
+    const base = metadataWith(undefined);
+    objects.set(`social-posts/${postId}/metadata.json`, JSON.stringify(base));
+
+    const post = (await listSocialPosts(storage))[0]!;
+    expect(post.visualAssets).toBeUndefined();
+    expect(post.activeVisualAssetId).toBeUndefined();
+  });
+
+  it('parses metadata with one visual asset', async () => {
+    const { objects, storage } = createMemoryStorage();
+    objects.set(`social-posts/${postId}/metadata.json`, JSON.stringify(metadataWith([validAsset()], 'sva_20260728120000_0000000a')));
+
+    const post = (await listSocialPosts(storage))[0]!;
+    expect(post.visualAssets).toEqual([validAsset()]);
+    expect(post.activeVisualAssetId).toBe('sva_20260728120000_0000000a');
+  });
+
+  it('parses metadata with multiple revisions preserving order', async () => {
+    const { objects, storage } = createMemoryStorage();
+    const first = validAsset();
+    const second = validAsset({
+      assetId: 'sva_20260728130000_0000000b',
+      objectKey: `social-posts/${postId}/visuals/sva_20260728130000_0000000b.png`,
+      imageUrl: `/api/storage/social-posts/${postId}/visuals/sva_20260728130000_0000000b`,
+      generatedAt: '2026-07-28T13:00:00.000Z',
+      prompt: 'revision two',
+    });
+    objects.set(`social-posts/${postId}/metadata.json`, JSON.stringify(metadataWith([first, second], second.assetId)));
+
+    const post = (await listSocialPosts(storage))[0]!;
+    expect(post.visualAssets).toEqual([first, second]);
+    expect(post.activeVisualAssetId).toBe(second.assetId);
+  });
+
+  it('drops malformed visual entries but keeps valid ones in the same post', async () => {
+    const { objects, storage } = createMemoryStorage();
+    const good = validAsset();
+    const badMimeType = { ...validAsset(), mimeType: 'image/gif', objectKey: `social-posts/${postId}/visuals/sva_20260728120000_0000000a.gif` };
+    const badKey = { ...validAsset(), objectKey: 'arbitrary/escape/key' };
+    const badId = { ...validAsset(), assetId: 'sva_legacy' };
+    objects.set(`social-posts/${postId}/metadata.json`, JSON.stringify(metadataWith([badMimeType, good, badKey, badId])));
+
+    const post = (await listSocialPosts(storage))[0]!;
+    expect(post.visualAssets).toEqual([good]);
+    expect(post.activeVisualAssetId).toBeUndefined();
+  });
+
+  it('drops activeVisualAssetId that does not reference a kept asset', async () => {
+    const { objects, storage } = createMemoryStorage();
+    objects.set(`social-posts/${postId}/metadata.json`, JSON.stringify(metadataWith([validAsset()], 'sva_20260728990000_missing')));
+
+    const post = (await listSocialPosts(storage))[0]!;
+    expect(post.activeVisualAssetId).toBeUndefined();
+  });
+
+  it('rejects metadata whose visual object key is not deterministic for the post', async () => {
+    const { objects, storage } = createMemoryStorage();
+    const crossPost = validAsset({
+      assetId: 'sva_20260728120000_0000000a',
+      objectKey: 'social-posts/smp_20260715112642_00000009/visuals/sva_20260728120000_0000000a.png',
+      imageUrl: '/api/storage/social-posts/smp_20260715112642_00000009/visuals/sva_20260728120000_0000000a',
+    });
+    objects.set(`social-posts/${postId}/metadata.json`, JSON.stringify(metadataWith([crossPost])));
+
+    const post = (await listSocialPosts(storage))[0]!;
+    expect(post.visualAssets).toBeUndefined();
+  });
+
+  it('does not persist base64 or arbitrary hostile fields through the parser', async () => {
+    const { objects, storage } = createMemoryStorage();
+    const hostile = {
+      ...validAsset(),
+      dataUrl: 'data:image/png;base64,iVBOR...',
+      credential: 'AKIA-SECRET',
+      nested: { arbitrary: ['secret'] },
+    };
+    objects.set(`social-posts/${postId}/metadata.json`, JSON.stringify(metadataWith([hostile], hostile.assetId)));
+
+    const post = (await listSocialPosts(storage))[0]!;
+    expect(post.visualAssets).toEqual([validAsset()]);
+    expect(JSON.stringify(post)).not.toMatch(/base64|AKIA-SECRET|secret/);
+  });
+
+  it('serializes the canonical metadata deterministically', () => {
+    const asset = validAsset();
+    const metadata: SocialPostMetadata = {
+      postId,
+      createdAt: '2026-07-15T11:26:42.000Z',
+      platform: 'instagram',
+      topic: 'Topic',
+      status: 'APPROVED',
+      ...keysFor(postId),
+      visualAssets: [asset],
+      activeVisualAssetId: asset.assetId,
+    };
+    expect(JSON.parse(JSON.stringify(metadata, null, 2))).toEqual(metadata);
+  });
+});
+
+describe('attachVisualAsset and readVisualAssetBytes', () => {
+  const postId = 'smp_20260715112648_0000000f';
+
+  async function seedApprovedPost(storage: ObjectStorage): Promise<SocialPostMetadata> {
+    const built = buildSocialPostMetadata({
+      postMarkdown,
+      briefMarkdown,
+      topic: 'Hari Guru',
+      status: 'APPROVED',
+      postId,
+    });
+    await storage.createText(built.briefObjectKey, briefMarkdown, 'text/markdown');
+    await storage.createText(built.postObjectKey, postMarkdown, 'text/markdown');
+    await storage.createText(built.metadataObjectKey, built.metadataJson, 'application/json');
+    return built.metadata;
+  }
+
+  it('appends a new visual asset, sets it active, and writes metadata last', async () => {
+    const { storage, writes } = createMemoryStorage();
+    await seedApprovedPost(storage);
+
+    const built = buildVisualAsset({
+      postId,
+      mimeType: 'image/png',
+      prompt: 'soft morning light',
+      model: 'gemini-3.1-flash-image',
+      now: () => new Date('2026-07-28T12:00:00.000Z'),
+    });
+    const imageBytes = new Uint8Array([1, 2, 3]);
+    await storage.createBytes(built.objectKey, imageBytes, 'image/png');
+
+    const lastWriteBefore = writes.length;
+    const updated = await attachVisualAsset(storage, postId, built.asset);
+
+    expect(updated.visualAssets).toEqual([built.asset]);
+    expect(updated.activeVisualAssetId).toBe(built.asset.assetId);
+    expect(writes.length).toBe(lastWriteBefore + 1);
+    expect(writes[writes.length - 1]).toMatchObject({
+      method: 'replace',
+      key: `social-posts/${postId}/metadata.json`,
+      contentType: 'application/json',
+    });
+  });
+
+  it('preserves the previous asset when appending a revision', async () => {
+    const { storage } = createMemoryStorage();
+    await seedApprovedPost(storage);
+
+    const first = buildVisualAsset({
+      postId,
+      mimeType: 'image/png',
+      prompt: 'first attempt',
+      model: 'gemini-3.1-flash-image',
+      now: () => new Date('2026-07-28T12:00:00.000Z'),
+    });
+    await storage.createBytes(first.objectKey, new Uint8Array([1]), 'image/png');
+    await attachVisualAsset(storage, postId, first.asset);
+
+    const second = buildVisualAsset({
+      postId,
+      mimeType: 'image/jpeg',
+      prompt: 'revision',
+      model: 'gemini-3.1-flash-image',
+      now: () => new Date('2026-07-28T13:00:00.000Z'),
+    });
+    await storage.createBytes(second.objectKey, new Uint8Array([2]), 'image/jpeg');
+    const updated = await attachVisualAsset(storage, postId, second.asset);
+
+    expect(updated.visualAssets?.map((a) => a.assetId)).toEqual([first.asset.assetId, second.asset.assetId]);
+    expect(updated.activeVisualAssetId).toBe(second.asset.assetId);
+  });
+
+  it('reads stored bytes with the asset mime type as content type', async () => {
+    const { storage } = createMemoryStorage();
+    await seedApprovedPost(storage);
+
+    const built = buildVisualAsset({
+      postId,
+      mimeType: 'image/webp',
+      prompt: 'webp visual',
+      model: 'gemini-3.1-flash-image',
+      now: () => new Date('2026-07-28T12:00:00.000Z'),
+    });
+    const imageBytes = new Uint8Array([9, 9, 9]);
+    await storage.createBytes(built.objectKey, imageBytes, 'image/webp');
+    await attachVisualAsset(storage, postId, built.asset);
+
+    await expect(readVisualAssetBytes(storage, postId, built.asset.assetId)).resolves.toEqual({
+      value: imageBytes,
+      contentType: 'image/webp',
+    });
+  });
+
+  it('rejects reading an asset id that does not belong to the post', async () => {
+    const { storage } = createMemoryStorage();
+    await seedApprovedPost(storage);
+
+    await expect(readVisualAssetBytes(storage, postId, 'sva_20260728120000_missing')).rejects.toThrow(
+      'not found',
+    );
+  });
+
+  it('does not attach the same asset id twice', async () => {
+    const { storage } = createMemoryStorage();
+    await seedApprovedPost(storage);
+
+    const built = buildVisualAsset({
+      postId,
+      mimeType: 'image/png',
+      prompt: 'once',
+      model: 'gemini-3.1-flash-image',
+      now: () => new Date('2026-07-28T12:00:00.000Z'),
+    });
+    await storage.createBytes(built.objectKey, new Uint8Array([1]), 'image/png');
+    await attachVisualAsset(storage, postId, built.asset);
+
+    await expect(attachVisualAsset(storage, postId, built.asset)).rejects.toThrow('already attached');
+  });
+});
+
+describe('updateSocialPostStatus', () => {
+  const postId = 'smp_20260715112648_0000000f';
+
+  async function seedPostWithStatus(storage: ObjectStorage, status: 'DRAFT' | 'APPROVED' | 'PUBLISHED') {
+    const built = buildSocialPostMetadata({
+      postMarkdown,
+      briefMarkdown,
+      topic: 'Hari Guru',
+      status,
+      postId,
+    });
+    await storage.createText(built.briefObjectKey, briefMarkdown, 'text/markdown');
+    await storage.createText(built.postObjectKey, postMarkdown, 'text/markdown');
+    await storage.createText(built.metadataObjectKey, built.metadataJson, 'application/json');
+    return built.metadata;
+  }
+
+  it('transitions DRAFT to APPROVED and writes metadata back', async () => {
+    const { storage, writes } = createMemoryStorage();
+    await seedPostWithStatus(storage, 'DRAFT');
+
+    const updated = await updateSocialPostStatus(storage, postId, 'APPROVED');
+
+    expect(updated.status).toBe('APPROVED');
+    expect(updated.postId).toBe(postId);
+    const lastWrite = writes[writes.length - 1]!;
+    expect(lastWrite.method).toBe('replace');
+    expect(lastWrite.key).toBe(`social-posts/${postId}/metadata.json`);
+  });
+
+  it('persists the new status so a fresh read sees APPROVED', async () => {
+    const { storage } = createMemoryStorage();
+    await seedPostWithStatus(storage, 'DRAFT');
+    await updateSocialPostStatus(storage, postId, 'APPROVED');
+
+    const post = await getSocialPost(storage, postId);
+    expect(post.metadata.status).toBe('APPROVED');
+  });
+
+  it('preserves visual assets and other fields through the transition', async () => {
+    const { storage } = createMemoryStorage();
+    await seedPostWithStatus(storage, 'DRAFT');
+    const built = buildVisualAsset({
+      postId,
+      mimeType: 'image/png',
+      prompt: 'test',
+      model: 'gemini-3.1-flash-image',
+      now: () => new Date('2026-07-28T12:00:00.000Z'),
+    });
+    await storage.createBytes(built.objectKey, new Uint8Array([1]), 'image/png');
+    await attachVisualAsset(storage, postId, built.asset);
+
+    const updated = await updateSocialPostStatus(storage, postId, 'APPROVED');
+
+    expect(updated.visualAssets?.length).toBe(1);
+    expect(updated.activeVisualAssetId).toBe(built.asset.assetId);
+    expect(updated.topic).toBe('Hari Guru');
+  });
+
+  it('rejects transitioning an already-APPROVED post', async () => {
+    const { storage } = createMemoryStorage();
+    await seedPostWithStatus(storage, 'APPROVED');
+
+    await expect(updateSocialPostStatus(storage, postId, 'APPROVED')).rejects.toThrow(
+      'Cannot transition social post',
+    );
+  });
+
+  it('rejects transitioning to PUBLISHED', async () => {
+    const { storage } = createMemoryStorage();
+    await seedPostWithStatus(storage, 'DRAFT');
+
+    await expect(updateSocialPostStatus(storage, postId, 'PUBLISHED')).rejects.toThrow(
+      'Cannot transition social post',
+    );
+  });
+
+  it('rejects an invalid post id', async () => {
+    const { storage } = createMemoryStorage();
+    await expect(updateSocialPostStatus(storage, 'smp_legacy', 'APPROVED')).rejects.toThrow(
+      'Invalid social post id',
+    );
   });
 });

@@ -81,6 +81,21 @@ Keep key only in agent process or deployment secret manager. Missing or malforme
 
 For local development, rerun `npm run setup` after editing `agent/.env` so the key is copied into generated `agent/.env.development`, then restart the agent.
 
+#### Visual Content Agent (image generation)
+
+The Visual Content Agent generates images on demand for an APPROVED social post through the fixed image model. Add server-owned configuration:
+
+```dotenv
+LLM_IMAGE_MODEL=gemini-3.1-flash-image
+#LLM_IMAGE_ENDPOINT_PATH=/images/generations
+```
+
+`LLM_IMAGE_MODEL` is the fixed model id invoked by the `generate_image` tool; it never comes from tool or model input. Empty/unset fails closed with `Image generation is not configured.` without preventing other agent features from starting. `LLM_IMAGE_ENDPOINT_PATH` defaults to the OpenAI Images API standard path (`/images/generations`); override it only when the configured gateway exposes image generation under a different path. Both use the existing `LLM_BASE_URL` and `LLM_API_KEY`; no second key is required.
+
+The image-generation HTTP adapter assumes the OpenAI Images API standard contract (`POST {LLM_BASE_URL}/images/generations` with `response_format: b64_json`). If the live gateway does not implement that contract, only `agent/src/image-generation/client.ts` needs adjustment.
+
+Image generation is on-demand only. Ask the Social Media Supervisor to generate a visual for a specific approved post; it delegates to the Visual Content Agent, which calls `generate_image`. The tool verifies the post is `APPROVED` from persisted metadata, stores the image bytes in Garage, attaches the asset to the post's metadata, and returns the asset id plus the application-facing image URL. Revisions generate a new asset and preserve the previous one. Images are served at `GET /api/storage/social-posts/<postId>/visuals/<assetId>`.
+
 ### `client/.env.local`
 
 ```dotenv

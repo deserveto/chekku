@@ -6,6 +6,7 @@ import { qaAndroidAgent } from '../qa-android-agent.js';
 import { socialMediaContentWriter } from '../social-media-content-writer.js';
 import { socialMediaStrategistAgent } from '../social-media-strategist-agent.js';
 import { socialMediaSupervisorAgent } from '../social-media-supervisor-agent.js';
+import { visualContentAgent } from '../visual-content-agent.js';
 
 describe('main-agent (general Chekku Assistant)', () => {
   it('has id main-agent', () => {
@@ -131,7 +132,59 @@ describe('agent differentiation (code-defined agents)', () => {
       socialMediaContentWriter.id,
       socialMediaStrategistAgent.id,
       socialMediaSupervisorAgent.id,
+      visualContentAgent.id,
     ];
     expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+describe('visual-content-agent (identity and tools)', () => {
+  it('has id visual-content-agent and name Visual Content Agent', () => {
+    expect(visualContentAgent.id).toBe('visual-content-agent');
+    expect(visualContentAgent.name).toBe('Visual Content Agent');
+  });
+
+  it('has Mastra memory', async () => {
+    expect(await visualContentAgent.getMemory()).toBeDefined();
+  });
+
+  it('binds exactly generate_image and nothing else', async () => {
+    const tools = await visualContentAgent.listTools();
+    expect(Object.keys(tools).sort()).toEqual(['generateImageTool']);
+  });
+});
+
+describe('social-media-supervisor-agent (three sub-agents and routing)', () => {
+  it('attaches the Content Writer, Strategist, and Visual Content Agent as sub-agents', () => {
+    const supervisor = socialMediaSupervisorAgent as unknown as {
+      __getStaticAgents?: () => Record<string, unknown>;
+    };
+    const subAgents = supervisor.__getStaticAgents?.() ?? {};
+    expect(Object.keys(subAgents).sort()).toEqual([
+      'socialMediaContentWriter',
+      'socialMediaStrategistAgent',
+      'visualContentAgent',
+    ]);
+    expect(subAgents.visualContentAgent).toBe(visualContentAgent);
+  });
+
+  it('routes image-generation requests to the Visual Content Agent', async () => {
+    const instructions = (await socialMediaSupervisorAgent.getInstructions()) as unknown as string;
+    expect(instructions).toContain('Visual Content Agent');
+    expect(instructions.toLowerCase()).toContain('image');
+    expect(instructions.toLowerCase()).toContain('visual');
+  });
+
+  it('forbids automatic visual generation and does not claim to generate images itself', async () => {
+    const instructions = (await socialMediaSupervisorAgent.getInstructions()) as unknown as string;
+    expect(instructions.toLowerCase()).toContain('only after an explicit user request');
+    expect(instructions.toLowerCase()).toContain('never dispatch it automatically');
+    expect(instructions.toLowerCase()).toContain('do not claim to publish or to generate images yourself');
+  });
+
+  it('keeps drafting and strategy routing intact', async () => {
+    const instructions = (await socialMediaSupervisorAgent.getInstructions()) as unknown as string;
+    expect(instructions).toContain('Social Media Content Writer');
+    expect(instructions).toContain('Social Media Strategist');
   });
 });

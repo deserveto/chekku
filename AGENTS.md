@@ -72,6 +72,7 @@ A task is not complete until affected tests pass. Before finalizing any reposito
 
 - `LibSQLStore` is the sole Mastra storage implementation.
 - Generic Garage object access belongs in `storage/`, not agent-private or browser modules.
+- `ObjectStorage` exposes text operations as required members and binary operations (`createBytes`, `replaceBytes`, `getBytes`) as optional interface members; production Garage, lazy, and namespaced adapters implement all three. Use `asBinaryObjectStorage` to narrow a store to binary capability at consumption sites. Binary reads are bounded to 16 MiB and reuse the same error-sanitization path as text operations.
 - Garage MCP and server-side code share `@chekku/storage`; browser components must never import it or access Garage directly.
 - PM report persistence composes the generic contract in `storage/src/pm-reports.ts`; it must not add PM semantics to Garage MCP.
 - Garage application configuration uses only `GARAGE_ENDPOINT`, `GARAGE_REGION`, `GARAGE_BUCKET`, `GARAGE_ACCESS_KEY_ID`, and `GARAGE_SECRET_ACCESS_KEY`.
@@ -149,9 +150,22 @@ LLM_MODELS
 ### Social Media Supervisor
 
 - Keep `social-media-supervisor-agent` code-defined with Mastra Memory and the context-safety processors (`createAgentMemory()`, `createAgentContextLimiter()`, and `createCharBudgetGuard()` wired LAST in `inputProcessors`).
-- The supervisor has no tools. It routes incoming requests to its sub-agents via Mastra's `agents` field and `network()` loop; it must not draft, repurpose, or plan content itself.
-- Attach the Content Writer as a sub-agent (`agents: { socialMediaContentWriter }`). Future sub-agents (e.g. Social Media Strategist) attach here, not on the Content Writer.
+- The supervisor has no tools. It routes incoming requests to its sub-agents via Mastra's `agents` field and `network()` loop; it must not draft, repurpose, plan, or generate visuals itself.
+- Attach the Content Writer, the Strategist, and the Visual Content Agent as sub-agents (`agents: { socialMediaContentWriter, socialMediaStrategistAgent, visualContentAgent }`). Future sub-agents attach here, not on the Content Writer.
+- Drafting/rewriting/repurposing/caption/platform-formatting requests route to the Content Writer; strategy/brief/content-plan/audience-research requests route to the Strategist; image/illustration/visual-asset/thumbnail/artwork requests route to the Visual Content Agent. Visual generation happens only after an explicit user request — the supervisor must not auto-dispatch the Visual Content Agent when the Content Writer finishes. Forward the `postId` unchanged; never fabricate approval status (the Visual Content Agent and its tool verify it from persisted metadata).
 - Active call paths opt into routing by invoking the supervisor; the Telegram channel and slash commands stay on the Content Writer for now, so the supervisor is exercised through the chat UI or future integrations.
+
+### Visual Content Agent
+
+- Keep `visual-content-agent` code-defined with Mastra Memory, the gateway compatibility processor, and the context-safety processors (`createAgentMemory()`, `createAgentContextLimiter()`, `gatewayCompatibilityProcessor`, and `createCharBudgetGuard()` wired LAST in `inputProcessors`, after the gateway compatibility processor).
+- Orchestration uses the normal server language model (`getServerModel()`), NOT the image model. The fixed image model (`LLM_IMAGE_MODEL`, default `gemini-3.1-flash-image`) is invoked only inside `generateImageTool`.
+- Bind exactly `tools: { generateImageTool }`. Do not attach generic Garage MCP tools, Telegram channels, or slash commands. The agent has no channels.
+- Image generation is on-demand only: it never runs automatically after the Content Writer finishes or inside the `weekly-social-drafts` workflow. It only runs when the user explicitly asks the supervisor for a visual and the supervisor delegates.
+- The tool verifies the post's persisted status is exactly `APPROVED` before any provider call; it rejects `DRAFT` (and `PUBLISHED` for this iteration). It loads the post via `getSocialPost`, calls the image-generation client, stores bytes via the binary storage capability, and attaches the asset to canonical metadata (metadata written last). The model never chooses the model id, endpoint, namespace, object key, or approval status.
+- The image-generation provider boundary lives in `agent/src/image-generation/`. It uses only the existing `LLM_BASE_URL` and `LLM_API_KEY`; no second key. The fixed model comes from `LLM_IMAGE_MODEL`; the endpoint path from `LLM_IMAGE_ENDPOINT_PATH` (default `/images/generations`). The concrete HTTP adapter targets the OpenAI Images API standard contract; if the live gateway differs, only `agent/src/image-generation/client.ts` needs adjustment. All lower layers are verified through dependency-injected test doubles.
+- Revisions regenerate: a new `sva_` asset id and object key are produced and the previous asset is preserved in `visualAssets`; there is no editing, inpainting, image-to-image, mask editing, or image upload.
+- Visual assets live under the historical `social-media-agent` namespace at `social-posts/<postId>/visuals/<assetId>.<ext>`, served by `GET /api/storage/social-posts/<postId>/visuals/[assetId]`. Metadata never contains base64 image data or Garage credentials.
+- The `generate_image` tool is registered only on `visual-content-agent`. It must not enter `storedAgentTools`, `garageMcpServer`, `searxngMcpServer`, `webReaderMcpServer`, or any stored-agent registry.
 
 ### Client proxy and identity
 
