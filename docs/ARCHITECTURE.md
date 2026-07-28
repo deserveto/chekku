@@ -313,10 +313,13 @@ The list tool returns newest-first structured reports and presentation-only `rep
 ```text
 competitive-analyses/<analysisId>/request.md
 competitive-analyses/<analysisId>/analysis.md
+competitive-analyses/<analysisId>/slides.md
 competitive-analyses/<analysisId>/metadata.json
 ```
 
-IDs use `pca_YYYYMMDDHHMMSS_<8 lowercase hex>` and enforce `^pca_[0-9]{14}_[0-9a-f]{8}$`. Request and analysis write before metadata, so partial saves do not become list entries. Metadata projects only bounded anchor, optional market, five to seven unique competitors, derived product/source counts, and canonical relative keys. Save tool additionally requires one unique normalized public primary-source URL mapped to every product before repository access.
+IDs use `pca_YYYYMMDDHHMMSS_<8 lowercase hex>` and enforce `^pca_[0-9]{14}_[0-9a-f]{8}$`. Request, analysis, and slides write before metadata, so partial saves do not become list entries. Metadata projects only bounded anchor, optional market, five to seven unique competitors, derived product/source counts, and canonical relative keys. Save tool additionally requires one unique normalized public primary-source URL mapped to every product before repository access. Every complete save also produces a non-blank `slides.md` Marp deck authored by the same agent run; legacy analyses saved before this feature have no `slides.md`.
+
+The competitive analysis record includes a `slides.md` Marp deck produced by the same agent run. The deck renders in-app at `/reports/competitive/<analysisId>/slides` through a client component that lazy-imports `@marp-team/marp-core`; the route is server-rendered behind the local identity seam, with browser print providing PDF export. No Chromium runs on the server in v1.
 
 Competitive list output adds presentation-only `analysisUrl` and deterministic `analysesMarkdown` with Analysis, Created, Anchor, Competitors, and Sources columns. These fields never enter metadata, save/view output, or repository types. Empty output is exactly `No saved competitive analyses found.`
 

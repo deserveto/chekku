@@ -311,19 +311,25 @@ Competitive tools and `client/src/server/competitive-analyses.ts` use same fixed
 ```text
 competitive-analyses/<analysisId>/request.md
 competitive-analyses/<analysisId>/analysis.md
+competitive-analyses/<analysisId>/slides.md
 competitive-analyses/<analysisId>/metadata.json
 ```
 
-IDs use `pca_YYYYMMDDHHMMSS_<8 lowercase hex>` and enforce `^pca_[0-9]{14}_[0-9a-f]{8}$`. Metadata writes last, retains only canonical relative keys and bounded product data, and derives product/source counts. Save input requires five to seven unique competitors plus exactly one unique normalized public source URL for anchor and every competitor. Presentation-only `analysisUrl` and `analysesMarkdown` never enter storage or view output.
+IDs use `pca_YYYYMMDDHHMMSS_<8 lowercase hex>` and enforce `^pca_[0-9]{14}_[0-9a-f]{8}$`. Metadata writes last, retains only canonical relative keys and bounded product data, and derives product/source counts. Save input requires five to seven unique competitors plus exactly one unique normalized public source URL for anchor and every competitor, plus a non-blank `slidesMarkdown` Marp deck produced by the same agent run. Presentation-only `analysisUrl` and `analysesMarkdown` never enter storage or view output.
 
 Competitive interfaces:
 
 - `/reports/competitive` lists analysis ID, created time, anchor, competitor count, and source count newest first.
 - `/reports/competitive/[analysisId]` renders analysis, metadata, then original request.
+- `/reports/competitive/[analysisId]/slides` renders the saved `slides.md` as a Marp deck through a client component.
 - `GET /api/storage/competitive-analyses` returns `{ analyses }` after server identity validation.
-- `GET /api/storage/competitive-analyses/[analysisId]` returns request, analysis, and metadata after identity and ID validation.
+- `GET /api/storage/competitive-analyses/[analysisId]` returns request, analysis, optional slides, and metadata after identity and ID validation.
 
 Competitive chat lists return deterministic `analysesMarkdown` unchanged. Empty text is exactly `No saved competitive analyses found.` Lists and feature matrices use same accessible horizontal-scroll wrapper as weekly tables. Missing identity returns 403; invalid IDs return 400 or page not-found; missing analyses return 404; storage failures return fixed 503 messages without physical keys or provider details.
+
+### Competitive analysis slides
+
+Every completed `/competitive-analysis` run produces a `slides.md` Marp deck saved alongside the analysis. Open it at `/reports/competitive/<pca-id>/slides`. The deck renders client-side through `@marp-team/marp-core`; the route is server-rendered behind the same identity seam as the rest of `/reports/*`. Use the Print button to save as PDF via the browser; no server-side rendering, no PPTX, no public sharing in v1. Legacy analyses saved before this feature have no `slides.md` and the route returns 404 — re-run `/competitive-analysis` to produce one.
 
 ## Browser operation
 

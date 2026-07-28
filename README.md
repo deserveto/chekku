@@ -383,12 +383,13 @@ pm-reports/<reportId>/metadata.json
 
 competitive-analyses/<analysisId>/request.md
 competitive-analyses/<analysisId>/analysis.md
+competitive-analyses/<analysisId>/slides.md
 competitive-analyses/<analysisId>/metadata.json
 ```
 
-Physical `agents/<base64url-agent-id>/...` prefixes never appear in persisted metadata, tool output, APIs, or pages. Existing global development objects are not migrated or used as fallback. Weekly IDs use `pmr_YYYYMMDDHHMMSS_<8 lowercase hex>`; competitive IDs use `pca_YYYYMMDDHHMMSS_<8 lowercase hex>`.
+Physical `agents/<base64url-agent-id>/...` prefixes never appear in persisted metadata, tool output, APIs, or pages. Existing global development objects are not migrated or used as fallback. Weekly IDs use `pmr_YYYYMMDDHHMMSS_<8 lowercase hex>`; competitive IDs use `pca_YYYYMMDDHHMMSS_<8 lowercase hex>`. Every complete competitive save produces a non-blank `slides.md` Marp deck; legacy analyses saved before this feature have no `slides.md` and the slides route returns 404.
 
-`/reports` is a grouped landing. `/reports/weekly` lists weekly reports while existing `/reports/<pmr-id>` detail links remain stable. `/reports/competitive` lists analyses and `/reports/competitive/<pca-id>` renders analysis, metadata, then original request. Authenticated APIs are `GET /api/storage/pm-reports[/<reportId>]` and `GET /api/storage/competitive-analyses[/<analysisId>]`. Server pages call focused server-only services and then `@chekku/storage`; browser code never imports storage or contacts Garage.
+`/reports` is a grouped landing. `/reports/weekly` lists weekly reports while existing `/reports/<pmr-id>` detail links remain stable. `/reports/competitive` lists analyses, `/reports/competitive/<pca-id>` renders analysis, metadata, then original request, and `/reports/competitive/<pca-id>/slides` renders the saved Marp deck in-app via `@marp-team/marp-core` (print-to-PDF only, no PPTX, no public sharing in v1). Authenticated APIs are `GET /api/storage/pm-reports[/<reportId>]` and `GET /api/storage/competitive-analyses[/<analysisId>]`. Server pages call focused server-only services and then `@chekku/storage`; browser code never imports storage or contacts Garage.
 
 Weekly and competitive list tools return structured metadata plus separate presentation-only URLs and deterministic Markdown. PM Agent returns `reportsMarkdown` or `analysesMarkdown` unchanged. Valid dates render as `YYYY-MM-DD HH:mm UTC`; invalid stored text remains visible and safely escaped. Links are URL-encoded relative paths and are never persisted. Chat, list, and feature-matrix tables use labeled keyboard-focusable horizontal-scroll regions with visible focus outlines.
 
