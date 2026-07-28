@@ -56,6 +56,7 @@ const analysis: CompetitiveAnalysisReadResult = {
   analysisId,
   requestMarkdown: '/competitive-analysis GPT',
   analysisMarkdown: '# Competitive Analysis: GPT',
+  slidesMarkdown: '---\nmarp: true\n---\n# Deck',
   metadata,
 };
 
@@ -224,7 +225,9 @@ describe('competitive analysis API routes', () => {
     }));
     const getText = vi.fn(async (key: string) => key.endsWith('metadata.json')
       ? JSON.stringify(hostileMetadata)
-      : key.endsWith('request.md') ? analysis.requestMarkdown : analysis.analysisMarkdown);
+      : key.endsWith('request.md') ? analysis.requestMarkdown
+      : key.endsWith('slides.md') ? analysis.slidesMarkdown
+      : analysis.analysisMarkdown);
     mocks.rootStoreFactory.mockReturnValue(createRootStore({ listKeys, getText }));
 
     const listResponse = await listAnalysesRoute();
