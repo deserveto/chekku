@@ -42,6 +42,7 @@ const reportListPage = readOptionalSource('../app/reports/weekly/page.tsx');
 const reportDetailPage = readOptionalSource('../app/reports/[reportId]/page.tsx');
 const competitiveAnalysisListPage = readOptionalSource('../app/reports/competitive/page.tsx');
 const competitiveAnalysisDetailPage = readOptionalSource('../app/reports/competitive/[analysisId]/page.tsx');
+const competitiveAnalysisSlidesPage = readOptionalSource('../app/reports/competitive/[analysisId]/slides/page.tsx');
 
 describe('requested UI structure', () => {
   it('lets each sidebar place its collapse control in the brand row', () => {
@@ -165,5 +166,13 @@ describe('requested UI structure', () => {
 
   it('renders an Android glyph for qa-android-agent in the catalog', () => {
     expect(agentCatalogSource).toContain("agent.id === 'qa-android-agent' ? '▷'");
+  });
+
+  it('renders the competitive slides route through the shared client component and never touches Garage directly', () => {
+    expect(competitiveAnalysisSlidesPage).toContain("export const dynamic = 'force-dynamic'");
+    expect(competitiveAnalysisSlidesPage).not.toContain("'use client'");
+    expect(competitiveAnalysisSlidesPage).toContain("from '@/components/competitive-slides'");
+    expect(competitiveAnalysisSlidesPage).toContain("from '@/server/competitive-analyses'");
+    expect(competitiveAnalysisSlidesPage).not.toContain('from \'@chekku/storage\'');
   });
 });
