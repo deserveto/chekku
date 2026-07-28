@@ -111,6 +111,15 @@ describe('competitive analyses list page', () => {
     expect(markup).toContain('role="alert"');
     expect(markup).toContain(message);
   });
+
+  it('renders a Slides badge on each card', async () => {
+    mocks.listAnalyses.mockResolvedValue([metadata]);
+
+    const markup = renderToStaticMarkup(await CompetitiveAnalysesPage());
+
+    expect(markup).toContain('Slides');
+    expect(markup).toContain(`/reports/competitive/${analysisId}/slides`);
+  });
 });
 
 describe('competitive analysis detail page', () => {
@@ -160,6 +169,27 @@ describe('competitive analysis detail page', () => {
     expect(markup).toContain(`MARKDOWN:${analysis.requestMarkdown}`);
     expect(markup).toContain('&quot;anchorProduct&quot;: &quot;GPT&quot;');
     expect(markup).toContain('href="/reports/competitive"');
+  });
+
+  it('renders a View slides button when slidesMarkdown is present', async () => {
+    mocks.getAnalysis.mockResolvedValue(analysisWithSlides);
+
+    const markup = renderToStaticMarkup(await CompetitiveAnalysisDetailPage({
+      params: Promise.resolve({ analysisId }),
+    }));
+
+    expect(markup).toContain('View slides');
+    expect(markup).toContain(`/reports/competitive/${analysisId}/slides`);
+  });
+
+  it('hides the View slides button when slidesMarkdown is missing (legacy)', async () => {
+    mocks.getAnalysis.mockResolvedValue({ ...analysis, slidesMarkdown: undefined });
+
+    const markup = renderToStaticMarkup(await CompetitiveAnalysisDetailPage({
+      params: Promise.resolve({ analysisId }),
+    }));
+
+    expect(markup).not.toContain('View slides');
   });
 });
 

@@ -66,7 +66,17 @@ export default async function CompetitiveAnalysisDetailPage({
             <h1>{analysis.analysisId}</h1>
             <p>Saved analysis first, followed by storage metadata and original request.</p>
           </div>
-          <Link className="studio-button" href="/reports/competitive">Back to analyses</Link>
+          <div className="studio-report-header-actions">
+            {analysis.slidesMarkdown && analysis.slidesMarkdown.trim().length > 0 ? (
+              <Link
+                className="studio-button"
+                href={`/reports/competitive/${encodeURIComponent(analysis.analysisId)}/slides`}
+              >
+                View slides
+              </Link>
+            ) : null}
+            <Link className="studio-button" href="/reports/competitive">Back to analyses</Link>
+          </div>
         </header>
 
         <div className="studio-report-detail">
