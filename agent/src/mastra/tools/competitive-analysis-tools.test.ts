@@ -40,10 +40,32 @@ const sources = [
   { productName: 'Perplexity', url: 'https://www.perplexity.ai/' },
   { productName: 'Meta AI', url: 'https://www.meta.ai/' },
 ];
+const slidesMarkdown = [
+  '---',
+  'marp: true',
+  'theme: default',
+  'paginate: true',
+  'size: 16:9',
+  '---',
+  '',
+  '# Competitive Analysis: GPT',
+  '',
+  '## Agenda',
+  '',
+  '- Executive summary',
+  '- Sources',
+  '',
+  '---',
+  '',
+  '## Sources',
+  '',
+  '- GPT: https://openai.com/chatgpt/',
+].join('\n');
 
 const saveInput = {
   requestMarkdown: '/competitive-analysis GPT vs Claude',
   analysisMarkdown,
+  slidesMarkdown,
   anchorProduct: ' GPT ',
   market: ' AI assistants ',
   competitorNames,
@@ -176,6 +198,7 @@ describe('competitive analysis tools', () => {
     const base = `${namespace}/competitive-analyses/${saved.analysisId}`;
     expect(objects.get(`${base}/request.md`)).toBe(saveInput.requestMarkdown);
     expect(objects.get(`${base}/analysis.md`)).toBe(saveInput.analysisMarkdown);
+    expect(objects.get(`${base}/slides.md`)).toBe(saveInput.slidesMarkdown);
     const storedMetadata = JSON.parse(objects.get(`${base}/metadata.json`)!);
     expect(storedMetadata).toMatchObject({ productCount: 6, sourceCount: 6 });
     expect(storedMetadata).not.toHaveProperty('sources');
@@ -259,6 +282,7 @@ describe('competitive analysis tools', () => {
       analysisId: saved.analysisId,
       requestMarkdown: saveInput.requestMarkdown,
       analysisMarkdown: saveInput.analysisMarkdown,
+      slidesMarkdown: saveInput.slidesMarkdown,
     });
     expect(viewed).not.toHaveProperty('analysisUrl');
     expect(viewed).not.toHaveProperty('analysesMarkdown');
@@ -282,6 +306,7 @@ describe('competitive analysis tools', () => {
         analysisId,
         requestMarkdown: saveInput.requestMarkdown,
         analysisMarkdown,
+        slidesMarkdown,
         metadata: approvedMetadata,
         unexpected: true,
       }),
@@ -289,11 +314,21 @@ describe('competitive analysis tools', () => {
         analysisId,
         requestMarkdown: saveInput.requestMarkdown,
         analysisMarkdown,
+        slidesMarkdown,
         metadata: { ...approvedMetadata, unexpected: true },
       }),
     ]);
 
     for (const validation of validations) expect(validation.issues).toBeDefined();
+
+    const positiveViewOutput = await viewTool.outputSchema!['~standard'].validate({
+      analysisId,
+      requestMarkdown: saveInput.requestMarkdown,
+      analysisMarkdown,
+      slidesMarkdown,
+      metadata: approvedMetadata,
+    });
+    expect(positiveViewOutput.issues).toBeUndefined();
   });
 
   it.each([
@@ -322,6 +357,18 @@ describe('competitive analysis tools', () => {
     ['oversized URL', { sources: sources.map((source, index) =>
       index === 1 ? { ...source, url: `https://example.com/${'a'.repeat(2_100)}` } : source) }],
   ])('rejects incomplete or unsafe save input: %s', async (_name, override) => {
+    const validation = await validateInput(
+      createSaveCompetitiveAnalysisToGarageTool(),
+      { ...saveInput, ...override },
+    );
+
+    expect(validation.issues).toBeDefined();
+  });
+
+  it.each([
+    ['blank slides', { slidesMarkdown: ' \r\n\t' }],
+    ['oversized slides', { slidesMarkdown: 's'.repeat(262_145) }],
+  ])('rejects incomplete slidesMarkdown save input: %s', async (_name, override) => {
     const validation = await validateInput(
       createSaveCompetitiveAnalysisToGarageTool(),
       { ...saveInput, ...override },
