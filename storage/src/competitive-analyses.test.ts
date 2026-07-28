@@ -49,11 +49,14 @@ function createMemoryStorage() {
   return { objects, storage, writes };
 }
 
+const slidesMarkdown = '---\nmarp: true\n---\n# Deck\n';
+
 function validInput(store: ObjectStorage) {
   return {
     store,
     requestMarkdown,
     analysisMarkdown,
+    slidesMarkdown,
     anchorProduct: 'GPT',
     market: 'General AI assistants',
     competitorNames,
@@ -71,6 +74,7 @@ describe('competitive analysis storage', () => {
     expect(competitiveAnalysisKeysFor(analysisId)).toEqual({
       requestObjectKey: `competitive-analyses/${analysisId}/request.md`,
       analysisObjectKey: `competitive-analyses/${analysisId}/analysis.md`,
+      slidesObjectKey: `competitive-analyses/${analysisId}/slides.md`,
       metadataObjectKey: `competitive-analyses/${analysisId}/metadata.json`,
     });
   });
@@ -89,17 +93,22 @@ describe('competitive analysis storage', () => {
       competitorNames,
       productCount: 6,
       sourceCount: 6,
-      ...competitiveAnalysisKeysFor(analysisId),
+      requestObjectKey: `competitive-analyses/${analysisId}/request.md`,
+      analysisObjectKey: `competitive-analyses/${analysisId}/analysis.md`,
+      metadataObjectKey: `competitive-analyses/${analysisId}/metadata.json`,
     });
+    expect(metadata).not.toHaveProperty('slidesObjectKey');
     expect(writes.map(({ key }) => key)).toEqual([
       `agents/cG0tYWdlbnQ/competitive-analyses/${analysisId}/request.md`,
       `agents/cG0tYWdlbnQ/competitive-analyses/${analysisId}/analysis.md`,
+      `agents/cG0tYWdlbnQ/competitive-analyses/${analysisId}/slides.md`,
       `agents/cG0tYWdlbnQ/competitive-analyses/${analysisId}/metadata.json`,
     ]);
     await expect(getCompetitiveAnalysis(store, analysisId)).resolves.toEqual({
       analysisId,
       requestMarkdown,
       analysisMarkdown,
+      slidesMarkdown,
       metadata,
     });
   });
@@ -124,6 +133,12 @@ describe('competitive analysis storage', () => {
       },
       {
         method: 'create',
+        key: `competitive-analyses/${analysisId}/slides.md`,
+        value: slidesMarkdown,
+        contentType: 'text/markdown',
+      },
+      {
+        method: 'create',
         key: `competitive-analyses/${analysisId}/metadata.json`,
         value: JSON.stringify(metadata, null, 2),
         contentType: 'application/json',
@@ -142,9 +157,14 @@ describe('competitive analysis storage', () => {
 
   it.each([
     ['analysis.md', [`competitive-analyses/${analysisId}/request.md`]],
+    ['slides.md', [
+      `competitive-analyses/${analysisId}/request.md`,
+      `competitive-analyses/${analysisId}/analysis.md`,
+    ]],
     ['metadata.json', [
       `competitive-analyses/${analysisId}/request.md`,
       `competitive-analyses/${analysisId}/analysis.md`,
+      `competitive-analyses/${analysisId}/slides.md`,
     ]],
   ])('propagates %s write failures without exposing complete metadata', async (failedObject, persistedKeys) => {
     const { objects, storage } = createMemoryStorage();
@@ -229,7 +249,9 @@ describe('competitive analysis storage', () => {
       competitorNames,
       productCount: 6,
       sourceCount: 6,
-      ...validKeys,
+      requestObjectKey: validKeys.requestObjectKey,
+      analysisObjectKey: validKeys.analysisObjectKey,
+      metadataObjectKey: validKeys.metadataObjectKey,
     };
     objects.set(validKeys.metadataObjectKey, JSON.stringify(valid));
     objects.set('competitive-analyses/corrupt/metadata.json', '{not-json');
@@ -268,7 +290,9 @@ describe('competitive analysis storage', () => {
       competitorNames,
       productCount: 6,
       sourceCount: 6,
-      ...keys,
+      requestObjectKey: keys.requestObjectKey,
+      analysisObjectKey: keys.analysisObjectKey,
+      metadataObjectKey: keys.metadataObjectKey,
     };
     objects.set(keys.requestObjectKey, requestMarkdown);
     objects.set(keys.analysisObjectKey, analysisMarkdown);
@@ -397,5 +421,72 @@ describe('competitive analysis storage', () => {
     await expect(getCompetitiveAnalysis(storage, analysisId)).rejects.toThrow(
       `Invalid competitive analysis metadata for ${analysisId}`,
     );
+  });
+
+  it('writes slides.md between analysis.md and metadata.json', async () => {
+    const { storage, writes } = createMemoryStorage();
+
+    await saveCompetitiveAnalysis(validInput(storage));
+
+    const writeKeys = writes.map(({ key }) => key);
+    const slidesIndex = writeKeys.indexOf(`competitive-analyses/${analysisId}/slides.md`);
+    const analysisIndex = writeKeys.indexOf(`competitive-analyses/${analysisId}/analysis.md`);
+    const metadataIndex = writeKeys.indexOf(`competitive-analyses/${analysisId}/metadata.json`);
+    expect(slidesIndex).toBeGreaterThan(-1);
+    expect(slidesIndex).toBeGreaterThan(analysisIndex);
+    expect(metadataIndex).toBeGreaterThan(slidesIndex);
+  });
+
+  it('rejects blank slidesMarkdown before writing anything', async () => {
+    const { storage, writes } = createMemoryStorage();
+
+    await expect(saveCompetitiveAnalysis({
+      ...validInput(storage),
+      slidesMarkdown: '   ',
+    })).rejects.toThrow('slidesMarkdown must not be blank');
+    expect(writes).toEqual([]);
+  });
+
+  it('rejects oversized slidesMarkdown before writing', async () => {
+    const { storage, writes } = createMemoryStorage();
+
+    await expect(saveCompetitiveAnalysis({
+      ...validInput(storage),
+      slidesMarkdown: 's'.repeat(262_145),
+    })).rejects.toThrow('slidesMarkdown exceeds 262144 UTF-8 bytes');
+    expect(writes).toEqual([]);
+  });
+
+  it('round-trips slidesMarkdown on read', async () => {
+    const { storage } = createMemoryStorage();
+    const store = createCompetitiveAnalysisStorage(storage);
+
+    await saveCompetitiveAnalysis(validInput(store));
+
+    const result = await getCompetitiveAnalysis(store, analysisId);
+    expect(result.slidesMarkdown).toBe(slidesMarkdown);
+  });
+
+  it('returns slidesMarkdown undefined for legacy analyses without slides.md', async () => {
+    const { objects, storage } = createMemoryStorage();
+    const keys = competitiveAnalysisKeysFor(analysisId);
+    const legacyMetadata = {
+      analysisId,
+      createdAt: '2026-07-23T12:00:00.000Z',
+      anchorProduct: 'GPT',
+      market: 'AI assistants',
+      competitorNames,
+      productCount: 6,
+      sourceCount: 6,
+      requestObjectKey: keys.requestObjectKey,
+      analysisObjectKey: keys.analysisObjectKey,
+      metadataObjectKey: keys.metadataObjectKey,
+    };
+    objects.set(keys.requestObjectKey, requestMarkdown);
+    objects.set(keys.analysisObjectKey, analysisMarkdown);
+    objects.set(keys.metadataObjectKey, JSON.stringify(legacyMetadata));
+
+    const result = await getCompetitiveAnalysis(storage, analysisId);
+    expect(result.slidesMarkdown).toBeUndefined();
   });
 });
