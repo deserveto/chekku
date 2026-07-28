@@ -585,7 +585,7 @@ git commit -m "feat(agent): require slidesMarkdown in competitive save and expos
 
 **Files:**
 - Modify: `agent/src/agents/pm-agent-skills.ts`
-- Test: `agent/src/agents/__tests__/pm-agent-skills.test.ts`, `agent/src/agents/__tests__/both-agents.test.ts`
+- Test: `agent/src/agents/__tests__/pm-agent-skills.test.ts`
 
 **Interfaces:**
 - Produces: `competitiveAnalysisInstructions` ends with a `## Slide deck` section and a `View slides:` emission rule.
@@ -603,17 +603,13 @@ it('defines slide deck rules and view slides link emission', () => {
   expect(competitiveAnalysisInstructions).toContain('size: 16:9');
   expect(competitiveAnalysisInstructions).toContain('10-14 narrative slides');
   expect(competitiveAnalysisInstructions).toContain('No new claims beyond analysis.md');
-  expect(competitiveAnalysisInstructions).toContain('preserve every inline primary-source link');
+  expect(competitiveAnalysisInstructions).toContain('Preserve every inline primary-source link');
   expect(competitiveAnalysisInstructions).toContain('Required for the complete-report branch');
   expect(competitiveAnalysisInstructions).toContain('View slides: /reports/competitive/<analysisId>/slides');
 });
 ```
 
-In `agent/src/agents/__tests__/both-agents.test.ts`, inside the existing `'routes weekly, competitive, retrieval, and conversational intents'` test, add:
-
-```ts
-expect(instructions).toContain('View slides:');
-```
+Note: the assertion targets `competitiveAnalysisInstructions` (the skill body), NOT `pmAgent.getInstructions()`. Mastra keeps agent main instructions and skill instructions separate — `getInstructions()` returns only the agent's main instructions and never merges skill content. Pinning at the skill level is sufficient; no `both-agents.test.ts` change is required for this task.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -661,7 +657,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add agent/src/agents/pm-agent-skills.ts agent/src/agents/__tests__/pm-agent-skills.test.ts agent/src/agents/__tests__/both-agents.test.ts
+git add agent/src/agents/pm-agent-skills.ts agent/src/agents/__tests__/pm-agent-skills.test.ts
 git commit -m "feat(agent): require slide deck in competitive-analysis skill output"
 ```
 
