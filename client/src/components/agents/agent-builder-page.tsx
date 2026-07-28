@@ -71,6 +71,27 @@ const TOOL_META: Record<string, { title: string; description: string; icon: stri
   },
 };
 
+const MCP_META = {
+  garage: {
+    title: 'Garage',
+    description: 'Create, read, list, replace, and delete agent-isolated text objects in Garage.',
+    icon: 'G',
+  },
+  searxng: {
+    title: 'SearXNG Search',
+    description: 'Search the web through the server-owned SearXNG instance and return result snippets.',
+    icon: 'S',
+  },
+  'web-reader': {
+    title: 'Web Reader',
+    description: 'Read one public web page through the fixed hosted Reader and return bounded untrusted Markdown.',
+    icon: 'R',
+  },
+} satisfies Record<
+  (typeof STUDIO_MCP_CLIENT_IDS)[number],
+  { title: string; description: string; icon: string }
+>;
+
 function titleForTool(id: string): string {
   return TOOL_META[id]?.title ?? id;
 }
@@ -403,6 +424,7 @@ export function AgentBuilderPage({
               <div className="studio-capability-grid">
                 {STUDIO_MCP_CLIENT_IDS.map((mcpClientId) => {
                   const checked = values.mcpClients.includes(mcpClientId);
+                  const meta = MCP_META[mcpClientId];
                   return (
                     <label
                       className={`studio-capability-card ${
@@ -418,12 +440,10 @@ export function AgentBuilderPage({
                         }
                         disabled={submitting}
                       />
-                      <span className="studio-capability-icon">G</span>
+                      <span className="studio-capability-icon">{meta.icon}</span>
                       <span>
-                        <strong>Garage</strong>
-                        <small>
-                          Create, read, list, replace, and delete agent-isolated text objects in Garage.
-                        </small>
+                        <strong>{meta.title}</strong>
+                        <small>{meta.description}</small>
                       </span>
                       <i>{checked ? '✓' : '+'}</i>
                     </label>

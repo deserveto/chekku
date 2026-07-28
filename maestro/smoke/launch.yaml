@@ -1,0 +1,4 @@
+# Placeholder app id. Replace with your application's package before running.
+appId: com.example.qaapp
+---
+- launchApp

@@ -84,6 +84,16 @@ export function StudioNav({ resourceId }: { resourceId: string }) {
               <span aria-hidden="true">▤</span>
               <span className="studio-sidebar-copy">Reports</span>
             </Link>
+            <Link
+              href="/social-posts"
+              className={pathname.startsWith('/social-posts') ? 'active' : ''}
+              aria-current={pathname.startsWith('/social-posts') ? 'page' : undefined}
+              aria-label="Social posts"
+              title={collapsed ? 'Social posts' : undefined}
+            >
+              <span aria-hidden="true">▦</span>
+              <span className="studio-sidebar-copy">Social posts</span>
+            </Link>
           </nav>
 
           <div className="studio-nav-spacer" />

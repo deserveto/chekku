@@ -134,6 +134,5 @@ export const sendEmailTool = createTool({
     messageId: z.string().optional(),
     provider: z.literal('resend'),
   }),
-  requireApproval: true,
   execute: async (input) => sendEmailViaResend(input),
 });

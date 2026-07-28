@@ -113,6 +113,13 @@ function assertThreadOwnership(
   }
 }
 
+function isThreadNotFoundError(value: unknown): boolean {
+  if (!(value instanceof Error)) return false;
+  const status = (value as { status?: unknown }).status;
+  if (status === 404) return true;
+  return /\b404\b|not found/i.test(value.message);
+}
+
 export async function listAgentThreads(
   resourceId: string,
   agentId: string,
@@ -147,11 +154,16 @@ export async function listThreadMessages(
 ): Promise<StudioMemoryMessage[]> {
   assertThreadOwnership(agentId, threadId, resourceId);
   const thread = mastraClient.getMemoryThread({ threadId, agentId });
-  const response = await thread.listMessages({
-    page: 0,
-    perPage: 200,
-    orderBy: { field: 'createdAt', direction: 'ASC' },
-  });
+  const response = await thread
+    .listMessages({
+      page: 0,
+      perPage: 200,
+      orderBy: { field: 'createdAt', direction: 'ASC' },
+    })
+    .catch((error: unknown) => {
+      if (isThreadNotFoundError(error)) return { messages: [] };
+      throw error;
+    });
 
   const raw = response as unknown;
   const rows = Array.isArray(raw)

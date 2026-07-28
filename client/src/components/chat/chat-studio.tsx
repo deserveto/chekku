@@ -9,11 +9,21 @@ import {
   useRef,
   useState,
 } from 'react';
-import { RequestContext } from '@mastra/client-js';
 import { useRouter } from 'next/navigation';
+import { CommandMenu } from '@/components/chat/command-menu';
+import {
+  commandFilterText,
+  isCommandInput,
+  resolveCommandKey,
+  selectSkillByIndex,
+} from '@/components/chat/command-picker';
 import { MarkdownMessage } from '@/components/markdown-message';
 import { ResizableSidebar } from '@/components/studio/resizable-sidebar';
 import { BrandMark } from '@/components/ui/brand-mark';
+import {
+  listAgentSkills,
+  type AgentSkillSummary,
+} from '@/lib/agent-skills';
 import { buildChatHref } from '@/lib/chat-route';
 import {
   listAgentThreads,
@@ -35,12 +45,11 @@ import {
 import {
   MAIN_AGENT_ID,
   QA_WEB_AGENT_ID,
+  QA_ANDROID_AGENT_ID,
   type ChatMessage,
   type ChekkuAgentSummary,
   type ToolEvent,
 } from '@/lib/types';
-
-const ACCESS_MODE_KEY = 'chekku-browser-access';
 
 function readChunkPayload(chunk: unknown): Record<string, unknown> {
   if (!chunk || typeof chunk !== 'object') return {};
@@ -73,52 +82,6 @@ function messageFromMemory(
   return { ...value };
 }
 
-type ChekkuAgentClient = ReturnType<typeof mastraClient.getAgent>;
-
-interface ApprovalResumeResult {
-  text: string;
-  toolResult?: { result?: unknown; output?: unknown };
-}
-
-/**
- * Resume a suspended tool-approval run with the non-streaming generate
- * variants and return the completed run's final text + matching tool result.
- *
- * The streaming resume (`approveToolCall`/`declineToolCall`) emits a
- * tool-result chunk without a preceding tool-call chunk, which makes
- * `@mastra/client-js`'s stream pipeline throw "tool_result must be preceded by
- * a tool_call". The generate variants sidestep that by returning the whole
- * completed run in a single response. Kept at module scope so it stays out of
- * the component's render purity analysis.
- */
-async function resumeApprovalGenerate(
-  agent: ChekkuAgentClient,
-  runId: string,
-  toolCallId: string,
-  approved: boolean,
-  requestContext: RequestContext,
-): Promise<ApprovalResumeResult> {
-  const result = approved
-    ? await agent.approveToolCallGenerate({ runId, toolCallId, requestContext })
-    : await agent.declineToolCallGenerate({ runId, toolCallId, requestContext });
-
-  const output = (result ?? {}) as {
-    text?: string;
-    toolResults?: Array<{
-      toolCallId?: string;
-      result?: unknown;
-      output?: unknown;
-    }>;
-  };
-
-  return {
-    text: (output.text ?? '').trim(),
-    toolResult: output.toolResults?.find(
-      (item) => item?.toolCallId === toolCallId,
-    ),
-  };
-}
-
 export function ChatStudio({
   resourceId,
   initialAgentId,
@@ -137,14 +100,14 @@ export function ChatStudio({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [tools, setTools] = useState<ToolEvent[]>([]);
   const [input, setInput] = useState('');
+  const [commandOpen, setCommandOpen] = useState(false);
+  const [commandIndex, setCommandIndex] = useState(0);
+  const [skills, setSkills] = useState<AgentSkillSummary[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string>();
   const [modelReady, setModelReady] = useState(false);
-  const [accessMode, setAccessMode] = useState<'approval' | 'full'>(
-    'approval',
-  );
 
   const agentId = initialAgentId;
   const threadId = initialThreadId;
@@ -161,12 +124,6 @@ export function ChatStudio({
     );
   }, [search, threads]);
 
-  const requestContext = useCallback(() => {
-    const context = new RequestContext();
-    context.set('browserAccess', accessMode);
-    return context;
-  }, [accessMode]);
-
   const refreshThreads = useCallback(async () => {
     try {
       setThreads(await listAgentThreads(resourceId, agentId));
@@ -174,21 +131,6 @@ export function ChatStudio({
       setThreads([]);
     }
   }, [agentId, resourceId]);
-
-  useEffect(() => {
-    const saved = window.localStorage.getItem(ACCESS_MODE_KEY);
-    if (saved !== 'full') return;
-
-    const frame = window.requestAnimationFrame(() => {
-      setAccessMode('full');
-    });
-
-    return () => window.cancelAnimationFrame(frame);
-  }, []);
-
-  useEffect(() => {
-    window.localStorage.setItem(ACCESS_MODE_KEY, accessMode);
-  }, [accessMode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -254,6 +196,23 @@ export function ChatStudio({
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, tools]);
 
+  useEffect(() => {
+    let cancelled = false;
+    listAgentSkills(agentId).then((result) => {
+      if (!cancelled) setSkills(result);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [agentId]);
+
+  const filteredSkills = useMemo(() => {
+    const filterText = commandFilterText(input);
+    if (filterText === '' || filterText === 'skills') return skills;
+    const needle = filterText.toLowerCase();
+    return skills.filter((s) => s.name.toLowerCase().includes(needle));
+  }, [input, skills]);
+
   const startNew = useCallback(
     (nextAgentId: string = agentId) => {
       const nextThreadId = createOwnedThreadId(
@@ -316,20 +275,11 @@ export function ChatStudio({
     assistantId: string,
   ) => {
     let finished = false;
-    // A run that suspends to request tool approval ends without a `finish`
-    // chunk. Treat seeing a `tool-call-approval` chunk as a valid end state so
-    // the assistant bubble isn't mislabelled "Generation ended before a final
-    // response was produced." while the Approve/Decline buttons are shown.
-    let awaitingApproval = false;
     const seen = new Set<string>();
 
     await stream.processDataStream({
       onChunk: (chunk) => {
         const payload = readChunkPayload(chunk);
-
-        if (chunk.type === 'tool-call-approval') {
-          awaitingApproval = true;
-        }
 
         if (
           chunk.type === 'text-delta' &&
@@ -348,12 +298,7 @@ export function ChatStudio({
         }
 
         if (
-          [
-            'tool-call',
-            'tool-result',
-            'tool-error',
-            'tool-call-approval',
-          ].includes(chunk.type)
+          ['tool-call', 'tool-result', 'tool-error'].includes(chunk.type)
         ) {
           const toolCallId = String(
             payload.toolCallId || crypto.randomUUID(),
@@ -361,13 +306,11 @@ export function ChatStudio({
           seen.add(toolCallId);
 
           const status =
-            chunk.type === 'tool-call-approval'
-              ? 'approval'
-              : chunk.type === 'tool-result'
-                ? 'complete'
-                : chunk.type === 'tool-error'
-                  ? 'error'
-                  : 'running';
+            chunk.type === 'tool-result'
+              ? 'complete'
+              : chunk.type === 'tool-error'
+                ? 'error'
+                : 'running';
 
           upsertTool({
             id: toolCallId,
@@ -403,7 +346,7 @@ export function ChatStudio({
       },
     });
 
-    if (!finished && !awaitingApproval) {
+    if (!finished) {
       setMessages((current) =>
         current.map((message) =>
           message.id === assistantId && !message.content
@@ -434,10 +377,6 @@ export function ChatStudio({
     }
 
     const firstTurn = messages.length === 0;
-    // Timestamp + id are intentionally captured at the user-action boundary
-    // (this runs in the submit handler, not during render), so the
-    // react-hooks/purity rule does not apply here.
-    // eslint-disable-next-line react-hooks/purity
     const now = Date.now();
     const assistantId = crypto.randomUUID();
 
@@ -466,7 +405,6 @@ export function ChatStudio({
           thread: threadId,
           resource: resourceId,
         },
-        requestContext: requestContext(),
       });
 
       await consumeStream(stream, assistantId);
@@ -513,63 +451,6 @@ export function ChatStudio({
     }
   };
 
-  const resolveApproval = async (
-    event: ToolEvent,
-    approved: boolean,
-  ) => {
-    if (!event.runId) return;
-
-    upsertTool({
-      ...event,
-      status: approved ? 'running' : 'declined',
-    });
-    setIsStreaming(true);
-
-    try {
-      const { text, toolResult } = await resumeApprovalGenerate(
-        agent,
-        event.runId,
-        event.toolCallId,
-        approved,
-        requestContext(),
-      );
-
-      upsertTool({
-        ...event,
-        status: approved ? 'complete' : 'declined',
-        ...(toolResult
-          ? { result: toolResult.result ?? toolResult.output }
-          : {}),
-      });
-
-      setMessages((current) =>
-        current.map((message) =>
-          message.id === event.messageId
-            ? {
-                ...message,
-                error: undefined,
-                content: text || message.content,
-              }
-            : message,
-        ),
-      );
-    } catch (reason) {
-      const detail =
-        reason instanceof Error
-          ? reason.message
-          : 'Could not resume the agent after approval.';
-      setMessages((current) =>
-        current.map((message) =>
-          message.id === event.messageId
-            ? { ...message, error: true, content: detail }
-            : message,
-        ),
-      );
-    } finally {
-      setIsStreaming(false);
-    }
-  };
-
   const stop = async () => {
     await agent.abortThread({
       resourceId,
@@ -583,9 +464,43 @@ export function ChatStudio({
     void sendMessage(input);
   };
 
-  const keyDown = (
-    event: KeyboardEvent<HTMLTextAreaElement>,
-  ) => {
+  const applySelection = (name: string) => {
+    setInput(`/${name} `);
+    setCommandOpen(false);
+    setCommandIndex(0);
+  };
+
+  const selectCommand = () => {
+    const name = selectSkillByIndex(
+      commandIndex,
+      filteredSkills.map((s) => s.name),
+    );
+    if (name) applySelection(name);
+  };
+
+  const keyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    const action = resolveCommandKey(
+      event.key,
+      commandOpen,
+      filteredSkills.length > 0,
+    );
+    if (action !== 'default') event.preventDefault();
+    if (action === 'next') {
+      setCommandIndex((i) => i + 1);
+      return;
+    }
+    if (action === 'prev') {
+      setCommandIndex((i) => i - 1);
+      return;
+    }
+    if (action === 'select') {
+      selectCommand();
+      return;
+    }
+    if (action === 'close') {
+      setCommandOpen(false);
+      return;
+    }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       void sendMessage(input);
@@ -741,25 +656,9 @@ export function ChatStudio({
             {agentId === QA_WEB_AGENT_ID && (
               <span className="chat-browser-badge">◎ Browser agent</span>
             )}
-            <button
-              className={`chat-access-switch ${
-                accessMode === 'full' ? 'full' : ''
-              }`}
-              type="button"
-              role="switch"
-              aria-checked={accessMode === 'full'}
-              onClick={() =>
-                setAccessMode((current) =>
-                  current === 'approval' ? 'full' : 'approval',
-                )
-              }
-              disabled={isStreaming}
-            >
-              <span>
-                <i />
-              </span>
-              {accessMode === 'full' ? 'Full access' : 'Ask first'}
-            </button>
+            {agentId === QA_ANDROID_AGENT_ID && (
+              <span className="chat-browser-badge">▷ Android Agent</span>
+            )}
           </div>
         </header>
 
@@ -837,28 +736,6 @@ export function ChatStudio({
                             {tool.result !== undefined && (
                               <pre>{safeDisplay(tool.result)}</pre>
                             )}
-
-                            {tool.status === 'approval' && (
-                              <div className="chat-approval-actions">
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    void resolveApproval(tool, false)
-                                  }
-                                >
-                                  Decline
-                                </button>
-                                <button
-                                  className="studio-button-primary"
-                                  type="button"
-                                  onClick={() =>
-                                    void resolveApproval(tool, true)
-                                  }
-                                >
-                                  Approve action
-                                </button>
-                              </div>
-                            )}
                           </details>
                         ))}
                       </div>
@@ -912,25 +789,43 @@ export function ChatStudio({
           )}
 
           <form className="chat-composer" onSubmit={submit}>
-            <textarea
-              ref={textareaRef}
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              onKeyDown={keyDown}
-              placeholder={
-                modelReady
-                  ? `Message ${currentAgent?.name || agentId}…`
-                  : 'Configure the server model first…'
-              }
-              disabled={!modelReady || isStreaming}
-              rows={1}
-            />
+            <div className="chat-composer__input">
+              {commandOpen && filteredSkills.length > 0 ? (
+                <CommandMenu
+                  commands={filteredSkills}
+                  activeIndex={commandIndex}
+                  onSelect={applySelection}
+                />
+              ) : null}
+              <textarea
+                ref={textareaRef}
+                value={input}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setInput(value);
+                  const isCommand = isCommandInput(value);
+                  setCommandOpen(isCommand);
+                  if (isCommand) setCommandIndex(0);
+                }}
+                onKeyDown={keyDown}
+                placeholder={
+                  modelReady
+                    ? `Message ${currentAgent?.name || agentId}…`
+                    : 'Configure the server model first…'
+                }
+                disabled={!modelReady || isStreaming}
+                rows={1}
+              />
+            </div>
 
             <footer>
               <div>
                 <span className="chat-memory-chip">◇ Memory</span>
                 {agentId === QA_WEB_AGENT_ID && (
                   <span className="chat-memory-chip">◎ Browser</span>
+                )}
+                {agentId === QA_ANDROID_AGENT_ID && (
+                  <span className="chat-memory-chip">▷ Maestro</span>
                 )}
               </div>
 
@@ -958,12 +853,6 @@ export function ChatStudio({
               </div>
             </footer>
           </form>
-
-          <p className={accessMode === 'full' ? 'warning' : ''}>
-            {accessMode === 'full'
-              ? 'Full access is active. Browser actions run without approval.'
-              : 'Ask first is active. Consequential browser actions require approval.'}
-          </p>
         </div>
       </main>
     </div>

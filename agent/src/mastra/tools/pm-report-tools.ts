@@ -3,13 +3,14 @@ import {
   createPmReportStorage,
   getPmReport,
   listPmReports,
-  parsePmReportTimestamp,
   savePmReport,
   type ObjectStorage,
   type PmReportMetadata,
 } from '@chekku/storage';
 import { createTool } from '@mastra/core/tools';
 import { z } from 'zod';
+
+import { formatStoredCreatedAt } from './markdown-table.js';
 
 const statusSchema = z.enum(['ON-TRACK', 'WARNING', 'IN-DANGER']);
 
@@ -29,46 +30,10 @@ const listMetadataSchema = metadataSchema.extend({
 
 type PmReportListItem = PmReportMetadata & { reportUrl: string };
 
-function escapeMarkdownCell(value: string): string {
-  const controlCharacter = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
-  const characters = Array.from(value);
-  const visibleEscapes: Record<string, string> = {
-    '\b': '\\b',
-    '\t': '\\t',
-    '\n': '\\n',
-    '\v': '\\v',
-    '\f': '\\f',
-    '\r': '\\r',
-  };
-
-  return characters.map((character, index) => {
-    const breakWww = `${character}${characters[index + 1] ?? ''}${characters[index + 2] ?? ''}${characters[index + 3] ?? ''}`
-      .toLowerCase() === 'www.';
-    const suffix = breakWww ? '&#8203;' : '';
-    if (character === '\\') return '\\\\';
-    if (character === '|') return '\\|';
-    if (controlCharacter.test(character)) {
-      return visibleEscapes[character]
-        ?? `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`;
-    }
-    if (/[!-/:-@\[-`{-~]/.test(character)) {
-      // GFM resolves backslash escapes before autolinking; hidden break keeps visible text but stops tokenization.
-      return `\\${character}&#8203;`;
-    }
-    return `${character}${suffix}`;
-  }).join('');
-}
-
-function formatCreatedAt(createdAt: string): string {
-  const timestamp = parsePmReportTimestamp(createdAt);
-  if (timestamp === undefined) return escapeMarkdownCell(createdAt);
-  return `${new Date(timestamp).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
-}
-
 export function formatPmReportsMarkdown(reports: readonly PmReportListItem[]): string {
   if (reports.length === 0) return 'No saved reports found.';
   const rows = reports.map((report) =>
-    `| [${report.reportId}](${report.reportUrl}) | ${formatCreatedAt(report.createdAt)} | ${report.rating}/10 | ${report.status} |`,
+    `| [${report.reportId}](${report.reportUrl}) | ${formatStoredCreatedAt(report.createdAt)} | ${report.rating}/10 | ${report.status} |`,
   );
   return [
     '| Report | Created | Risk | Status |',

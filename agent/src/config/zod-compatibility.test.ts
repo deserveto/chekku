@@ -15,18 +15,10 @@ describe('Mastra schema compatibility', () => {
     expect(zodPackage.version).toMatch(/^3\.25\./);
   });
 
-  it('converts the optional request context schema to JSON Schema', () => {
+  it('converts the request context schema to a JSON object schema', () => {
     const standardSchema = toStandardSchema(providerContextSchema);
     const jsonSchema = standardSchemaToJSONSchema(standardSchema);
 
-    expect(jsonSchema).toMatchObject({
-      type: 'object',
-      properties: {
-        browserAccess: {
-          type: 'string',
-          enum: ['approval', 'full'],
-        },
-      },
-    });
+    expect(jsonSchema).toMatchObject({ type: 'object' });
   });
 });

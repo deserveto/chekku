@@ -2,6 +2,7 @@ export const AGENT_ID_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 export const RESERVED_AGENT_IDS = new Set<string>([
   'main-agent',
   'qa-web-agent',
+  'qa-android-agent',
   'pm-agent',
 ]);
 

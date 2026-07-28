@@ -19,6 +19,7 @@ describe('agent ID validation', () => {
     expect(validateAgentId('-leading', new Set())).toBe('invalid-format');
     expect(validateAgentId('main-agent', new Set())).toBe('reserved');
     expect(validateAgentId('qa-web-agent', new Set())).toBe('reserved');
+    expect(validateAgentId('qa-android-agent', new Set())).toBe('reserved');
     expect(validateAgentId('pm-agent', new Set())).toBe('reserved');
     expect(validateAgentId('dup', new Set(['dup']))).toBe('duplicate');
     expect(RESERVED_AGENT_IDS).toEqual(

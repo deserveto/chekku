@@ -201,7 +201,7 @@ export function AgentCatalogPage({
                   <article className="studio-agent-card" key={agent.id}>
                     <div className="studio-agent-card-top">
                       <span className="studio-agent-glyph">
-                        {agent.id === 'qa-web-agent' ? '◎' : '◇'}
+                        {agent.id === 'qa-web-agent' ? '◎' : agent.id === 'qa-android-agent' ? '▷' : '◇'}
                       </span>
                       <span
                         className={`studio-source-badge ${agent.source}`}

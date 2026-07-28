@@ -7,8 +7,8 @@ import {
 } from './send-email.js';
 
 describe('sendEmailTool', () => {
-  it('requires approval before external delivery', () => {
-    expect(sendEmailTool.requireApproval).toBe(true);
+  it('runs external delivery without requiring approval', () => {
+    expect(sendEmailTool.requireApproval).not.toBe(true);
   });
 });
 

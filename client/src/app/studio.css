@@ -431,6 +431,47 @@ body.studio-sidebar-resizing * {
 
 /* Reports */
 
+.studio-report-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.studio-report-choice {
+  min-height: 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 140ms ease, transform 140ms ease;
+}
+
+.studio-report-choice h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.1px;
+}
+
+.studio-report-choice > p {
+  margin: 0;
+  min-height: 42px;
+  color: var(--studio-body);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.studio-report-choice:hover {
+  border-color: var(--studio-ink);
+  transform: translateY(-2px);
+}
+
+.studio-report-choice:focus-visible {
+  outline: 2px solid var(--studio-accent);
+  outline-offset: 2px;
+}
+
 .studio-report-table-wrap {
   overflow-x: auto;
 }
@@ -468,6 +509,35 @@ body.studio-sidebar-resizing * {
 
 .studio-report-table a {
   color: var(--studio-accent);
+}
+
+.studio-report-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.studio-report-card {
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--studio-line);
+  border-radius: 5px;
+  background: var(--studio-panel);
+  transition:
+    border-color 0.15s,
+    transform 0.15s;
+}
+
+.studio-report-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--studio-line-strong);
+}
+
+.studio-report-card:focus-within {
+  border-color: var(--studio-line-strong);
 }
 
 .studio-report-header h1 {
@@ -595,13 +665,15 @@ body.studio-sidebar-resizing * {
   color: var(--studio-success);
 }
 
-.studio-agent-card h3 {
+.studio-agent-card h3,
+.studio-report-card h3 {
   margin: 0 0 5px;
   font-size: 16px;
   font-weight: 550;
 }
 
-.studio-agent-card code {
+.studio-agent-card code,
+.studio-report-card code {
   color: var(--studio-muted);
   font: 9px var(--font-dm-mono);
 }
@@ -1502,7 +1574,6 @@ body.studio-sidebar-resizing * {
 .chat-composer {
   max-width: 780px;
   margin: 0 auto;
-  overflow: hidden;
   border: 1px solid var(--studio-line-strong);
   border-radius: 6px;
   background: var(--studio-deep);
@@ -1521,6 +1592,79 @@ body.studio-sidebar-resizing * {
   background: transparent;
   font-size: 13px;
   line-height: 20px;
+}
+
+.chat-composer__input {
+  position: relative;
+}
+
+.chat-command-menu {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  max-height: 280px;
+  overflow-y: auto;
+  margin-bottom: 4px;
+  padding: 4px;
+  border: 1px solid var(--studio-line-strong);
+  border-radius: 6px;
+  background: var(--studio-deep);
+  box-shadow: 0 16px 48px rgb(0 0 0 / 28%);
+}
+
+.chat-command-menu__option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 4px;
+  text-align: left;
+  color: var(--studio-body);
+  background: transparent;
+  cursor: pointer;
+}
+
+.chat-command-menu__option:hover {
+  background: var(--studio-canvas);
+}
+
+.chat-command-menu__option[aria-selected='true'] {
+  color: var(--studio-ink);
+  background: var(--studio-canvas);
+}
+
+.chat-command-menu__option:focus-visible {
+  outline: 2px solid var(--studio-accent);
+  outline-offset: -2px;
+}
+
+.chat-command-menu__label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--studio-ink);
+}
+
+.chat-command-menu__type {
+  font-size: 9px;
+  line-height: 13px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--studio-muted);
+  border: 1px solid var(--studio-line-strong);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+
+.chat-command-menu__desc {
+  color: var(--studio-muted);
+  font-size: 9px;
+  line-height: 13px;
 }
 
 .chat-composer textarea::placeholder {
@@ -1686,8 +1830,10 @@ body.studio-sidebar-resizing * {
 
   .studio-overview-grid,
   .studio-agent-grid,
+  .studio-report-grid,
   .studio-form-grid.two,
-  .studio-capability-grid {
+  .studio-capability-grid,
+  .studio-report-choice-grid {
     grid-template-columns: 1fr;
   }
 

@@ -20,6 +20,26 @@ services:
       retries: 15
       start_period: 2s
 
+  searxng:
+    image: docker.io/searxng/searxng:2026.7.18-277d8469c
+    restart: unless-stopped
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?Set SEARXNG_SECRET}
+    labels:
+      chekku.searxng-config-hash: ${SEARXNG_CONFIG_HASH:?Set SEARXNG_CONFIG_HASH}
+    ports:
+      - "127.0.0.1:8888:8080"
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+      - searxng-cache:/var/cache/searxng
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2).read()"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+
 volumes:
   garage-metadata:
   garage-data:
+  searxng-cache:

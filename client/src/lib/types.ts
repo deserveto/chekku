@@ -1,9 +1,11 @@
 export const MAIN_AGENT_ID = 'main-agent';
 export const QA_WEB_AGENT_ID = 'qa-web-agent';
+export const QA_ANDROID_AGENT_ID = 'qa-android-agent';
 export const PM_AGENT_ID = 'pm-agent';
 export const RESERVED_AGENT_IDS = new Set<string>([
   MAIN_AGENT_ID,
   QA_WEB_AGENT_ID,
+  QA_ANDROID_AGENT_ID,
   PM_AGENT_ID,
 ]);
 

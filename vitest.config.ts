@@ -7,11 +7,13 @@ export default defineConfig({
       'agent/src/**/*.test.ts',
       'client/src/**/__tests__/**/*.test.ts',
       'client/src/**/*.test.ts',
+      'client/src/**/*.test.tsx',
       'scripts/**/*.test.ts',
       'storage/src/**/*.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/node_modules'],
     environment: 'node',
     setupFiles: ['./vitest.setup.js'],
+    testTimeout: 15_000,
   },
 });

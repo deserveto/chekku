@@ -37,6 +37,21 @@ it('renders accessible report navigation with current-page state', () => {
   expect(reportLink).toContain('aria-current="page"');
 });
 
+it.each([
+  '/reports/weekly',
+  '/reports/pmr_20260714120000_deadbeef',
+  '/reports/competitive',
+  '/reports/competitive/pca_20260723120000_deadbeef',
+])('keeps Reports active for nested route %s', (pathname) => {
+  mocks.pathname = pathname;
+
+  const markup = renderToStaticMarkup(createElement(StudioNav, { resourceId: 'user-1' }));
+  const reportLink = markup.match(/<a[^>]*href="\/reports"[^>]*>/)?.[0];
+
+  expect(reportLink).toContain('class="active"');
+  expect(reportLink).toContain('aria-current="page"');
+});
+
 it('keeps Studio navigation available in the compact mobile header', () => {
   const css = readFileSync(new URL('../../app/studio.css', import.meta.url), 'utf8');
   const mobileRules = css.match(/@media \(max-width: 760px\) \{([\s\S]*)$/)?.[1] ?? '';

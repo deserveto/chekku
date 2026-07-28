@@ -2,7 +2,7 @@
 
 ## Overview
 
-Chekku contains three npm workspaces: a Next.js client, a Mastra agent server, and the shared `@chekku/storage` package. The system is local-first, uses LibSQL for agent and conversation persistence, offers Garage-backed generic agent object storage plus PM report persistence, and connects to one server-owned OpenAI-compatible model endpoint.
+Chekku contains three npm workspaces: a Next.js client, a Mastra agent server, and the shared `@chekku/storage` package. The system is local-first, uses LibSQL for agent and conversation persistence, offers Garage-backed generic agent object storage plus weekly and competitive PM report persistence, connects to one server-owned OpenAI-compatible model endpoint, provides bounded web search through a server-owned SearXNG endpoint, and reads chosen public pages through hosted Jina Reader.
 
 ```text
 ┌────────────────────────────────────────────┐
@@ -14,7 +14,7 @@ Chekku contains three npm workspaces: a Next.js client, a Mastra agent server, a
 ┌────────────────────────────────────────────┐
 │ Next.js client/server :3000                │
 │ Same-origin proxy + auth seam              │
-│ /reports/* + /api/storage/pm-reports/* ────────────┐
+│ /reports/* + PM storage APIs ──────────────────────┐
 └───────────────────┬────────────────────────┘        │
                     │ Mastra HTTP API                 │
                     ▼                                 │
@@ -25,11 +25,14 @@ Chekku contains three npm workspaces: a Next.js client, a Mastra agent server, a
 │ - main-agent         - @mastra/editor      │        │
 │ - pm-agent           - database versions   │        │
 │ - qa-web-agent                             │        │
-│ - social-media-agent                       │        │
+│ - qa-android-agent                         │        │
+│ - social-media-content-writer              │        │
+│ - social-media-supervisor-agent            │        │
+│ - social-media-strategist-agent            │        │
 │                                            │        │
 │ Memory + LibSQLStore                       │        │
 │ Calculator + current-time + email tools    │        │
-│ Garage MCP                                 │        │
+│ Garage + SearXNG + Web Reader MCP          │        │
 │ Chat SDK + Telegram adapter                │        │
 │ Agent Browser                              │        │
 │ OpenAI-compatible custom gateway           │        │
@@ -47,29 +50,47 @@ Chekku contains three npm workspaces: a Next.js client, a Mastra agent server, a
 └────────────────────────────────────────────┘         │
                                                        ▼
 Next.js report service / Garage MCP ──► @chekku/storage
-                                            │
-                                            ▼
-                                  Garage/S3 `chekku-objects`
+                                             │
+                                             ▼
+                                   Garage/S3 `chekku-objects`
+
+PM Agent / selected stored agent
+  -> search_web -> fixed SearXNG -> candidate URLs/snippets
+  -> read_web_page -> fixed Web Reader client -> hosted Jina Reader
+  -> bounded untrusted Markdown
+
+PM competitive analysis
+  -> competitive-analysis skill
+  -> up to 5 search_web calls
+  -> up to 8 read_web_page calls
+  -> evidence-only synthesis
+  -> save_competitive_analysis_to_garage
+  -> competitive-analyses/<pca-id>/{request.md,analysis.md,metadata.json}
+  -> /reports/competitive/<pca-id>
 ```
 
 ## Backend composition
 
 `agent/src/mastra/index.ts` creates the single `Mastra` instance and registers:
 
-- `mainAgent`, `pmAgent`, `qaWebAgent`, and `socialMediaAgent`;
+- `mainAgent`, `pmAgent`, `qaWebAgent`, `qaAndroidAgent`, `socialMediaContentWriter`, `socialMediaSupervisorAgent`, and `socialMediaStrategistAgent`;
 - `storedAgentTools` (`calculatorTool`, `getCurrentTimeTool`, and `sendEmailTool`) for stored-agent hydration;
 - `garageMcpServer` for generic agent-isolated object storage;
+- `searxngMcpServer` for fixed read-only web search by selected stored agents;
+- `webReaderMcpServer` for fixed read-only hosted page reading by selected stored agents;
 - `LibSQLStore`;
 - `MastraEditor` with database storage;
 - `OpenAICompatibleGateway`;
 - structured logging and request middleware;
 - `/healthz` and `/models` custom routes.
 
-Mastra provides the native agent, Memory, and editor APIs. Next.js separately provides `/reports/*` pages and `/api/storage/pm-reports/*` APIs through `client/src/server/pm-reports.ts`; those PM report storage interfaces are not Mastra APIs. Chekku does not maintain a parallel custom conversation or agent database.
+Mastra provides native agent, Memory, skill, and editor APIs. Next.js separately provides `/reports/*`, `/api/storage/pm-reports/*`, and `/api/storage/competitive-analyses/*` through focused server-only services; those PM storage interfaces are not Mastra APIs. Chekku does not maintain a parallel custom conversation or agent database.
 
-`storedAgentTools` is the instance-level registry that makes calculator, current-time, and email tools available during stored-agent hydration. PM report tools are attached directly to `pmAgent`; they are not members of `storedAgentTools` or `garageMcpServer`.
+The chat composer (`client/src/components/chat/chat-studio.tsx`) exposes the active agent's user-invocable skills through a client-side slash-command picker. Typing a leading `/` opens a keyboard-navigable listbox populated from the active agent's serialized record — `listAgentSkills` in `client/src/lib/agent-skills.ts` fetches the agent through the same-origin `/api/agent/*` proxy and reads the `.skills` array, keeping only entries whose `user-invocable` flag is not `false`. Selecting a skill inserts `/<skill-name> ` into the input and dispatches through the existing `sendMessage` → `agent.stream()` path. No backend skill-routing change is involved. Agents with no user-invocable skills show no rows and the picker stays closed.
 
-`socialMediaAgent` also wires a Telegram channel adapter. Once Mastra initializes the agent's `AgentChannels`, `index.ts` registers the agent's slash-command handlers (`/help`, `/roles`, `/role`, `/switch`) on the Chat SDK so Telegram-intercepted bot commands reach the role logic.
+`storedAgentTools` is the instance-level registry that makes calculator, current-time, and email tools available during stored-agent hydration. Weekly and competitive PM tools plus reusable `search_web` and `read_web_page` attach directly to `pmAgent`; PM storage tools are not members of `storedAgentTools`, `garageMcpServer`, `searxngMcpServer`, or `webReaderMcpServer`.
+
+`socialMediaContentWriter` also wires a Telegram channel adapter. Once Mastra initializes the agent's `AgentChannels`, `index.ts` registers the agent's slash-command handlers (`/help`, `/roles`, `/role`, `/switch`) on the Chat SDK so Telegram-intercepted bot commands reach the role logic. `socialMediaSupervisorAgent` has no tools and attaches the Content Writer as a sub-agent via the `agents` field.
 
 ## Agents
 
@@ -81,11 +102,21 @@ Mastra provides the native agent, Memory, and editor APIs. Next.js separately pr
 
 `qa-web-agent` adds Mastra Agent Browser to the common model and Memory stack. Memory is mandatory because browser context processors need a live Memory context during tool loops.
 
-Interactive browser tools require approval unless the request context explicitly enables full browser access, and the QA Web Agent's instructions ask it to describe consequential browser actions before taking them. The shared outbound-email tool always requires approval before delivery.
+No tool requires approval — browser actions and outbound email run directly.
 
-### Social Media Agent
+### QA Android Agent
 
-`social-media-agent` is a role-switchable content assistant reachable over a Mastra channel (Telegram today, other platforms later). It shares the common server model and Memory stack with the other code agents and adds a Telegram adapter through the Chat SDK.
+`qa-android-agent` is the mobile counterpart to `qa-web-agent`. It shares the common server model, Mastra Memory, and gateway compatibility processor. A trusted, env-gated `MCPClient` connects to the local `maestro mcp` server over stdio and exposes only an explicit allowlist of the built-in server's tools (`list_devices`, `inspect_screen`, `take_screenshot`, `cheat_sheet`, `run`). `run_flow_files`, the cloud tools (`run_on_cloud`, `list_cloud_devices`, `get_cloud_run_status`), and `open_maestro_viewer` are never exposed. On Windows the `.bat`/`.cmd` Maestro command is routed through `cmd.exe /c` (Node blocks direct `.bat` spawn).
+
+No tool requires approval — `maestro_run` (which executes flows, including inline/generated YAML) and the curated `run_maestro_flow` runner execute directly. There are no granular single-action tools — every device interaction (tap, input, back, launch) is expressed as inline YAML through `maestro_run`.
+
+The curated `run_maestro_flow` tool resolves logical `{ suite, flow }` names to checked-in YAML under `MAESTRO_WORKSPACE`, validates real-path containment after symlink resolution, confirms a regular file, and runs via `execFile` (never a shell string) with `--format junit --output` and `--test-output-dir` writing into `artifacts/maestro/<runId>/`. It never reports Passed unless Maestro exits 0. A read-only `current_app` tool queries adb for the foreground app's package so the agent can self-serve the `appId`.
+
+Maestro is disabled by default; the agent and server boot normally without it.
+
+### Social Media Content Writer
+
+`social-media-content-writer` is a role-switchable content writer and the drafting sub-agent under the Social Media Supervisor. It is reachable over a Mastra channel (Telegram today, other platforms later). It shares the common server model and Memory stack with the other code agents and adds a Telegram adapter through the Chat SDK. The Telegram channel and slash commands stay on this agent for now; the supervisor delegates to it via Mastra's `agents` sub-agent field.
 
 Users drive it from the chat platform with slash commands:
 
@@ -95,11 +126,27 @@ Users drive it from the chat platform with slash commands:
 
 The active role is held in-memory keyed by `${platform}:${userId}`. The agent reads the role from the channel context on `requestContext` and rebuilds its instructions on each turn. Phase scope is drafting and planning only; destination-platform publishing is a later phase.
 
+### Social Media Supervisor
+
+`social-media-supervisor-agent` is the routing agent for the social-media surface. It has no tools of its own and delegates drafting/repurposing/planning requests to its sub-agents via Mastra's `agents` field. The supervisor binds Memory and the same context-safety processors as the other code agents so its own turns stay bounded. Active call paths opt into routing by invoking the supervisor; Telegram stays on the Content Writer for this phase. It attaches two sub-agents today: the Content Writer (platform-post drafting/repurposing/planning) and the Strategist (Content Strategy Brief and Content Plan research/interviews).
+
+### Social Media Strategist
+
+`social-media-strategist-agent` is a code-defined planning and research agent and the second sub-agent under the Social Media Supervisor. It shares the common server model, Mastra Memory, and the standard context-limiter plus char-budget-guard stack used by `main-agent` and `pm-agent`. It binds the reusable `search_web` and `read_web_page` tools directly (the same tools PM Agent binds), and nothing else.
+
+Its conversational workflow is: interview the user to identify the brand, project, product, or person the strategy is for; perform optional web research when it would strengthen a decision; draft a Content Strategy Brief using a generic section template; ask explicitly for review; revise the existing brief on feedback; treat the brief as the source of truth only after explicit user approval; then offer a Content Plan whose shape derives from the approved brief. The agent is a strategist — it does not produce final platform-specific copy.
+
+The Strategist is independent of the Content Writer. It does not wire a Telegram channel, does not register slash commands, and does not participate in the scheduled `weekly-social-drafts` workflow. The supervisor routes strategy/brief/content-plan requests to it via Mastra's `agents` field.
+
+The Strategist keeps approved strategies inside its Mastra Memory thread only. Durable strategy persistence (a `storage/src/strategy-briefs.ts` helper plus a `save_strategy_to_garage` tool registered only on this agent, mirroring the PM report pattern) is deferred to a separately reviewed change. Markdown-based brand-product knowledge is also deferred: in v1 brand knowledge arrives as ordinary user messages, and the supervisor (or a future caller) may pass curated Markdown context through an `agent.generate(messages, { instructions })` override, the same mechanism `weekly-social-drafts` uses to pin the Instagram role on `socialMediaContentWriter`.
+
 ### PM Agent
 
-`pm-agent` is a protected code-defined agent with Memory. It analyzes engineering weekly reports, derives a 1-10 risk rating and matching status, and owns three code-defined tools: `save_pm_report_to_garage`, `list_pm_reports_from_garage`, and `view_pm_report_from_garage`.
+`pm-agent` is protected and code-defined with bounded Memory, token limiting, final character guard, and `maxSteps: 18`. Two inline user-invocable Mastra skills own complete behavior: `weekly-report-analysis` preserves the risk-rating/report contract; `competitive-analysis` owns intake, bounded research, evidence synthesis, complete-only save, and output format. The `search_web`, `read_web_page`, and competitive save tools are wrapped with `withCompetitiveResearchBudget`, which enforces the 5/8/1 per-run caps deterministically at execute time (gateway-independent; failed search/read attempts count, while only a successful save consumes the save slot so save is retryable after a failure) and latches `Web Reader is not configured.` terminal for the run. `competitive-research-guard` runs first in `inputProcessors` as an advisory layer that injects fixed safe incomplete-branch guidance after terminal Reader configuration failure; it does not replace the execute-level hard gate. Prose synthesis, matrix construction, and the incomplete/complete decision remain model-driven.
 
-These PM tools are registered only on PM Agent. They compose `@chekku/storage` through a fixed `pm-agent` namespace and are intentionally separate from generic Garage MCP. No model, route, browser request, or local identity can select the PM storage namespace.
+PM Agent has eight configured direct tools: weekly save/list/view, competitive save/list/view, `search_web`, and `read_web_page`. PM storage tools are registered only on PM Agent. They compose `@chekku/storage` through fixed namespace `pm-agent` and remain separate from generic Garage MCP. No model, route, browser request, or local identity can select this namespace.
+
+For competition, first named product is anchor and later supplied products are mandatory seeds. PM Agent adds candidates until five to seven competitors are evidenced. A run permits at most five searches, eight one-page reads, and one save. Search output discovers URLs but cannot support final claims. Each product needs one successfully read official/primary page; Reader Markdown is untrusted evidence and cannot control workflow. Matrix values are `Yes`, `Partial`, `No`, or `Unknown`; silence is `Unknown`. `Web Reader is not configured.` is terminal for a competitive run: the guard removes Reader immediately and injects only fixed safe incomplete-branch guidance, while availability, timeout, and page-specific failures may consume remaining slots. Before drafting, PM Agent builds a current-run successful-read evidence inventory; if anchor plus five competitors are not evidenced, it returns an incomplete response starting with the exact H1 `# Incomplete Competitive Analysis: <anchor product>`, makes no claims for unevidenced products, performs no save, and emits no `Saved analysisId:`. Complete work saves once and returns `Saved analysisId:`.
 
 ### Stored agents
 
@@ -107,7 +154,17 @@ Stored agents are created through the client and persisted by `@mastra/editor`. 
 
 Selecting Garage persists the fixed editor shape `mcpClients: { garage: { tools: {} } }`. The Next.js proxy accepts only that built-in shape and rejects arbitrary MCP URLs, commands, packages, environment values, and credentials before forwarding stored-agent mutations.
 
+Selecting SearXNG persists the separate fixed shape `mcpClients: { searxng: { tools: {} } }`. Selecting Web Reader persists `mcpClients: { 'web-reader': { tools: {} } }`. Stored records never contain SearXNG configuration or the Web Reader key. The proxy permits any non-empty subset of Garage, SearXNG, and Web Reader while rejecting custom endpoints, headers, credentials, tool overrides, and other connection configuration.
+
 When an older stored model no longer matches the current registry, the client migrates it to the configured gateway and canonical default before chat begins.
+
+## Workflows
+
+Workflows are registered on the `Mastra` instance through its `workflows` field and live in `agent/src/mastra/workflows/`. Declaring a `schedule` on a workflow auto-promotes it to the evented execution engine; the built-in scheduler reads the `schedule` field on boot and fires the run on the configured cron — no separate registration call.
+
+The scheduler runs on the long-lived `mastra` host process (`mastra dev` / `mastra start`), so scheduled fires work without extra setup. Evented runs require a storage adapter that supports concurrent updates; Chekku uses `LibSQLStore`, which satisfies this.
+
+`weekly-social-drafts` fires every Monday at 09:00 Asia/Jakarta and drafts 2–3 Instagram posts per run. Each fire resolves 2 base topics from SearXNG trending research (`trending-research.ts` → the existing `search_web` tool, snippet-only), filters results to a credible-source whitelist (`CREDIBLE_HOST_PATTERNS` — Indonesian + international news sources, rejects blogspam and social-media hosts) plus a homepage/category filter (rejects `bbc.com/`, `bbc.com/indonesia`, requires article paths), enriches each chosen topic with the hosted Web Reader's page markdown when `WEB_READER_API_KEY` is configured (single-page read per topic via the existing `read_web_page` tool, bounded parallel fetch, per-topic failure falls back to snippet only), fills any remaining base slot from the deterministic evergreen-pillar rotation, then appends one awareness-day bonus from `selectBonusAwarenessDayForWeek` when the week contains a holiday. Awareness-day candidates come from two merged sources: the Public Holiday Indonesia API (`agent/src/mastra/calendar/public-holidays.ts`, fetches Idul Fitri, Idul Adha, 1 Muharram, Isra Mi'raj, Maulid Nabi, Nyepi, Paskah, Waisak, Natal, etc. with their Gregorian dates and Hijri year labels) and the fixed-date `SPECIAL_DAYS` calendar (covers observance days that are not national holidays, like Hari Kartini or Hari Guru Nasional). When both sources have an entry on the same date, the API wins because it is authoritative and usually carries the Hijri year. The API response is cached per year on disk so a single fire does not re-fetch 30+ years of data and an offline API does not block the workflow; if the API is unconfigured or unreachable, the selector falls back to fixed-date `SPECIAL_DAYS` only. Trending results whose title or snippet overlaps the chosen awareness day are skipped so the bonus and a base slot do not duplicate the same theme. When SearXNG is not configured or every research query fails, the workflow degrades to 2 evergreen pillars with no awareness bonus and records a `researchNote`. Each draft is generated through `socialMediaContentWriter.generate(..., { instructions })` with the `instagram-writer` role pinned (the workflow runs outside any chat channel, so the role cannot come from channel context); the role carries the brand identity ("R — Your Gentle AI Companion", tagline "AI Human-Centered Intelligence", sign-off "Hormat kami, Keluarga Besar PT Rafiq Space Intelligence") and `buildDraftPrompt` dispatches by topic kind: trending topics get a Folkative-style news caption (10-15 word visual headline for the image + 1-2 paragraph casual conversational caption + subtle CTA + emoji, no brand stamps, no "Poin-poin" bullets, no formal sign-off); awareness days and evergreen pillars get the structured greeting-card copy (header → title → canonical date line — for Islamic holidays, the Hijri year from the API; for civic days, the Indonesian long-form Gregorian date; for trending/evergreen, omitted → opening → optional religious/cultural verse with attribution → "Poin-poin" brand-value bullets with `**[Value]:**` elaboration format → tagline → sign-off). Title templates for greeting-card path: `Selamat {day}` for special days, themed headline for evergreen. Page-markdown context injected into the prompt is hard-capped at 3000 chars and labeled as untrusted evidence — never instructions — so prompt injection in upstream pages cannot escalate. Each draft is persisted through the existing Garage MCP `create_text_object` tool with `agentId` pinned to `social-media-agent`, and emailed as a review link to `SOCIAL_DRAFT_REVIEW_EMAIL`. Email delivery failure is recorded without failing the run, so drafts remain saved. Research never modifies voice, storage, the canonical post id / key layout, or notification.
 
 ## Model gateway
 
@@ -136,6 +193,48 @@ openai-compatible/gateway/{endpoint-native-model-id}
 ```
 
 Endpoint-native IDs may contain slashes and are preserved exactly.
+
+## SearXNG search
+
+`searxngMcpServer` has fixed ID `searxng` and an immutable registry containing exactly `search_web`. Stored agents use that MCP server; PM Agent binds the same reusable tool directly. Garage MCP remains an independent registry with exactly five generic object tools.
+
+Application configuration has two server-owned values:
+
+```text
+SEARXNG_BASE_URL
+SEARXNG_API_KEY
+```
+
+`SEARXNG_BASE_URL` may include a deployment path, but not credentials, query parameters, or a fragment. `SEARXNG_API_KEY` is optional and becomes an `Authorization: Bearer` header for an authenticated external reverse proxy. Neither value reaches stored-agent records, browser code, model-generated input, or tool output.
+
+The client sends only `GET {SEARXNG_BASE_URL}/config` and `POST {SEARXNG_BASE_URL}/search`. `/config` validates optional language, category, and engine targeting and is cached for five minutes. Search uses form-encoded fixed fields, requires JSON responses, rejects redirects, and shares one 12-second deadline across capability validation and search.
+
+Input is bounded to a trimmed non-empty query of at most 1,024 UTF-8 bytes, 1-20 results, pages 1-5, at most 5 unique categories and 10 unique engines, safe-search level 0-2, and time range `day`, `month`, or `year`. Upstream bodies stop at 2 MiB. Normalized output stops at 131,072 UTF-8 bytes and contains at most 20 HTTP(S) results, 5 answers, 10 corrections, and 10 suggestions. Result URLs are limited to 2,048 bytes, titles to 512, snippets to 4,096, categories to 128, and each result to 8 unique engine names of 128 bytes each. Answers are limited to 2,048 bytes each; corrections and suggestions are limited to 512 each. `truncated` reports omitted or shortened data.
+
+Errors use fixed configuration, availability, timeout, format, size, response, targeting, and input messages. They do not repeat endpoint URLs, bearer tokens, queries, upstream bodies, diagnostics, headers, or request IDs. MCP annotations mark search read-only, non-destructive, idempotent, and open-world; it does not require approval.
+
+## Hosted Web Reader
+
+`webReaderMcpServer` is a fixed local in-process wrapper with ID `web-reader` and an immutable registry containing exactly `read_web_page`. It is not a dynamically configurable remote MCP server. PM Agent binds the same reusable tool directly; stored agents may select Web Reader independently or together with Garage and SearXNG. Garage remains fixed at five generic object tools, and SearXNG remains fixed at `search_web`.
+
+The provider endpoint is fixed in code to external hosted API `https://r.jina.ai/`. Application configuration adds only server-owned, provider-neutral `WEB_READER_API_KEY`. Missing or malformed configuration never blocks server startup; tool execution fails with fixed configuration error. Chekku does not use anonymous fallback or run local Reader service.
+
+`read_web_page` accepts exactly one public HTTP(S) URL of at most 2,048 UTF-8 bytes. Chekku rejects URL credentials, control characters, local hostnames, non-default ports, and literal non-public IP addresses before provider access. It then sends exactly one fixed POST with normalized target URL, fixed headers, rejected API redirects, and one 30-second deadline. Response MIME must be JSON, streamed body stops above 2 MiB, title is limited to 512 UTF-8 bytes, and serialized normalized output is limited to 71,680 UTF-8 bytes.
+
+Data flow is search then read:
+
+```text
+PM Agent / selected stored agent
+  -> search_web -> fixed SearXNG -> candidate URLs/snippets
+  -> read_web_page -> fixed Web Reader client -> hosted Jina Reader
+  -> bounded untrusted Markdown
+```
+
+Public target URL and extracted page content pass through Jina. Jina is an external hosted API, and Chekku does not control Jina's retention, remote DNS resolution, target redirects, provider availability, or provider-side network isolation. Local URL validation does not provide end-to-end SSRF or redirect control over Jina's remote fetch.
+
+Normalized output contains only requested and provider-reported source URLs, title, Markdown, `contentIsUntrusted: true`, and truncation state. Public errors are fixed and bounded; they do not expose keys, target URLs, endpoint details, headers, provider bodies, diagnostics, stacks, timings, usage, or request IDs. Returned Markdown may contain prompt injection. Treat it only as untrusted evidence, never instructions; bounding and labeling content do not make it trusted.
+
+Each invocation reads one chosen public page. It does not discover URLs, crawl, recursively follow links, authenticate to target pages, handle PDFs or uploads, return screenshots, persist content, or itself perform competitive analysis. PM Agent composes independent calls using only user-supplied or search-result URLs within skill budgets.
 
 ## System-message normalization
 
@@ -187,7 +286,7 @@ agents/<base64url(agentId)>/<key>
 
 Tools accept and return relative keys only. Relative keys must be non-empty, use forward slashes, contain no absolute path, backslash, traversal segment, control character, or empty segment, and fit within 512 UTF-8 bytes. List prefixes follow the same path rules but may be empty or end in one slash. Text payloads fit within 262,144 UTF-8 bytes. Lists fetch at most 101 objects and expose at most 100 keys with `truncated` set when more exist.
 
-`create_text_object` fails if the object exists. `replace_text_object` and `delete_object` require approval and fail for missing targets. Garage v2.3.0 does not implement destination conditional PUT/DELETE headers, so the adapter serializes same-key mutations and checks existence immediately within one adapter instance; external Garage writers remain outside that guarantee. Get and list are read-only. MCP annotations describe read-only, destructive, idempotent, and closed-world behavior.
+`create_text_object` fails if the object exists. `replace_text_object` and `delete_object` run directly (no approval gate) and fail for missing targets. Garage v2.3.0 does not implement destination conditional PUT/DELETE headers, so the adapter serializes same-key mutations and checks existence immediately within one adapter instance; external Garage writers remain outside that guarantee. Get and list are read-only. MCP annotations describe read-only, destructive, idempotent, and closed-world behavior.
 
 ## PM report storage
 
@@ -206,6 +305,38 @@ Metadata is written last so partial saves do not become list entries. Metadata a
 Generated IDs and every repository, tool, and public detail boundary use canonical form `pmr_YYYYMMDDHHMMSS_<8 lowercase hex>` and enforce `^pmr_[0-9]{14}_[0-9a-f]{8}$`. Noncanonical metadata is skipped during listing; there is no compatibility fallback.
 
 The list tool returns newest-first structured reports and presentation-only `reportUrl` and `reportsMarkdown` fields. Neither field enters persisted metadata, save output, view output, or repository types. `reportsMarkdown` is deterministic GFM with columns `Report`, `Created`, `Risk`, and `Status`; PM Agent returns it unchanged. Valid timestamps render to minute precision in UTC, while invalid stored text is preserved with Markdown-safe escaping.
+
+## Competitive analysis storage
+
+`storage/src/competitive-analyses.ts` is a separate domain repository over the same generic object contract and fixed `pm-agent` namespace. It does not change Garage MCP. Each complete analysis stores:
+
+```text
+competitive-analyses/<analysisId>/request.md
+competitive-analyses/<analysisId>/analysis.md
+competitive-analyses/<analysisId>/metadata.json
+```
+
+IDs use `pca_YYYYMMDDHHMMSS_<8 lowercase hex>` and enforce `^pca_[0-9]{14}_[0-9a-f]{8}$`. Request and analysis write before metadata, so partial saves do not become list entries. Metadata projects only bounded anchor, optional market, five to seven unique competitors, derived product/source counts, and canonical relative keys. Save tool additionally requires one unique normalized public primary-source URL mapped to every product before repository access.
+
+Competitive list output adds presentation-only `analysisUrl` and deterministic `analysesMarkdown` with Analysis, Created, Anchor, Competitors, and Sources columns. These fields never enter metadata, save/view output, or repository types. Empty output is exactly `No saved competitive analyses found.`
+
+## Social post storage
+
+`storage/src/social-posts.ts` adds domain behavior above the generic storage contract without changing Garage MCP. It exposes only pure canonical helpers (`buildSocialPostMetadata`, `createPostId`, `keysFor`, parse helpers) and read helpers (`listSocialPosts`, `getSocialPost`, `createSocialPostStorage`) — no write helper that takes an `ObjectStorage`. The scheduled `weekly-social-drafts` workflow writes through the existing Garage MCP `create_text_object` tool; the client/server read path calls `listSocialPosts` / `getSocialPost` via `createSocialPostStorage()` over the same root storage.
+
+The workflow invokes the MCP tool with a trusted context that pins `agentId` to the fixed storage namespace `social-media-agent` (the `SOCIAL_MEDIA_AGENT_ID` constant in `@chekku/storage`, decoupled from the drafting agent's identity `social-media-content-writer`), so the tool's namespace derivation lands writes in the same physical namespace the read path reads from. The workflow never calls `@chekku/storage` write APIs directly and never accepts namespace from tool input.
+
+Each post stores three logical objects:
+
+```text
+social-posts/<postId>/post.md
+social-posts/<postId>/brief.md
+social-posts/<postId>/metadata.json
+```
+
+`post.md` is the drafted caption, `brief.md` is the deterministic topic brief that generated it, and `metadata.json` is written last so partial saves never become list entries. Metadata retains only relative keys; physical `agents/<base64url(social-media-agent)>/...` keys remain inside the namespaced adapter.
+
+Generated IDs and every repository, workflow, and public detail boundary use canonical form `smp_YYYYMMDDHHMMSS_<8 lowercase hex>` and enforce `^smp_[0-9]{14}_[0-9a-f]{8}$`. Noncanonical metadata is skipped during listing; there is no compatibility fallback. Social-post semantics stay outside Garage MCP; no social-post tool is registered on the generic five-tool MCP server.
 
 ## Conversation ownership
 
@@ -230,11 +361,17 @@ The browser uses `@mastra/client-js` with the Next.js origin and `/api/agent` pr
 
 The current identity implementation is intentionally replaceable. Future OIDC must preserve the same resource and thread-ownership checks.
 
-Garage access remains server-side through two explicit paths. Chat tool calls pass through `/api/agent/*`, Mastra, and hydrated agent tools. Report pages and `/api/storage/pm-reports/*` execute in the Next.js server and call `client/src/server/pm-reports.ts` directly. Browser components neither import `@chekku/storage` nor make direct S3/Garage requests.
+Garage access remains server-side through two explicit paths. Chat tool calls pass through `/api/agent/*`, Mastra, and hydrated agent tools. Report pages and PM storage APIs execute in Next.js and call `client/src/server/pm-reports.ts` or `client/src/server/competitive-analyses.ts` directly. Browser components neither import `@chekku/storage` nor make direct S3/Garage requests.
+
+SearXNG and Web Reader also remain server-side. Builder state carries only fixed capability selection; browser requests cannot set endpoints, keys, headers, commands, packages, environment, provider controls, or tool registries. Search and page-reading requests run from the Mastra process through fixed clients.
 
 `client/src/server/pm-reports.ts` is a separate server-only boundary for report pages and APIs. It requires the same server identity seam before storage access, validates public report IDs before reads, fixes the namespace to `pm-agent`, and maps provider failures to safe 400, 403, 404, or 503 responses. OIDC may replace `CHEKKU_LOCAL_USER_ID` later without changing namespace or report-access semantics.
 
-Chat report links use URL-encoded relative `/reports/<reportId>` URLs and render in a new tab with `rel="noreferrer"`. GFM tables are wrapped in labeled, keyboard-focusable horizontal-scroll regions with visible focus outlines. `/reports` uses the same accessibility pattern for its server-rendered list table, preventing narrow layouts from compressing report columns.
+`client/src/server/competitive-analyses.ts` mirrors this boundary for `pca_...` records, validating canonical IDs before storage creation and exposing only projected relative metadata. Unknown route failures become fixed 500 responses; provider diagnostics never reach clients.
+
+`client/src/server/social-posts.ts` mirrors that boundary for the social-post review UI. It fixes the namespace to `social-media-agent`, validates `smp_...` IDs before reads, requires the same identity seam, and maps provider failures to the same safe responses. Social-post pages and `/api/storage/social-posts/*` execute in the Next.js server and never import `@chekku/storage` from browser code.
+
+Chat report links use URL-encoded relative `/reports/<reportId>` or `/reports/competitive/<analysisId>` URLs and render in a new tab with `rel="noreferrer"`. GFM tables are wrapped in labeled keyboard-focusable horizontal-scroll regions with visible focus outlines. Weekly, competitive, social-post, and feature-matrix tables preserve readable columns on narrow layouts.
 
 ## Public routes
 
@@ -246,11 +383,20 @@ Chat report links use URL-encoded relative `/reports/<reportId>` URLs and render
 - `/agents/[id]/edit` edits a stored agent.
 - `/chat` opens the canonical query-based chat route.
 - `/chat/[threadId]` redirects legacy thread URLs to the canonical route.
-- `/reports` lists PM reports newest first.
-- `/reports/[reportId]` renders analysis, metadata, and original input.
+- `/reports` groups Weekly Reports and Competitive Analyses.
+- `/reports/weekly` lists weekly PM reports newest first.
+- `/reports/[reportId]` preserves weekly analysis, metadata, and original-input details.
+- `/reports/competitive` lists competitive analyses newest first.
+- `/reports/competitive/[analysisId]` renders analysis, metadata, and original request.
+- `/social-posts` lists scheduled Instagram drafts newest first.
+- `/social-posts/[postId]` renders caption, metadata, and brief.
 - `/api/agent/[...path]` proxies Mastra HTTP requests.
 - `GET /api/storage/pm-reports` returns report metadata after identity validation.
 - `GET /api/storage/pm-reports/[reportId]` returns one report after identity and ID validation.
+- `GET /api/storage/competitive-analyses` returns competitive metadata after identity validation.
+- `GET /api/storage/competitive-analyses/[analysisId]` returns one analysis after identity and ID validation.
+- `GET /api/storage/social-posts` returns post metadata after identity validation.
+- `GET /api/storage/social-posts/[postId]` returns one post after identity and ID validation.
 
 ### Mastra custom routes
 
@@ -264,6 +410,7 @@ Add future functionality through these boundaries:
 - code-defined agents in `agent/src/agents/`;
 - registered stored-agent tools in `agent/src/mastra/tools/`;
 - provider-neutral gateway behavior in `agent/src/mastra/gateways/`;
+- bounded search transport in `agent/src/mastra/searxng/` and one-page hosted reading in `agent/src/mastra/web-reader/`, without adding crawling or authenticated fetching;
 - server request context and future authentication seam;
 - routed client components and Mastra client helpers.
 

@@ -4,18 +4,22 @@
 
 ```bash
 npm ci
-cp agent/.env.example agent/.env
-cp client/.env.example client/.env.local
+npm run setup
 npm run dev:sh
 ```
 
-The launcher provisions local Garage configuration, waits for Garage health, then starts:
+`npm run setup` copies env examples, generates local Garage and SearXNG secrets, and prompts for required values like `LLM_API_KEY`. `npm run dev:sh` starts local services and both workspaces without regenerating files; rerun `npm run setup` whenever environment requirements change.
+
+The launcher provisions local Garage and SearXNG configuration, waits for both services to become healthy, then starts:
 
 - Garage S3 API on `http://127.0.0.1:3900`;
+- SearXNG on `http://127.0.0.1:8888`;
 - Mastra on `http://localhost:4111`;
 - Next.js on `http://localhost:3000`.
 
-It generates and exports these application values to both server processes; do not copy generated credentials into tracked files:
+Web Reader is not a local service. Chekku calls hosted Jina Reader directly from the Mastra process only when `read_web_page` executes.
+
+It exports these five Garage application values to both the Mastra process and the Next.js server boundary; do not copy generated credentials into tracked files:
 
 ```text
 GARAGE_ENDPOINT
@@ -24,6 +28,15 @@ GARAGE_BUCKET
 GARAGE_ACCESS_KEY_ID
 GARAGE_SECRET_ACCESS_KEY
 ```
+
+For search, the launcher exports only these two application values to the Mastra process:
+
+```text
+SEARXNG_BASE_URL
+SEARXNG_API_KEY
+```
+
+The Next.js client process receives zero `SEARXNG_*` values. Only `SEARXNG_BASE_URL` and optional `SEARXNG_API_KEY` are SearXNG application configuration. `scripts/setup-env.sh` (run via `npm run setup`) also creates `searxng/.env.local` with a generated `SEARXNG_SECRET` and configuration hash for Docker Compose. Those values are private local service state: they are not copied to the agent or client application environments and must not be committed, logged, pasted, or configured as application variables.
 
 ## Environment files
 
@@ -49,6 +62,25 @@ LLM_MODELS=qwen3.6-35b-a3b-fast,qwen3.6-35b-a3b
 
 `LLM_MODELS` is a fallback list. When the endpoint exposes `GET /models`, Chekku uses the discovered IDs.
 
+Local `npm run dev:sh` supplies SearXNG configuration to the agent process. To use an external SearXNG instance instead, start Mastra without local provisioning and set:
+
+```dotenv
+SEARXNG_BASE_URL=https://search.example.com/private-path
+SEARXNG_API_KEY=replace-with-server-only-reverse-proxy-token
+```
+
+The endpoint must use HTTP or HTTPS and must not contain URL credentials, query parameters, or a fragment. `SEARXNG_API_KEY` is optional; when present, Chekku sends it as a bearer token to fixed `/config` and `/search` paths. Keep both values server-side. An empty `SEARXNG_BASE_URL` leaves search unconfigured and makes `search_web` fail closed without preventing other agent features from starting.
+
+To enable hosted page reading, add provider-neutral server credential:
+
+```dotenv
+WEB_READER_API_KEY=replace-with-server-owned-key
+```
+
+Keep key only in agent process or deployment secret manager. Missing or malformed key does not block startup; `read_web_page` instead returns fixed `Web Reader is not configured.` error when invoked. Chekku provides no anonymous fallback.
+
+For local development, rerun `npm run setup` after editing `agent/.env` so the key is copied into generated `agent/.env.development`, then restart the agent.
+
 ### `client/.env.local`
 
 ```dotenv
@@ -65,6 +97,7 @@ AGENT_SERVICE_TOKEN=
 ```bash
 curl http://localhost:4111/healthz
 curl http://localhost:4111/models
+curl --fail http://127.0.0.1:8888/healthz
 ```
 
 A configured model payload resembles:
@@ -94,6 +127,116 @@ curl \
 
 Set `LLM_DEFAULT_MODEL` to an exact returned `id`, without adding Chekku's internal gateway prefix.
 
+## SearXNG search
+
+Local SearXNG runs pinned image `docker.io/searxng/searxng:2026.7.18-277d8469c`. Compose publishes container port `8080` only on loopback at `127.0.0.1:8888`; the container health check calls its internal `http://127.0.0.1:8080/healthz`. Tracked `searxng/settings.yml` enables JSON search with POST requests, safe-search level 1, page limit 5, a 5-second engine request timeout, and a 10-second maximum engine request timeout.
+
+`npm run setup` creates or reuses private `searxng/.env.local` with mode `0600`, generates the service secret once, and recreates configuration when tracked settings change. Do not copy that file into `agent/.env`; `setup-env.sh` writes `SEARXNG_BASE_URL=http://127.0.0.1:8888` to generated `agent/.env.development` and preserves a non-empty user-set `SEARXNG_API_KEY` from `agent/.env` (empty by default locally), the launcher strips all SearXNG values from the client process, and neither step prints private values.
+
+`search_web` is search-only. It returns bounded titles, HTTP(S) URLs, snippets, source engines, optional category/score/published time, answers, corrections, and suggestions; it never downloads result-page content. Use it to discover candidate URLs, then pass one chosen public result to `read_web_page`. PM Agent's competitive skill owns selection, synthesis, and persistence; search does not.
+
+Input and transport limits:
+
+- query: trimmed, non-empty, at most 1,024 UTF-8 bytes;
+- results: 1-20 requested, default 10; page: 1-5, default 1;
+- optional targeting: at most 5 unique categories and 10 unique engines, validated through fixed `GET /config`; language must be supported;
+- optional filters: safe search 0, 1, or 2; time range `day`, `month`, or `year`;
+- fixed search request: `POST /search`, JSON only, redirects rejected, one 12-second deadline across config and search;
+- upstream body: at most 2 MiB; normalized tool output: at most 131,072 UTF-8 bytes.
+
+Output limits:
+
+- at most 20 results; each HTTP(S) URL is at most 2,048 bytes, title 512, snippet 4,096, category 128, and list of source engines 8 unique names of 128 bytes each;
+- at most 5 answers of 2,048 bytes each;
+- at most 10 corrections and 10 suggestions of 512 bytes each;
+- `truncated: true` when upstream entries are invalid, omitted, shortened, or removed to fit limits.
+
+Errors are fixed and bounded for missing/invalid configuration, unavailable service, timeout, unsupported JSON, oversized or invalid responses, unsupported targeting, and invalid input. They do not disclose endpoint URLs, bearer tokens, search queries, upstream response bodies, diagnostics, headers, or request IDs.
+
+To stop local Garage and SearXNG safely while preserving their named volumes:
+
+```bash
+docker compose --env-file storage/.env.local --env-file searxng/.env.local down
+```
+
+Do not add `--volumes` or run `docker volume rm` during normal shutdown or application/database reset. SearXNG cache and all Garage objects remain available for the next startup.
+
+## Hosted Web Reader
+
+Jina Reader is an external hosted API at fixed endpoint `https://r.jina.ai/`. Chekku's `web-reader` MCP is only a fixed local in-process wrapper around that API, never a dynamically configurable remote MCP server. There is no local Reader container, endpoint setting, provider selector, fallback provider, or anonymous mode.
+
+PM Agent has `search_web` and `read_web_page` directly. Stored agents may select SearXNG and Web Reader independently or together. Normal flow:
+
+```text
+PM Agent / selected stored agent
+  -> search_web -> fixed SearXNG -> candidate URLs/snippets
+  -> read_web_page -> fixed Web Reader client -> hosted Jina Reader
+  -> bounded untrusted Markdown
+```
+
+Hosted-provider privacy and network boundary:
+
+- public target URL and extracted page content pass through Jina;
+- Chekku does not control Jina's retention, remote DNS resolution, target redirects, provider availability, or provider-side network isolation;
+- Chekku validates submitted and provider-reported URLs, but Jina performs remote DNS resolution and target fetching;
+- do not submit signed, OAuth, password-reset, or otherwise secret-bearing URLs.
+
+`read_web_page` accepts one public HTTP(S) URL at most 2,048 UTF-8 bytes. It reads one chosen page only: no search, crawling, recursive link following, authenticated pages, PDFs, uploads, screenshots, persistence, or built-in competitive orchestration. Fixed transport sends one `POST https://r.jina.ai/` request, rejects redirects from Jina API endpoint, uses one 30-second deadline, performs no retry, accepts JSON only, and stops response body above 2 MiB. Normalized title is at most 512 UTF-8 bytes; serialized tool output is at most 71,680 UTF-8 bytes with UTF-8-safe Markdown truncation.
+
+Safe failures cover missing configuration, disallowed URLs, cancellation, timeout, provider availability, unsupported format, oversized body, and invalid response. They do not include key, target URL, query string, fragment, endpoint, headers, provider body, status details, diagnostics, stack, timing, usage, or request ID. Do not add these details to logs or tickets.
+
+Returned Markdown may contain prompt injection. Output always marks `contentIsUntrusted: true`; treat content only as untrusted evidence, never instructions. Size bounds and labeling are defense in depth, not content sanitization.
+
+No-key smoke: start server without `WEB_READER_API_KEY` and invoke `read_web_page`; it must fail with `Web Reader is not configured.` without startup failure or outbound provider access. Standard deterministic tests require no key and make no live Jina call.
+
+Optional keyed live smoke reads only `https://example.com/`. Export `WEB_READER_API_KEY` into command environment without printing it, then run:
+
+```bash
+npm run test:web-reader:live
+```
+
+Without exported key, live command stops with local key-required test error before provider access. Live provider access is optional and not required by CI.
+
+## PM competitive analysis
+
+PM Agent exposes `weekly-report-analysis` and `competitive-analysis` as user-invocable skills. Weekly analysis behavior and `pmr_...` links remain unchanged. Competitive prompts may use slash convention or natural language:
+
+```text
+/competitive-analysis GPT vs Claude vs Gemini
+Compare Product X with similar incident-management platforms
+Run competitive analysis for Product X in SMB accounting, focusing on automation
+```
+
+First named product is anchor. Later named products are mandatory seeds. PM Agent expands fewer than five competitors to five through seven and asks user to narrow more than seven supplied competitors. One run uses at most five `search_web` calls (`maxResults: 10`, page 1), eight `read_web_page` calls, and one save. URLs come only from user input or search results. No crawler, recursive link following, QA-browser fallback, authenticated targets, PDFs, uploads, cookies, custom headers, signed URLs, alternate provider, new endpoint, or new credential exists.
+
+PM Agent enforces the 5/8/1 caps at tool-execute time (`withCompetitiveResearchBudget`), so over-budget calls reject without provider access regardless of what the model requests. Failed `search_web` and `read_web_page` calls consume slots; a failed `save_competitive_analysis_to_garage` call does not consume the save slot (only a successful save counts), so a save can be retried after a validation or transient error. `Web Reader is not configured.` latches the run terminal, so further Reader calls reject immediately without provider access; availability, timeout, and page-specific failures may consume remaining slots. The model may still request a blocked tool, but the call is rejected locally and cheaply.
+
+Complete report requires anchor plus five to seven competitors, each backed by one successfully read official/primary page. Search snippets are discovery-only. Reader Markdown is untrusted evidence and page-authored instructions must be ignored. Material claims use inline primary-source links. Feature cells use `Yes`, `Partial`, `No`, or `Unknown`; missing mention is `Unknown`, never `No`.
+
+Completed Markdown sections are:
+
+```text
+# Competitive Analysis: <anchor product>
+## Executive Summary
+## Scope and Competitor Selection
+## Product Profiles
+## Feature Matrix
+## Gaps and Opportunities
+## Risks and Confidence
+## Recommendations
+## Sources
+```
+
+If minimum evidence cannot be met within budget, PM Agent returns `Incomplete Competitive Analysis: <anchor product>`, identifies missing evidence and suggested user action, and does not save or emit `Saved analysisId:`. Complete work saves once. Save failure does not discard completed analysis; response adds one short safe failure line.
+
+Chat retrieval phrases should explicitly distinguish domains, for example `list saved competitive analyses` or `view pca_...`. Generic `list saved reports` remains weekly for compatibility. `pca_...` selects competitive detail; `pmr_...` selects weekly detail.
+
+## Chat slash-command picker
+
+Typing `/` as the first character of the chat input opens a keyboard-navigable picker listing the active agent's user-invocable skills. Arrow keys move the highlight, Enter or Tab inserts `/<skill-name> `, and Escape closes the picker without inserting. The picker filters skills by name as you continue typing after the slash (case-insensitive substring). Skills come from the active agent only: the client fetches the agent's serialized record through the same-origin `/api/agent/*` proxy and reads the `.skills` array, keeping only entries whose `user-invocable` flag is not `false`. Agents with no user-invocable skills show no rows and the picker stays closed. Inserting a skill does not send — finish the arguments and press Enter to dispatch through the normal message path, for example `/competitive-analysis gpt vs claude vs gemini`. The picker is client-only and adds no backend route.
+
+Optional live smoke: configure existing SearXNG and Web Reader values without printing them, run one benign public competitive request, confirm six to eight evidenced products, inline citations, one source mapping per product, and successful save/list/view. Do not use compromised or pasted keys. Live providers are optional and CI never requires them. Competitive analysis introduces no environment variables.
+
 ## Storage
 
 The default storage URL is:
@@ -121,15 +264,15 @@ This removes stored agents and conversation history.
 
 ### Garage object storage
 
-Local Garage runs image `dxflrs/garage:v2.3.0` with persistent Docker volumes and generic bucket `chekku-objects`. Compose publishes only the S3 API at `127.0.0.1:3900`; RPC, admin, and metrics ports stay inside the Docker network. Stop application processes before changing credentials. To stop Garage without deleting its volumes:
+Local Garage runs image `dxflrs/garage:v2.3.0` with persistent Docker volumes and generic bucket `chekku-objects`. Compose publishes only the S3 API at `127.0.0.1:3900`; RPC, admin, and metrics ports stay inside the Docker network. Stop application processes before changing credentials. To stop local services without deleting their volumes:
 
 ```bash
-docker compose --env-file storage/.env.local down
+docker compose --env-file storage/.env.local --env-file searxng/.env.local down
 ```
 
-Do not commit or paste contents from `storage/.env.local`, `storage/.garage/`, or generated `agent/.env.development`. Removing Garage volumes destroys local agent objects and is intentionally not part of normal reset instructions.
+Do not commit or paste contents from `storage/.env.local`, `storage/.garage/`, `searxng/.env.local`, or generated `agent/.env.development`. Removing Garage volumes destroys local agent objects and is intentionally not part of normal reset instructions; removing SearXNG cache is also unnecessary for application reset.
 
-Garage MCP validates relative keys before access, limits keys to 512 UTF-8 bytes, limits text to 262,144 UTF-8 bytes, and returns at most 100 list entries. Physical objects are isolated under `agents/<base64url-agent-id>/`; tool callers see relative keys only. Replace and delete require user approval.
+Garage MCP validates relative keys before access, limits keys to 512 UTF-8 bytes, limits text to 262,144 UTF-8 bytes, and returns at most 100 list entries. Physical objects are isolated under `agents/<base64url-agent-id>/`; tool callers see relative keys only. Replace and delete run directly (no approval gate).
 
 Garage v2.3.0 does not process destination `If-Match`/`If-None-Match` headers for PUT or DELETE. The adapter serializes same-key mutations in one process and performs an immediate existence check; it also sends `If-None-Match` on create for S3 providers that support it. This prevents stale races among calls through one adapter instance, but an external writer can still race a Garage mutation. Do not claim cross-process compare-and-swap semantics until the pinned Garage release supports those conditions.
 
@@ -149,16 +292,38 @@ Generated IDs and all repository, PM tool, and public report boundaries use `pmr
 
 Report interfaces:
 
-- `/reports` lists report ID, created time, risk rating, and status newest first.
+- `/reports` groups weekly and competitive report views.
+- `/reports/weekly` lists weekly report ID, created time, risk rating, and status newest first.
 - `/reports/[reportId]` renders saved analysis, metadata, then original weekly input.
 - `GET /api/storage/pm-reports` returns `{ reports }` after server identity validation.
 - `GET /api/storage/pm-reports/[reportId]` returns input, analysis, and metadata after identity and ID validation.
 
 All four report interfaces call `client/src/server/pm-reports.ts` directly in the Next.js server and use the temporary server-side `CHEKKU_LOCAL_USER_ID` seam. They do not pass through Mastra. Chat PM tool calls separately pass through `/api/agent/*` and Mastra. Browser code never contacts Garage. Missing identity returns 403; invalid IDs return 400 or page not-found; missing reports return 404; storage failures return bounded 503 responses without provider details.
 
-When PM Agent lists reports in chat, its code-defined list tool generates a deterministic GFM table and the agent returns it unchanged. Rows contain URL-encoded relative report links, compact UTC timestamps, ratings, and statuses. Links open in a new tab with `rel="noreferrer"`. Chat and `/reports` tables are labeled keyboard-focusable regions with visible focus styles and horizontal scrolling on narrow screens. Empty lists return `No saved reports found.` exactly; invalid stored timestamps remain visible rather than breaking the list.
+When PM Agent lists weekly reports in chat, its code-defined list tool generates a deterministic GFM table and agent returns it unchanged. Rows contain URL-encoded relative report links, compact UTC timestamps, ratings, and statuses. Links open in a new tab with `rel="noreferrer"`. Chat and `/reports/weekly` tables are labeled keyboard-focusable regions with visible focus styles and horizontal scrolling on narrow screens. Empty lists return `No saved reports found.` exactly; invalid stored timestamps remain visible rather than breaking the list.
 
 PM report tools are not exposed by Garage MCP. Generic stored-agent Garage access remains exactly `create_text_object`, `get_text_object`, `list_text_objects`, `replace_text_object`, and `delete_object`. Garage v2.3 external-writer race limitations above apply to PM writes as well.
+
+### Competitive analysis objects
+
+Competitive tools and `client/src/server/competitive-analyses.ts` use same fixed `pm-agent` namespace but separate logical objects:
+
+```text
+competitive-analyses/<analysisId>/request.md
+competitive-analyses/<analysisId>/analysis.md
+competitive-analyses/<analysisId>/metadata.json
+```
+
+IDs use `pca_YYYYMMDDHHMMSS_<8 lowercase hex>` and enforce `^pca_[0-9]{14}_[0-9a-f]{8}$`. Metadata writes last, retains only canonical relative keys and bounded product data, and derives product/source counts. Save input requires five to seven unique competitors plus exactly one unique normalized public source URL for anchor and every competitor. Presentation-only `analysisUrl` and `analysesMarkdown` never enter storage or view output.
+
+Competitive interfaces:
+
+- `/reports/competitive` lists analysis ID, created time, anchor, competitor count, and source count newest first.
+- `/reports/competitive/[analysisId]` renders analysis, metadata, then original request.
+- `GET /api/storage/competitive-analyses` returns `{ analyses }` after server identity validation.
+- `GET /api/storage/competitive-analyses/[analysisId]` returns request, analysis, and metadata after identity and ID validation.
+
+Competitive chat lists return deterministic `analysesMarkdown` unchanged. Empty text is exactly `No saved competitive analyses found.` Lists and feature matrices use same accessible horizontal-scroll wrapper as weekly tables. Missing identity returns 403; invalid IDs return 400 or page not-found; missing analyses return 404; storage failures return fixed 503 messages without physical keys or provider details.
 
 ## Browser operation
 
@@ -166,7 +331,7 @@ PM report tools are not exposed by Garage MCP. Generic stored-agent Garage acces
 BROWSER_HEADLESS=true
 ```
 
-Set it to `false` during local debugging when a visible browser is useful. The QA Web Agent keeps Memory enabled and may request approval for interactive browser actions.
+Set it to `false` during local debugging when a visible browser is useful. The QA Web Agent keeps Memory enabled and runs browser actions directly (no approval gate).
 
 Browser automation can fail when a site:
 
@@ -177,7 +342,38 @@ Browser automation can fail when a site:
 
 Report the blocker rather than bypassing access controls.
 
-## Telegram channel (social-media-agent)
+## Android QA (qa-android-agent)
+
+```dotenv
+MAESTRO_ENABLED=false
+MAESTRO_COMMAND=maestro
+MAESTRO_WORKSPACE=../maestro
+MAESTRO_ARTIFACT_DIR=../artifacts/maestro
+MAESTRO_TIMEOUT_MS=120000
+ADB_PATH=adb
+```
+
+Chekku, the Maestro CLI, ADB, and an Android emulator or physical device must be reachable on the same machine. Confirm with `adb devices` before enabling.
+
+`MAESTRO_ENABLED` defaults to `false`; the server boots normally without Maestro installed. Set it to `true` only on a machine with Maestro, ADB, and a device.
+
+Under the local dev server (`mastra dev`), the process cwd is `agent/src/mastra/public/` (not the agent workspace), and Mastra loads `agent/.env.development` rather than `agent/.env`. Put `MAESTRO_*` values in `agent/.env.development` for local dev, and use absolute paths for `MAESTRO_WORKSPACE` and `MAESTRO_ARTIFACT_DIR` (e.g. `MAESTRO_WORKSPACE=C:\dev\chekku\maestro`). The `../maestro` default is resolved relative to that `public/` cwd, so it would otherwise land flows and artifacts under `agent/src/maestro/` instead of the repo root.
+
+The agent exposes an allowlisted subset of the built-in `maestro mcp` tools: `list_devices`, `inspect_screen`, `take_screenshot`, `cheat_sheet`, and `run`. `run_flow_files`, the cloud tools, and `open_maestro_viewer` are never attached. No tool requires approval — `maestro_run` (which executes flows, including inline/generated YAML) and the curated `run_maestro_flow` runner execute directly. There are no granular single-action tools — every device interaction (tap/input/back/launch) goes through `maestro_run` as inline YAML.
+
+On Windows the Maestro command is typically a `.bat`/`.cmd`; the agent routes it through `cmd.exe /c` automatically (Node refuses to spawn `.bat` directly). If `MAESTRO_COMMAND` is on PATH as a plain executable, no wrapping is needed.
+
+`run_maestro_flow` accepts logical names only (`{ suite: 'smoke', flow: 'login' }`), resolves them under `MAESTRO_WORKSPACE`, rejects traversal/absolute paths/backslashes, and writes JUnit reports and artifacts to `MAESTRO_ARTIFACT_DIR/<runId>/`. It never reports Passed unless Maestro exits 0.
+
+The read-only `current_app` tool runs `adb shell dumpsys activity activities` (via `ADB_PATH`, default `adb`) and returns the foreground app's package name, so the agent can determine the `appId` itself instead of asking.
+
+Common failures:
+
+- **Maestro MCP reports missing tools / connection refused** — confirm `maestro mcp` starts manually and `MAESTRO_ENABLED=true` after restart.
+- **No device** — the agent returns a Blocked result; start an emulator or connect a device and re-run.
+- **Flow not found** — confirm the logical name maps to `<workspace>/<suite>/<flow>.yaml` and that the file is a regular file inside the workspace.
+
+## Telegram channel (social-media-content-writer)
 
 ```dotenv
 TELEGRAM_BOT_TOKEN=
@@ -199,9 +395,77 @@ RESEND_API_KEY=
 RESEND_FROM_EMAIL=Chekku <onboarding@resend.dev>
 ```
 
-Get a key at [resend.com](https://resend.com). The default `onboarding@resend.dev` sender can only deliver to the account owner; production should use a Resend-verified domain in `RESEND_FROM_EMAIL`. Every delivery requires approval. The tool fails with a clear error when `RESEND_API_KEY` is missing.
+Get a key at [resend.com](https://resend.com). The default `onboarding@resend.dev` sender can only deliver to the account owner; production should use a Resend-verified domain in `RESEND_FROM_EMAIL`. Deliveries run directly (no approval gate). The tool fails with a clear error when `RESEND_API_KEY` is missing.
+
+## Scheduled social drafts (weekly-social-drafts workflow)
+
+```dotenv
+SOCIAL_DRAFT_REVIEW_EMAIL=social-reviewer@example.com
+# Optional but recommended — drives Stage 2 trending research:
+SEARXNG_BASE_URL=http://localhost:8080
+SEARXNG_API_KEY=
+# Optional — movable feasts (Idul Fitri, Idul Adha, 1 Muharram, etc.).
+# Defaults to the public api-hari-libur instance; unset to opt out.
+PUBLIC_HOLIDAY_API_BASE_URL=https://api-hari-libur.vercel.app/api
+#PUBLIC_HOLIDAY_CACHE_DIR=src/mastra/calendar/.cache
+# Optional — enriches each chosen trending topic with the hosted Web Reader's
+# page markdown. Unset = snippet-only (same as before Phase 2b).
+WEB_READER_API_KEY=
+```
+
+The `weekly-social-drafts` workflow fires every Monday at 09:00 Asia/Jakarta via Mastra's built-in scheduler (no separate registration). One run drafts 2 base Instagram captions plus, when the week contains a holiday, 1 bonus awareness post (total 2–3 drafts). Base slots come from SearXNG trending research; when `WEB_READER_API_KEY` is set, each chosen topic is also enriched with the hosted Web Reader's page markdown (single-page read per topic, parallel, bounded — per-topic fetch failure falls back to snippet only). Remaining base slots are filled from the deterministic evergreen-pillar rotation when research yields fewer than 2 topics. Trending results that overlap the chosen awareness day are skipped so the bonus and a base slot do not duplicate the same theme. Each caption is drafted through the `social-media-content-writer` agent with the `instagram-writer` role pinned, then saved to the fixed `social-media-agent` Garage namespace (the `SOCIAL_MEDIA_AGENT_ID` storage constant, decoupled from the agent identity) under `social-posts/<postId>/`. The run then emails a review link per draft to `SOCIAL_DRAFT_REVIEW_EMAIL`.
+
+`SOCIAL_DRAFT_REVIEW_EMAIL` must be set per environment — there is no default. When unset, the workflow still drafts and saves posts but skips the email step, recording `emailSent: false` and `emailError: 'SOCIAL_DRAFT_REVIEW_EMAIL is not set...'` in the run output. The workflow also needs `RESEND_API_KEY` for delivery and the five `GARAGE_*` values for persistence. Other email delivery failures are recorded in the run output (`emailSent: false`, `emailError`) without failing the run; saved drafts remain readable at `/social-posts` and `/social-posts/[postId]`.
+
+`SEARXNG_BASE_URL` is optional. When unset (or when every research query fails), the workflow degrades to exactly 2 evergreen pillars with no awareness-day bonus and records a `researchNote` on the run output — research failure is never fatal.
+
+`PUBLIC_HOLIDAY_API_BASE_URL` resolves movable feasts (Idul Fitri, Idul Adha, 1 Muharram / Tahun Baru Islam, Isra Mi'raj, Maulid Nabi, Nyepi, Paskah, Waisak, Natal) so the awareness-day bonus is no longer limited to the fixed-date `SPECIAL_DAYS` calendar. The API response is cached per year under `PUBLIC_HOLIDAY_CACHE_DIR` (default `agent/src/mastra/calendar/.cache/`, gitignored) so a single fire does not re-fetch 30+ years of data. When unset or unreachable, the workflow falls back to fixed-date entries only (Hari Kartini, Hari Guru Nasional, Hari Bumi, etc.) — observance days still produce a bonus, movable feasts do not.
+
+Review interfaces:
+
+- `/social-posts` lists post id, created time, topic, special day, and status newest first.
+- `/social-posts/[postId]` renders caption, metadata, then the brief that generated it.
+- `GET /api/storage/social-posts` and `GET /api/storage/social-posts/[postId]` return bounded JSON after server identity validation.
 
 ## Common failures
+
+### Local service startup fails
+
+Run from repository root with Docker responsive and both loopback ports free:
+
+```bash
+docker compose version
+docker compose --env-file storage/.env.local --env-file searxng/.env.local ps garage searxng
+```
+
+`npm run dev:sh` reports whether Garage port `3900` or SearXNG port `8888` is occupied. Stop the conflicting process or container; do not edit the pinned Compose ports without a reviewed configuration change. If Compose configuration is invalid, remove no volumes: inspect tracked `compose.yaml`, `searxng/settings.yml`, and generated file permissions, then rerun the launcher.
+
+### Local service readiness times out
+
+Default readiness timeout is 30 seconds. First inspect health and logs without printing environment values:
+
+```bash
+docker compose --env-file storage/.env.local --env-file searxng/.env.local ps garage searxng
+docker compose --env-file storage/.env.local --env-file searxng/.env.local logs garage searxng
+```
+
+For a slow Docker host, retry with `CHEKKU_READY_TIMEOUT_SECONDS` set from 1 to 300. `CHEKKU_READY_INTERVAL_SECONDS` must be a positive integer and is capped at 5. These launcher settings do not change `search_web`'s fixed 12-second request deadline.
+
+### SearXNG search is not configured
+
+For local operation, rerun `npm run dev:sh` so the launcher injects loopback configuration into Mastra. For external operation, confirm `SEARXNG_BASE_URL` reaches only the agent process and restart it. Do not add endpoint configuration to stored-agent payloads or browser environment.
+
+### SearXNG search is unavailable or times out
+
+For local operation, call `curl --fail http://127.0.0.1:8888/healthz` and inspect the SearXNG service status. For external operation, verify the base URL, reverse-proxy bearer authentication, JSON support, fixed `/config` and `/search` routes, and upstream search-engine latency from the Mastra host. Do not expose the optional bearer or copy raw upstream responses into tickets.
+
+### Web Reader is not configured
+
+For local development, set `WEB_READER_API_KEY` in `agent/.env`, rerun `npm run setup`, and restart the agent. Confirm the key reaches only the agent process. Do not add it to client environment, stored-agent records, model input, command output, logs, or tickets. Server should remain healthy while tool fails closed.
+
+### Web Reader is unavailable or times out
+
+Jina Reader is hosted dependency. Confirm outbound HTTPS access from Mastra host and provider availability; no local Reader health endpoint exists. Request deadline stays fixed at 30 seconds. Do not add configurable endpoint, retries, anonymous fallback, or raw provider diagnostics.
 
 ### Garage MCP reports missing identity
 
@@ -209,7 +473,13 @@ Get a key at [resend.com](https://resend.com). The default `onboarding@resend.de
 
 ### PM report is unavailable
 
-Confirm the report ID uses canonical public format and all five `GARAGE_*` values reach both agent and Next.js server processes. PM Agent can save through the agent process while `/reports` still fails if the client server lacks Garage configuration. Do not copy generated credentials into tracked files or bypass the fixed `pm-agent` namespace.
+Confirm report ID uses canonical `pmr_...` or `pca_...` format and all five `GARAGE_*` values reach both agent and Next.js server processes. PM Agent can save through agent process while report pages fail if client server lacks Garage configuration. Check `/reports/weekly` for weekly lists and `/reports/competitive` for competitive lists. Do not copy generated credentials into tracked files or bypass fixed `pm-agent` namespace.
+
+### Competitive analysis is incomplete
+
+This is not storage failure. Inspect named missing products/evidence and suggested action. Supply an official public product page, replace an agent-selected candidate, or change mandatory seed set, then rerun. Do not lower five-competitor minimum, treat search snippets as evidence, infer `No` from silence, or manually persist partial output.
+
+An incomplete response must start with `# Incomplete Competitive Analysis: <anchor product>`, make claims only from successful current-run reads, omit save calls, and contain no `Saved analysisId:`. Unevidenced products may appear only as missing-evidence entries with safe failure context and suggested action.
 
 ### Garage object storage is not configured
 
@@ -220,8 +490,8 @@ Confirm all five `GARAGE_*` application values are available to the agent proces
 Check Docker and local health without exposing environment values:
 
 ```bash
-docker compose --env-file storage/.env.local ps garage
-docker inspect --format '{{.State.Health.Status}}' "$(docker compose --env-file storage/.env.local ps -q garage)"
+docker compose --env-file storage/.env.local --env-file searxng/.env.local ps garage
+docker inspect --format '{{.State.Health.Status}}' "$(docker compose --env-file storage/.env.local --env-file searxng/.env.local ps -q garage)"
 ```
 
 ### Model access denied
@@ -313,7 +583,33 @@ npm run build
 git diff --check
 ```
 
-The test suite covers model routing, model discovery, prompt normalization, all four built-in agents, Telegram roles and slash commands, email approval flow, PM tools and repositories, report APIs/pages and accessible tables, stored-agent payloads and Garage hydration, stored-model migration, thread ownership, proxy paths, UI structure, namespaced storage, Garage adapter safety, and launcher behavior.
+The test suite covers model routing, model discovery, prompt normalization, all five built-in agents, Telegram roles and slash commands, email delivery, weekly and competitive PM skills/tools/repositories, report APIs/pages and accessible tables, stored-agent payloads and fixed Garage/SearXNG/Web Reader hydration, bounded search and hosted reading transports with safe errors, stored-model migration, thread ownership, proxy paths, UI structure, namespaced storage, Garage adapter safety, Maestro flow runner, char-budget guard, and launcher behavior.
+
+## Production run
+
+`npm run prod` builds both workspaces and starts them together:
+
+```bash
+npm ci
+npm run prod
+```
+
+This is equivalent to `npm run build && npm run start`. To run them separately (for staged deploys or build hosts):
+
+```bash
+npm run build
+npm run start
+```
+
+`npm run start` runs `mastra start` (agent) and `next start` (client) side by side via `concurrently`. It does not provision local Docker services; production must reach Garage, SearXNG, and the model endpoint as external services or pre-provisioned infrastructure.
+
+Environment differences from local development:
+
+- `mastra start` loads `agent/.env` directly, not the generated `agent/.env.development` used by `mastra dev`. `npm run setup` (`scripts/setup-env.sh`) is an interactive local bootstrap: it prompts for `LLM_API_KEY` and the other runtime values and writes them straight into `agent/.env`. It is not a production secrets pipeline; provision production secrets through a deployment secret manager rather than an interactive local script.
+- Under `mastra start`, the server process cwd is `agent/.mastra/output` (Mastra spawns the built bundle there), not the agent workspace. `MAESTRO_WORKSPACE` and `MAESTRO_ARTIFACT_DIR` resolve relative to that cwd, so the `../maestro` and `../artifacts/maestro` defaults would land under `agent/.maestro/` and `agent/.mastra/artifacts/`. Use absolute paths in production, as the `mastra dev` note above already requires.
+- Server-only variables in `client/.env.local` are read at `next start` runtime, but `NEXT_PUBLIC_*` variables are inlined into the browser bundle at `next build` time, not at `next start`. `NEXT_PUBLIC_APP_URL` is consumed by `'use client'` code (`client/src/lib/mastra-client.ts`), so when build and start run on separate hosts the shipped bundle keeps the build-host origin and every `/api/agent/*` call targets the wrong place unless `NEXT_PUBLIC_APP_URL` is set to the production origin at build time.
+
+See Production notes below for the durable `DATABASE_URL`, deployed origin, and secret-manager checklist.
 
 ## Production notes
 
@@ -324,6 +620,8 @@ Before deploying beyond local development:
 - set a durable LibSQL-compatible database URL and token;
 - restrict `WEB_URL` to the deployed client origin;
 - configure an authenticated server-to-server hop if the Mastra service is exposed separately;
-- review browser approval and network policies;
-- if the social-media-agent is enabled, set `TELEGRAM_MODE=webhook` with a public URL and `TELEGRAM_WEBHOOK_SECRET_TOKEN`, and provision a Resend-verified sender for the send-email tool;
+- configure `SEARXNG_BASE_URL` and optional `SEARXNG_API_KEY` only in the agent service or deployment secret manager; keep the endpoint private or protect it with a reverse proxy;
+- configure `WEB_READER_API_KEY` only in the agent service or deployment secret manager, and review Jina's privacy, retention, availability, remote DNS, redirect, and network-isolation behavior for deployment requirements;
+- review browser and network policies;
+- if the social-media-content-writer (Telegram) is enabled, set `TELEGRAM_MODE=webhook` with a public URL and `TELEGRAM_WEBHOOK_SECRET_TOKEN`, and provision a Resend-verified sender for the send-email tool;
 - add rate limits, audit logging, and backup procedures appropriate to the environment.
