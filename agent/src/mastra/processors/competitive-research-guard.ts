@@ -5,8 +5,8 @@ const READER_TOOL = 'read_web_page';
 const READER_CONFIGURATION_MESSAGE = 'Web Reader is not configured.';
 
 const TOOL_LIMITS: Readonly<Record<string, number>> = {
-  [SEARCH_TOOL]: 5,
-  [READER_TOOL]: 8,
+  [SEARCH_TOOL]: 8,
+  [READER_TOOL]: 14,
 };
 
 export const COMPETITIVE_RESEARCH_TERMINAL_INSTRUCTION =

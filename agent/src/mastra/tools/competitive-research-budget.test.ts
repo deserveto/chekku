@@ -15,20 +15,20 @@ function ctx(threadId: string) {
 }
 
 describe('withCompetitiveResearchBudget', () => {
-  it('rejects the sixth search_web call per run', async () => {
+  it('rejects the ninth search_web call per run', async () => {
     let calls = 0;
     const tool = withCompetitiveResearchBudget('search_web', makeTool(async () => { calls++; return { ok: true }; }));
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 8; i++) {
       await execOf(tool)({}, ctx('cap-search'));
     }
-    expect(calls).toBe(5);
+    expect(calls).toBe(8);
     await expect(execOf(tool)({}, ctx('cap-search'))).rejects.toThrow(/budget exhausted/);
-    expect(calls).toBe(5);
+    expect(calls).toBe(8);
   });
 
   it('counts failed attempts toward the limit', async () => {
     const tool = withCompetitiveResearchBudget('search_web', makeTool(async () => { throw new Error('boom'); }));
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 8; i++) {
       await expect(execOf(tool)({}, ctx('cap-fail'))).rejects.toThrow('boom');
     }
     await expect(execOf(tool)({}, ctx('cap-fail'))).rejects.toThrow(/budget exhausted/);
@@ -50,7 +50,7 @@ describe('withCompetitiveResearchBudget', () => {
     const tool = withCompetitiveResearchBudget('read_web_page', makeTool(async () => {
       throw new Error('Web Reader is unavailable. Try again later.');
     }));
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 14; i++) {
       await expect(execOf(tool)({}, ctx('cap-nonterm'))).rejects.toThrow('unavailable');
     }
     await expect(execOf(tool)({}, ctx('cap-nonterm'))).rejects.toThrow(/budget exhausted/);
@@ -86,10 +86,10 @@ describe('withCompetitiveResearchBudget', () => {
   it('isolates budgets by thread', async () => {
     let calls = 0;
     const tool = withCompetitiveResearchBudget('search_web', makeTool(async () => { calls++; return { ok: true }; }));
-    for (let i = 0; i < 5; i++) await execOf(tool)({}, ctx('iso-A'));
+    for (let i = 0; i < 8; i++) await execOf(tool)({}, ctx('iso-A'));
     await expect(execOf(tool)({}, ctx('iso-A'))).rejects.toThrow(/budget exhausted/);
     await execOf(tool)({}, ctx('iso-B'));
-    expect(calls).toBeGreaterThanOrEqual(6);
+    expect(calls).toBeGreaterThanOrEqual(9);
   });
 
   it('passes through when agent run context is absent', async () => {
@@ -110,17 +110,17 @@ describe('withCompetitiveResearchBudget', () => {
       },
     });
 
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 8; i++) {
       await execOf(tool)({}, ctxWith('first competitive analysis'));
     }
     await expect(execOf(tool)({}, ctxWith('first competitive analysis'))).rejects.toThrow(/budget exhausted/);
 
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 8; i++) {
       await execOf(tool)({}, ctxWith('second competitive analysis'));
     }
     await expect(execOf(tool)({}, ctxWith('second competitive analysis'))).rejects.toThrow(/budget exhausted/);
 
-    expect(calls).toBe(10);
+    expect(calls).toBe(16);
   });
 
   it('resets the save slot when a new user message arrives in the same thread', async () => {
@@ -148,10 +148,10 @@ describe('withCompetitiveResearchBudget', () => {
   it('does not reset when messages are absent (preserves legacy per-thread accounting)', async () => {
     let calls = 0;
     const tool = withCompetitiveResearchBudget('search_web', makeTool(async () => { calls++; return { ok: true }; }));
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 8; i++) {
       await execOf(tool)({}, ctx('cap-no-messages'));
     }
     await expect(execOf(tool)({}, ctx('cap-no-messages'))).rejects.toThrow(/budget exhausted/);
-    expect(calls).toBe(5);
+    expect(calls).toBe(8);
   });
 });

@@ -60,7 +60,7 @@ describe('pm-agent (weekly and competitive analysis)', () => {
       'competitive-analysis',
       'weekly-report-analysis',
     ]);
-    expect(await pmAgent.getDefaultOptions()).toMatchObject({ maxSteps: 18 });
+    expect(await pmAgent.getDefaultOptions()).toMatchObject({ maxSteps: 25 });
     expect((await pmAgent.listConfiguredInputProcessors()).map(({ id }) => id)).toEqual([
       'competitive-research-guard',
       'token-limiter',

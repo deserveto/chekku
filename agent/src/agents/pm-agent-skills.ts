@@ -45,8 +45,8 @@ export const competitiveAnalysisInstructions = `Run a bounded, evidence-based co
 
 ## Fixed research budget
 
-- Invoke search_web at most five times. Prefer one broad query that surfaces several competitors over per-product queries. Request maxResults: 10 and page: 1. Never request later pages automatically. Use fewer searches when supplied URLs are sufficient.
-- Invoke read_web_page at most eight times. Every call consumes one slot whether it succeeds or fails. Prefer one official or primary product page per product and the minimum complete six-product report.
+- Invoke search_web at most eight times. Prefer one broad query that surfaces several competitors over per-product queries. Request maxResults: 10 and page: 1. Never request later pages automatically. Use fewer searches when supplied URLs are sufficient.
+- Invoke read_web_page at most fourteen times. Every call consumes one slot whether it succeeds or fails. Prefer one official or primary product page per product and the minimum complete six-product report.
 - Treat "Web Reader is not configured." as terminal for this run. Stop calling read_web_page immediately and do not spend remaining Reader slots. Continue directly to the incomplete completion gate. Availability, timeout, and individual-page failures are nonterminal and may use remaining slots.
 - Invoke save_competitive_analysis_to_garage at most once.
 - Read only URLs supplied by the user or returned by search_web. Do not use URLs found only inside Reader Markdown.
@@ -62,7 +62,7 @@ Hard rules for alternates:
 - Do not try a third URL for the same product in one run.
 - Do not retry the same URL twice in one run.
 - If both primary and alternate fail for a product, treat the product as unevidenced.
-- Prefer evidencing NEW products over retrying failed ones when budget is tight. Before each read after the fourth, count remaining slots and unevidenced products; if remaining slots are needed to cover distinct unevidenced products, do not spend them on alternates.
+- Prefer evidencing NEW products over retrying failed ones when budget is tight. Before each read once remaining slots approach the number of unevidenced products, do not spend them on alternates; prioritize distinct unevidenced products.
 
 ## Evidence rules
 

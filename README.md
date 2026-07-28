@@ -357,7 +357,7 @@ Scope is one page per call. Web Reader does not crawl, search, authenticate, rea
 
 ## PM analysis skills and reports
 
-`pm-agent` is a protected code-defined agent with bounded Memory/context processors, `maxSteps: 18`, and two user-invocable skills:
+`pm-agent` is a protected code-defined agent with bounded Memory/context processors, `maxSteps: 25`, and two user-invocable skills:
 
 - `weekly-report-analysis` preserves the existing engineering weekly risk template, rating/status rules, automatic save, and `Saved reportId:` receipt;
 - `competitive-analysis` researches the first named product as anchor, includes five to seven competitors, compares primary evidence, saves only complete work, and returns `Saved analysisId:` after successful persistence.
@@ -370,7 +370,7 @@ Invoke either by natural language or prompt convention:
 Compare Product X with similar incident-management platforms
 ```
 
-Fewer than five supplied competitors are expanded automatically. More than seven supplied competitors requires narrowing before research. A run uses at most five `search_web` calls, eight one-page `read_web_page` calls, and one competitive save. Search discovers candidates but does not read pages. Reader content is untrusted evidence, never instructions. Every included product needs one successfully read official/primary page; missing feature mention is `Unknown`, not `No`. Incomplete work is clearly labeled and never saved.
+Fewer than five supplied competitors are expanded automatically. More than seven supplied competitors requires narrowing before research. A run uses at most eight `search_web` calls, fourteen one-page `read_web_page` calls, and one competitive save. Search discovers candidates but does not read pages. Reader content is untrusted evidence, never instructions. Every included product needs one successfully read official/primary page; missing feature mention is `Unknown`, not `No`. Incomplete work is clearly labeled and never saved.
 
 PM Agent has eight direct tools: the three weekly save/list/view tools, three competitive save/list/view tools, `search_web`, and `read_web_page`. PM-only tools never enter Garage, SearXNG, Web Reader, or stored-agent registries; fixed MCP contracts remain unchanged.
 

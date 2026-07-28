@@ -63,10 +63,10 @@ describe('PM Agent skills', () => {
     expect(competitiveAnalysisInstructions).toContain('five to seven competitors');
     expect(competitiveAnalysisInstructions).toContain('more than seven supplied competitors');
     expect(competitiveAnalysisInstructions).toContain('ask the user to narrow');
-    expect(competitiveAnalysisInstructions).toContain('search_web at most five times');
+    expect(competitiveAnalysisInstructions).toContain('search_web at most eight times');
     expect(competitiveAnalysisInstructions).toContain('maxResults: 10');
     expect(competitiveAnalysisInstructions).toContain('page: 1');
-    expect(competitiveAnalysisInstructions).toContain('read_web_page at most eight times');
+    expect(competitiveAnalysisInstructions).toContain('read_web_page at most fourteen times');
     expect(competitiveAnalysisInstructions).toContain('save_competitive_analysis_to_garage at most once');
     expect(competitiveAnalysisInstructions).toContain('URLs supplied by the user or returned by search_web');
     expect(competitiveAnalysisInstructions).toContain('Do not crawl');

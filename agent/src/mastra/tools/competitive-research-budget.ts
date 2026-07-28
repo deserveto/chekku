@@ -3,8 +3,8 @@ const SAVE_TOOL = 'save_competitive_analysis_to_garage';
 const READER_CONFIGURATION_MESSAGE = 'Web Reader is not configured.';
 
 const TOOL_LIMITS: Readonly<Record<string, number>> = {
-  search_web: 5,
-  read_web_page: 8,
+  search_web: 8,
+  read_web_page: 14,
   save_competitive_analysis_to_garage: 1,
 } as const;
 
