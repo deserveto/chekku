@@ -215,7 +215,9 @@ export async function saveCompetitiveAnalysis(
     competitorNames: products.competitorNames,
     productCount,
     sourceCount: productCount,
-    ...objectKeys,
+    requestObjectKey: objectKeys.requestObjectKey,
+    analysisObjectKey: objectKeys.analysisObjectKey,
+    metadataObjectKey: objectKeys.metadataObjectKey,
   };
 
   await input.store.createText(objectKeys.requestObjectKey, input.requestMarkdown, 'text/markdown');
@@ -230,7 +232,7 @@ export async function saveCompetitiveAnalysis(
 }
 ```
 
-Note: `metadata.json` is still last. The `metadata` interface does NOT gain `slidesObjectKey` as a persisted field — `competitiveAnalysisKeysFor` returns it for tooling, but only `requestObjectKey`, `analysisObjectKey`, `metadataObjectKey` are stored in metadata. (Existing invariant: metadata lists request/analysis/metadata keys for backward compatibility. Adding `slidesObjectKey` to metadata would change metadata parsing — out of scope.)
+**CRITICAL:** `metadata.json` is still last. The `metadata` interface does NOT gain `slidesObjectKey` as a persisted field. Pick the three metadata keys explicitly (do NOT spread `...objectKeys` — it now contains `slidesObjectKey`, which would leak into persisted metadata, violate the "metadata shape unchanged" invariant, and trip the agent-side `.strict()` `metadataSchema` validation).
 
 - [ ] **Step 6: Update `getCompetitiveAnalysis` to defensively read slides.md**
 
@@ -297,6 +299,24 @@ expect(writes.map(({ key }) => key)).toEqual([
   `agents/cG0tYWdlbnQ/competitive-analyses/${analysisId}/slides.md`,
   `agents/cG0tYWdlbnQ/competitive-analyses/${analysisId}/metadata.json`,
 ]);
+```
+
+That same test's `expect(metadata).toEqual({...competitiveAnalysisKeysFor(analysisId)})` spread must also be replaced — `competitiveAnalysisKeysFor` now returns 4 keys but persisted metadata keeps 3. Use explicit three-key listing plus a defensive guard:
+
+```ts
+expect(metadata).toEqual({
+  analysisId,
+  createdAt: '2026-07-23T12:00:00.000Z',
+  anchorProduct: 'GPT',
+  market: 'General AI assistants',
+  competitorNames,
+  productCount: 6,
+  sourceCount: 6,
+  requestObjectKey: `competitive-analyses/${analysisId}/request.md`,
+  analysisObjectKey: `competitive-analyses/${analysisId}/analysis.md`,
+  metadataObjectKey: `competitive-analyses/${analysisId}/metadata.json`,
+});
+expect(metadata).not.toHaveProperty('slidesObjectKey');
 ```
 
 And the `writes request and analysis before metadata using createText` test — add slides.md between analysis.md and metadata.json:
