@@ -129,6 +129,21 @@ describe('PM Agent skills', () => {
     );
   });
 
+  it('gates the final response on a successful save and lists slidesMarkdown in the save inputs', () => {
+    expect(competitiveAnalysisInstructions).toContain(
+      'THEN draft the slide deck as `slidesMarkdown`',
+    );
+    expect(competitiveAnalysisInstructions).toContain('THEN call save_competitive_analysis_to_garage exactly once');
+    expect(competitiveAnalysisInstructions).toContain('(`slidesMarkdown`)');
+    expect(competitiveAnalysisInstructions).toContain(
+      'The save call MUST happen before any of the analysis Markdown appears in your response',
+    );
+    expect(competitiveAnalysisInstructions).toContain('There is no retroactive save');
+    expect(competitiveAnalysisInstructions).toContain(
+      'Before composing your final response, verify ONE of these is true',
+    );
+  });
+
   it('requires exact completed-report headings in order', () => {
     const headings = [
       '# Competitive Analysis: <anchor product>',
