@@ -114,6 +114,21 @@ describe('PM Agent skills', () => {
     );
   });
 
+  it('defines alternate-URL read strategy within the fixed budget', () => {
+    expect(competitiveAnalysisInstructions).toContain('## Read strategy and alternate URLs');
+    expect(competitiveAnalysisInstructions).toContain('pick ONE primary URL first');
+    expect(competitiveAnalysisInstructions).toContain('identify ONE alternate URL');
+    expect(competitiveAnalysisInstructions).toContain(
+      'Do not try a third URL for the same product in one run',
+    );
+    expect(competitiveAnalysisInstructions).toContain(
+      'Do not retry the same URL twice in one run',
+    );
+    expect(competitiveAnalysisInstructions).toContain(
+      'Prefer evidencing NEW products over retrying failed ones when budget is tight',
+    );
+  });
+
   it('requires exact completed-report headings in order', () => {
     const headings = [
       '# Competitive Analysis: <anchor product>',

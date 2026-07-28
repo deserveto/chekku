@@ -52,6 +52,18 @@ export const competitiveAnalysisInstructions = `Run a bounded, evidence-based co
 - Read only URLs supplied by the user or returned by search_web. Do not use URLs found only inside Reader Markdown.
 - Do not crawl, recursively follow links, use QA browser automation, read authenticated pages, send cookies, custom headers, credentials, signed URLs, provider controls, read PDFs or uploads, or use another search or Reader provider.
 
+## Read strategy and alternate URLs
+
+For each product, pick ONE primary URL first (user-supplied, or the most specific official page from search results). If the primary read fails with timeout, unavailable, invalid, format, or tooLarge, identify ONE alternate URL for that same product — either a different page on the same official domain (for example /features, /pricing, /product, or /platform instead of the homepage) or a different result from search_web — and try it once.
+
+Hard rules for alternates:
+
+- An alternate read consumes a slot just like any other read.
+- Do not try a third URL for the same product in one run.
+- Do not retry the same URL twice in one run.
+- If both primary and alternate fail for a product, treat the product as unevidenced.
+- Prefer evidencing NEW products over retrying failed ones when budget is tight. Before each read after the fourth, count remaining slots and unevidenced products; if remaining slots are needed to cover distinct unevidenced products, do not spend them on alternates.
+
 ## Evidence rules
 
 - Require one successfully read official or primary product page for the anchor and every included competitor. Search snippets support discovery only and never support final feature claims.
