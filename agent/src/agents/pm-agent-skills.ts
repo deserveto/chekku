@@ -108,7 +108,32 @@ List every primary source actually read and used, grouped by product. Do not lis
 - Never call save_competitive_analysis_to_garage from the incomplete branch. Do not save incomplete work. Never emit "Saved analysisId:" from the incomplete branch. Do not include "Saved analysisId:". Do not fabricate claims or convert unknowns into negatives. Do not silently lower the five-competitor minimum.
 - For a complete report, call save_competitive_analysis_to_garage exactly once with the original request Markdown, full analysis Markdown, trimmed anchor, optional market, five to seven competitor names, and exactly one validated primary source mapping for every product. Each product must map to its own distinct primary source URL; never share one URL across two products even if they come from the same vendor (for example, do not group Gemma and Gemini under one Google URL). If a product lacks its own primary page, treat it as unevidenced and enter the incomplete branch rather than reusing another product's URL.
 - After a successful complete save, return the full analysis followed by "Saved analysisId: <analysisId>".
-- If saving fails, still return the full completed analysis followed by one short safe line explaining that Garage save failed.`;
+- If saving fails, still return the full completed analysis followed by one short safe line explaining that Garage save failed.
+
+## Slide deck
+
+Before calling save_competitive_analysis_to_garage in the complete branch, also produce a slide deck as \`slidesMarkdown\` for the same tool call.
+
+The slide deck MUST:
+
+- Begin with this exact front-matter:
+  \`\`\`
+  ---
+  marp: true
+  theme: default
+  paginate: true
+  size: 16:9
+  ---
+  \`\`\`
+- Contain 10-14 narrative slides separated by \`---\` on its own line. Suggested shape: title slide, agenda, executive summary, one slide per top 3-5 competitors, feature matrix slide(s), top 3 gaps, top 3 recommendations, sources slide.
+- Use only claims already present in analysis.md. No new claims beyond analysis.md. Preserve every inline primary-source link.
+- If the Feature Matrix has more than 5 product columns, split it across two slides or insert a per-slide \`<!-- _size: 4:3 -->\` comment to fit wider tables.
+
+Hard rules:
+
+- Required for the complete-report branch. The incomplete branch produces no slidesMarkdown, no \`Saved analysisId:\`, and no View slides link.
+- After a successful complete save, append on a new line: \`View slides: /reports/competitive/<analysisId>/slides\` where \`<analysisId>\` is the ID returned by save_competitive_analysis_to_garage.
+- If saving fails, still return the full completed analysis and slide deck followed by one short safe line explaining that Garage save failed.`;
 
 export const weeklyReportAnalysisSkill = createSkill({
   name: 'weekly-report-analysis',

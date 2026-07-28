@@ -143,4 +143,17 @@ describe('PM Agent skills', () => {
     expect(competitiveAnalysisInstructions).toContain('Saved analysisId: <analysisId>');
     expect(competitiveAnalysisInstructions).toContain('If saving fails, still return the full completed analysis');
   });
+
+  it('defines slide deck rules and view slides link emission', () => {
+    expect(competitiveAnalysisInstructions).toContain('## Slide deck');
+    expect(competitiveAnalysisInstructions).toContain('marp: true');
+    expect(competitiveAnalysisInstructions).toContain('theme: default');
+    expect(competitiveAnalysisInstructions).toContain('paginate: true');
+    expect(competitiveAnalysisInstructions).toContain('size: 16:9');
+    expect(competitiveAnalysisInstructions).toContain('10-14 narrative slides');
+    expect(competitiveAnalysisInstructions).toContain('No new claims beyond analysis.md');
+    expect(competitiveAnalysisInstructions).toContain('Preserve every inline primary-source link');
+    expect(competitiveAnalysisInstructions).toContain('Required for the complete-report branch');
+    expect(competitiveAnalysisInstructions).toContain('View slides: /reports/competitive/<analysisId>/slides');
+  });
 });
