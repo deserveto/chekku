@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { createNamespacedObjectStorage } from './namespaced-objects.ts';
-import type { ObjectStorage } from './objects.ts';
+import { ObjectStorageError, type ObjectStorage } from './objects.ts';
 import { PM_REPORT_AGENT_ID, parsePmReportTimestamp } from './pm-reports.ts';
 
 export interface CompetitiveAnalysisMetadata {
@@ -269,8 +269,12 @@ export async function getCompetitiveAnalysis(
   let slidesMarkdown: string | undefined;
   try {
     slidesMarkdown = await store.getText(objectKeys.slidesObjectKey);
-  } catch {
-    slidesMarkdown = undefined;
+  } catch (error) {
+    if (error instanceof ObjectStorageError && error.code === 'not-found') {
+      slidesMarkdown = undefined;
+    } else {
+      throw error;
+    }
   }
 
   return { analysisId, requestMarkdown, analysisMarkdown, slidesMarkdown, metadata: parsed };

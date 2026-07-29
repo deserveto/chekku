@@ -5,8 +5,8 @@ import { act } from 'react';
 import type { ReactElement } from 'react';
 
 const renderMock = vi.fn((markdown: string) => ({
-  html: `<div id="marp-1" class="marpit-slide"><h1>RENDERED</h1><p>${markdown.slice(0, 10)}</p></div>`,
-  css: 'section { width: 1280px; }',
+  html: `<div class="marpit"><svg data-marpit-svg="" viewBox="0 0 1280 720"><foreignObject width="1280" height="720"><section id="1"><h1>RENDERED</h1><p>${markdown.slice(0, 10)}</p></section></foreignObject></svg></div>`,
+  css: 'div.marpit > svg > foreignObject > section{width:1280px;height:720px}',
 }));
 
 vi.mock('@marp-team/marp-core', () => ({
@@ -46,7 +46,7 @@ describe('CompetitiveSlides', () => {
 
     expect(renderMock).toHaveBeenCalledWith('---\nmarp: true\n---\n# Deck');
     expect(container.innerHTML).toContain('RENDERED');
-    expect(container.querySelector('style')?.textContent).toContain('section { width: 1280px; }');
+    expect(container.querySelector('style')?.textContent).toContain('div.marpit > svg > foreignObject > section');
   });
 
   it('renders a Print button that triggers window.print', async () => {

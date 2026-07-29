@@ -1912,34 +1912,3 @@ body.studio-sidebar-resizing * {
 .competitive-slides-stage {
   overflow: hidden;
 }
-
-.competitive-slides-stage .marpit-slide {
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
-  margin: 0 auto 1.5rem;
-}
-
-@media print {
-  .studio-nav,
-  .studio-page-header,
-  .competitive-slides-toolbar,
-  .competitive-slides-loading {
-    display: none !important;
-  }
-
-  .competitive-slides-stage .marpit-slide {
-    box-shadow: none;
-    margin: 0;
-    page-break-after: always;
-    break-after: page;
-  }
-
-  .competitive-slides-stage .marpit-slide:last-child {
-    page-break-after: auto;
-    break-after: auto;
-  }
-}
-
-@page {
-  size: 1280px 720px;
-  margin: 0;
-}

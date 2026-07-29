@@ -195,4 +195,4 @@ git diff --check
 - **Marp bundle**: ~600KB JS. Mitigated by dynamic `import()` inside the client component so only the `/slides` route pays.
 - **Slide overflow**: dense sections (Feature Matrix) may overflow the 1280x720 canvas. Mitigated by skill instruction to split or switch to `4:3` per slide; Marp core's auto-scaling handles the rest.
 - **AGENTS.md is the binding contract**: changes here must land in the same PR or the build breaks downstream tests.
-- **Unchanged invariants**: PM budget 5/8/1 per run, complete-only save, canonical `pca_` IDs, relative key set, no `pm` semantics in Garage MCP, browser modules never import `@chekku/storage`.
+- **Unchanged invariants**: complete-only save, canonical `pca_` IDs, relative key set, no `pm` semantics in Garage MCP, browser modules never import `@chekku/storage`. (Note: the research budget was raised from 5/8/1 to 8/14/1 mid-implementation by commit `40767bb` to give the alternate-URL retry logic room to fire on high-failure runs; AGENTS.md / README / OPERATIONS / ARCHITECTURE reflect the new caps, and `maxSteps` went 18 → 25 to fit the extra tool calls.)

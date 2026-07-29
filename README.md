@@ -82,7 +82,7 @@ PM Agent / selected stored agent
   -> bounded untrusted Markdown
 
 Competitive-analysis request
-  -> up to 5 searches -> up to 8 chosen-page reads
+  -> up to 8 searches -> up to 14 chosen-page reads
   -> evidence-only comparison -> one complete-only save
 
 SearXNG uses a server-owned endpoint (Mastra-only configuration):

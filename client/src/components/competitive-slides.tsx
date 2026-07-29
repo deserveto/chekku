@@ -22,7 +22,7 @@ export function CompetitiveSlides({ analysisId, slidesMarkdown }: CompetitiveSli
     (async () => {
       try {
         const { Marp } = await import('@marp-team/marp-core');
-        const result = new Marp().render(slidesMarkdown) as Rendered;
+        const result = new Marp({ script: false }).render(slidesMarkdown) as Rendered;
         if (cancelled) return;
         setRendered(result);
         setError(false);
@@ -41,7 +41,7 @@ export function CompetitiveSlides({ analysisId, slidesMarkdown }: CompetitiveSli
     if (!rendered) return;
     const handler = (event: KeyboardEvent) => {
       if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
-      const slides = document.querySelectorAll<HTMLElement>('.competitive-slides-stage [id^="marp-"]');
+      const slides = document.querySelectorAll<Element>('.competitive-slides-stage svg[data-marpit-svg]');
       if (slides.length === 0) return;
       const current = Array.from(slides).findIndex((slide) => {
         const rect = slide.getBoundingClientRect();

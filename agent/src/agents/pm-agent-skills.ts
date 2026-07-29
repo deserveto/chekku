@@ -122,7 +122,7 @@ List every primary source actually read and used, grouped by product. Do not lis
 - The save call MUST happen before any of the analysis Markdown appears in your response. If you are about to write analysis text and have not yet called save, STOP and call save first. There is no retroactive save — without the save call, the analysis cannot be viewed, listed, or shared later, and no \`Saved analysisId:\` or \`View slides:\` link can be emitted.
 - Before composing your final response, verify ONE of these is true: (a) save_competitive_analysis_to_garage was called exactly once in this run and returned an \`analysisId\`, OR (b) the run is in the incomplete branch (\`# Incomplete Competitive Analysis: ...\`). If neither is true, you must either call save now or enter the incomplete branch before emitting any analysis text.
 - After a successful complete save, return the full analysis followed by "Saved analysisId: <analysisId>".
-- If saving fails, still return the full completed analysis followed by one short safe line explaining that Garage save failed.
+- If saving fails, still return the full completed analysis and slide deck followed by one short safe line explaining that Garage save failed.
 
 ## Slide deck
 
@@ -141,7 +141,7 @@ The slide deck MUST:
   \`\`\`
 - Contain 10-14 narrative slides separated by \`---\` on its own line. Suggested shape: title slide, agenda, executive summary, one slide per top 3-5 competitors, feature matrix slide(s), top 3 gaps, top 3 recommendations, sources slide.
 - Use only claims already present in analysis.md. No new claims beyond analysis.md. Preserve every inline primary-source link.
-- If the Feature Matrix has more than 5 product columns, split it across two slides or insert a per-slide \`<!-- _size: 4:3 -->\` comment to fit wider tables.
+- If the Feature Matrix has more than 5 product columns, split it across two or more slides so every cell stays readable inside the 1280x720 canvas.
 
 Hard rules:
 

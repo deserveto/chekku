@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import { createNamespacedObjectStorage } from './namespaced-objects.ts';
-import type { ObjectStorage } from './objects.ts';
+import {
+  ObjectStorageError,
+  type ObjectStorage,
+} from './objects.ts';
 import {
   competitiveAnalysisKeysFor,
   createCompetitiveAnalysisId,
@@ -31,7 +34,7 @@ function createMemoryStorage() {
     },
     async getText(key) {
       const value = objects.get(key);
-      if (value === undefined) throw new Error(`Missing object: ${key}`);
+      if (value === undefined) throw new ObjectStorageError('not-found', `Missing object: ${key}`);
       return value;
     },
     async exists(key) {
@@ -488,5 +491,33 @@ describe('competitive analysis storage', () => {
 
     const result = await getCompetitiveAnalysis(storage, analysisId);
     expect(result.slidesMarkdown).toBeUndefined();
+  });
+
+  it('propagates non-not-found storage errors when reading slides.md', async () => {
+    const { objects, storage } = createMemoryStorage();
+    const keys = competitiveAnalysisKeysFor(analysisId);
+    const valid = {
+      analysisId,
+      createdAt: '2026-07-23T12:00:00.000Z',
+      anchorProduct: 'GPT',
+      competitorNames,
+      productCount: 6,
+      sourceCount: 6,
+      ...keys,
+    };
+    objects.set(keys.requestObjectKey, requestMarkdown);
+    objects.set(keys.analysisObjectKey, analysisMarkdown);
+    objects.set(keys.metadataObjectKey, JSON.stringify(valid));
+    const failingStorage: ObjectStorage = {
+      ...storage,
+      async getText(key) {
+        if (key === keys.slidesObjectKey) {
+          throw new ObjectStorageError('unavailable', 'injected outage');
+        }
+        return storage.getText(key);
+      },
+    };
+
+    await expect(getCompetitiveAnalysis(failingStorage, analysisId)).rejects.toThrow('injected outage');
   });
 });
