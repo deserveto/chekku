@@ -85,6 +85,12 @@ export default async function CompetitiveAnalysesPage() {
                     >
                       View analysis
                     </Link>
+                    <Link
+                      className="studio-button"
+                      href={`/reports/competitive/${encodeURIComponent(analysis.analysisId)}/slides`}
+                    >
+                      Slides
+                    </Link>
                   </div>
                 </article>
               ))}

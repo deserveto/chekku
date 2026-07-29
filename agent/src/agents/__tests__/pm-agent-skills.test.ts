@@ -63,10 +63,10 @@ describe('PM Agent skills', () => {
     expect(competitiveAnalysisInstructions).toContain('five to seven competitors');
     expect(competitiveAnalysisInstructions).toContain('more than seven supplied competitors');
     expect(competitiveAnalysisInstructions).toContain('ask the user to narrow');
-    expect(competitiveAnalysisInstructions).toContain('search_web at most five times');
+    expect(competitiveAnalysisInstructions).toContain('search_web at most eight times');
     expect(competitiveAnalysisInstructions).toContain('maxResults: 10');
     expect(competitiveAnalysisInstructions).toContain('page: 1');
-    expect(competitiveAnalysisInstructions).toContain('read_web_page at most eight times');
+    expect(competitiveAnalysisInstructions).toContain('read_web_page at most fourteen times');
     expect(competitiveAnalysisInstructions).toContain('save_competitive_analysis_to_garage at most once');
     expect(competitiveAnalysisInstructions).toContain('URLs supplied by the user or returned by search_web');
     expect(competitiveAnalysisInstructions).toContain('Do not crawl');
@@ -114,6 +114,36 @@ describe('PM Agent skills', () => {
     );
   });
 
+  it('defines alternate-URL read strategy within the fixed budget', () => {
+    expect(competitiveAnalysisInstructions).toContain('## Read strategy and alternate URLs');
+    expect(competitiveAnalysisInstructions).toContain('pick ONE primary URL first');
+    expect(competitiveAnalysisInstructions).toContain('identify ONE alternate URL');
+    expect(competitiveAnalysisInstructions).toContain(
+      'Do not try a third URL for the same product in one run',
+    );
+    expect(competitiveAnalysisInstructions).toContain(
+      'Do not retry the same URL twice in one run',
+    );
+    expect(competitiveAnalysisInstructions).toContain(
+      'Prefer evidencing NEW products over retrying failed ones when budget is tight',
+    );
+  });
+
+  it('gates the final response on a successful save and lists slidesMarkdown in the save inputs', () => {
+    expect(competitiveAnalysisInstructions).toContain(
+      'THEN draft the slide deck as `slidesMarkdown`',
+    );
+    expect(competitiveAnalysisInstructions).toContain('THEN call save_competitive_analysis_to_garage exactly once');
+    expect(competitiveAnalysisInstructions).toContain('(`slidesMarkdown`)');
+    expect(competitiveAnalysisInstructions).toContain(
+      'The save call MUST happen before any of the analysis Markdown appears in your response',
+    );
+    expect(competitiveAnalysisInstructions).toContain('There is no retroactive save');
+    expect(competitiveAnalysisInstructions).toContain(
+      'Before composing your final response, verify ONE of these is true',
+    );
+  });
+
   it('requires exact completed-report headings in order', () => {
     const headings = [
       '# Competitive Analysis: <anchor product>',
@@ -142,5 +172,18 @@ describe('PM Agent skills', () => {
     expect(competitiveAnalysisInstructions).toContain('call save_competitive_analysis_to_garage exactly once');
     expect(competitiveAnalysisInstructions).toContain('Saved analysisId: <analysisId>');
     expect(competitiveAnalysisInstructions).toContain('If saving fails, still return the full completed analysis');
+  });
+
+  it('defines slide deck rules and view slides link emission', () => {
+    expect(competitiveAnalysisInstructions).toContain('## Slide deck');
+    expect(competitiveAnalysisInstructions).toContain('marp: true');
+    expect(competitiveAnalysisInstructions).toContain('theme: default');
+    expect(competitiveAnalysisInstructions).toContain('paginate: true');
+    expect(competitiveAnalysisInstructions).toContain('size: 16:9');
+    expect(competitiveAnalysisInstructions).toContain('10-14 narrative slides');
+    expect(competitiveAnalysisInstructions).toContain('No new claims beyond analysis.md');
+    expect(competitiveAnalysisInstructions).toContain('Preserve every inline primary-source link');
+    expect(competitiveAnalysisInstructions).toContain('Required for the complete-report branch');
+    expect(competitiveAnalysisInstructions).toContain('View slides: /reports/competitive/<analysisId>/slides');
   });
 });

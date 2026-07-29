@@ -45,12 +45,24 @@ export const competitiveAnalysisInstructions = `Run a bounded, evidence-based co
 
 ## Fixed research budget
 
-- Invoke search_web at most five times. Prefer one broad query that surfaces several competitors over per-product queries. Request maxResults: 10 and page: 1. Never request later pages automatically. Use fewer searches when supplied URLs are sufficient.
-- Invoke read_web_page at most eight times. Every call consumes one slot whether it succeeds or fails. Prefer one official or primary product page per product and the minimum complete six-product report.
+- Invoke search_web at most eight times. Prefer one broad query that surfaces several competitors over per-product queries. Request maxResults: 10 and page: 1. Never request later pages automatically. Use fewer searches when supplied URLs are sufficient.
+- Invoke read_web_page at most fourteen times. Every call consumes one slot whether it succeeds or fails. Prefer one official or primary product page per product and the minimum complete six-product report.
 - Treat "Web Reader is not configured." as terminal for this run. Stop calling read_web_page immediately and do not spend remaining Reader slots. Continue directly to the incomplete completion gate. Availability, timeout, and individual-page failures are nonterminal and may use remaining slots.
 - Invoke save_competitive_analysis_to_garage at most once.
 - Read only URLs supplied by the user or returned by search_web. Do not use URLs found only inside Reader Markdown.
 - Do not crawl, recursively follow links, use QA browser automation, read authenticated pages, send cookies, custom headers, credentials, signed URLs, provider controls, read PDFs or uploads, or use another search or Reader provider.
+
+## Read strategy and alternate URLs
+
+For each product, pick ONE primary URL first (user-supplied, or the most specific official page from search results). If the primary read fails with timeout, unavailable, invalid, format, or tooLarge, identify ONE alternate URL for that same product — either a different page on the same official domain (for example /features, /pricing, /product, or /platform instead of the homepage) or a different result from search_web — and try it once.
+
+Hard rules for alternates:
+
+- An alternate read consumes a slot just like any other read.
+- Do not try a third URL for the same product in one run.
+- Do not retry the same URL twice in one run.
+- If both primary and alternate fail for a product, treat the product as unevidenced.
+- Prefer evidencing NEW products over retrying failed ones when budget is tight. Before each read once remaining slots approach the number of unevidenced products, do not spend them on alternates; prioritize distinct unevidenced products.
 
 ## Evidence rules
 
@@ -106,9 +118,36 @@ List every primary source actually read and used, grouped by product. Do not lis
 - If the evidence minimum cannot be met, start with exactly \`# Incomplete Competitive Analysis: <anchor product>\`.
 - In the incomplete branch, return evidenced products and partial findings supported by inline links to successful reads from this run. For unevidenced products, list only the product name, missing evidence, safe failure, and suggested user action. Do not include unsupported matrix cells or completed-report conclusions.
 - Never call save_competitive_analysis_to_garage from the incomplete branch. Do not save incomplete work. Never emit "Saved analysisId:" from the incomplete branch. Do not include "Saved analysisId:". Do not fabricate claims or convert unknowns into negatives. Do not silently lower the five-competitor minimum.
-- For a complete report, call save_competitive_analysis_to_garage exactly once with the original request Markdown, full analysis Markdown, trimmed anchor, optional market, five to seven competitor names, and exactly one validated primary source mapping for every product. Each product must map to its own distinct primary source URL; never share one URL across two products even if they come from the same vendor (for example, do not group Gemma and Gemini under one Google URL). If a product lacks its own primary page, treat it as unevidenced and enter the incomplete branch rather than reusing another product's URL.
+- For a complete report, FIRST draft the analysis Markdown using the section structure above, THEN draft the slide deck as \`slidesMarkdown\` per the \`## Slide deck\` section below, THEN call save_competitive_analysis_to_garage exactly once with: original request Markdown (\`requestMarkdown\`), full analysis Markdown (\`analysisMarkdown\`), slide deck (\`slidesMarkdown\`), trimmed anchor (\`anchorProduct\`), optional market (\`market\`), five to seven competitor names (\`competitorNames\`), and exactly one validated primary source mapping for every product (\`sources\`). Each product must map to its own distinct primary source URL; never share one URL across two products even if they come from the same vendor (for example, do not group Gemma and Gemini under one Google URL). If a product lacks its own primary page, treat it as unevidenced and enter the incomplete branch rather than reusing another product's URL.
+- The save call MUST happen before any of the analysis Markdown appears in your response. If you are about to write analysis text and have not yet called save, STOP and call save first. There is no retroactive save — without the save call, the analysis cannot be viewed, listed, or shared later, and no \`Saved analysisId:\` or \`View slides:\` link can be emitted.
+- Before composing your final response, verify ONE of these is true: (a) save_competitive_analysis_to_garage was called exactly once in this run and returned an \`analysisId\`, OR (b) the run is in the incomplete branch (\`# Incomplete Competitive Analysis: ...\`). If neither is true, you must either call save now or enter the incomplete branch before emitting any analysis text.
 - After a successful complete save, return the full analysis followed by "Saved analysisId: <analysisId>".
-- If saving fails, still return the full completed analysis followed by one short safe line explaining that Garage save failed.`;
+- If saving fails, still return the full completed analysis and slide deck followed by one short safe line explaining that Garage save failed.
+
+## Slide deck
+
+Before calling save_competitive_analysis_to_garage in the complete branch, also produce a slide deck as \`slidesMarkdown\` for the same tool call.
+
+The slide deck MUST:
+
+- Begin with this exact front-matter:
+  \`\`\`
+  ---
+  marp: true
+  theme: default
+  paginate: true
+  size: 16:9
+  ---
+  \`\`\`
+- Contain 10-14 narrative slides separated by \`---\` on its own line. Suggested shape: title slide, agenda, executive summary, one slide per top 3-5 competitors, feature matrix slide(s), top 3 gaps, top 3 recommendations, sources slide.
+- Use only claims already present in analysis.md. No new claims beyond analysis.md. Preserve every inline primary-source link.
+- If the Feature Matrix has more than 5 product columns, split it across two or more slides so every cell stays readable inside the 1280x720 canvas.
+
+Hard rules:
+
+- Required for the complete-report branch. The incomplete branch produces no slidesMarkdown, no \`Saved analysisId:\`, and no View slides link.
+- After a successful complete save, append on a new line: \`View slides: /reports/competitive/<analysisId>/slides\` where \`<analysisId>\` is the ID returned by save_competitive_analysis_to_garage.
+- If saving fails, still return the full completed analysis and slide deck followed by one short safe line explaining that Garage save failed.`;
 
 export const weeklyReportAnalysisSkill = createSkill({
   name: 'weekly-report-analysis',

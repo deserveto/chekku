@@ -82,7 +82,7 @@ PM Agent / selected stored agent
   -> bounded untrusted Markdown
 
 Competitive-analysis request
-  -> up to 5 searches -> up to 8 chosen-page reads
+  -> up to 8 searches -> up to 14 chosen-page reads
   -> evidence-only comparison -> one complete-only save
 
 SearXNG uses a server-owned endpoint (Mastra-only configuration):
@@ -357,7 +357,7 @@ Scope is one page per call. Web Reader does not crawl, search, authenticate, rea
 
 ## PM analysis skills and reports
 
-`pm-agent` is a protected code-defined agent with bounded Memory/context processors, `maxSteps: 18`, and two user-invocable skills:
+`pm-agent` is a protected code-defined agent with bounded Memory/context processors, `maxSteps: 25`, and two user-invocable skills:
 
 - `weekly-report-analysis` preserves the existing engineering weekly risk template, rating/status rules, automatic save, and `Saved reportId:` receipt;
 - `competitive-analysis` researches the first named product as anchor, includes five to seven competitors, compares primary evidence, saves only complete work, and returns `Saved analysisId:` after successful persistence.
@@ -370,7 +370,7 @@ Invoke either by natural language or prompt convention:
 Compare Product X with similar incident-management platforms
 ```
 
-Fewer than five supplied competitors are expanded automatically. More than seven supplied competitors requires narrowing before research. A run uses at most five `search_web` calls, eight one-page `read_web_page` calls, and one competitive save. Search discovers candidates but does not read pages. Reader content is untrusted evidence, never instructions. Every included product needs one successfully read official/primary page; missing feature mention is `Unknown`, not `No`. Incomplete work is clearly labeled and never saved.
+Fewer than five supplied competitors are expanded automatically. More than seven supplied competitors requires narrowing before research. A run uses at most eight `search_web` calls, fourteen one-page `read_web_page` calls, and one competitive save. Search discovers candidates but does not read pages. Reader content is untrusted evidence, never instructions. Every included product needs one successfully read official/primary page; missing feature mention is `Unknown`, not `No`. Incomplete work is clearly labeled and never saved.
 
 PM Agent has eight direct tools: the three weekly save/list/view tools, three competitive save/list/view tools, `search_web`, and `read_web_page`. PM-only tools never enter Garage, SearXNG, Web Reader, or stored-agent registries; fixed MCP contracts remain unchanged.
 
@@ -383,12 +383,13 @@ pm-reports/<reportId>/metadata.json
 
 competitive-analyses/<analysisId>/request.md
 competitive-analyses/<analysisId>/analysis.md
+competitive-analyses/<analysisId>/slides.md
 competitive-analyses/<analysisId>/metadata.json
 ```
 
-Physical `agents/<base64url-agent-id>/...` prefixes never appear in persisted metadata, tool output, APIs, or pages. Existing global development objects are not migrated or used as fallback. Weekly IDs use `pmr_YYYYMMDDHHMMSS_<8 lowercase hex>`; competitive IDs use `pca_YYYYMMDDHHMMSS_<8 lowercase hex>`.
+Physical `agents/<base64url-agent-id>/...` prefixes never appear in persisted metadata, tool output, APIs, or pages. Existing global development objects are not migrated or used as fallback. Weekly IDs use `pmr_YYYYMMDDHHMMSS_<8 lowercase hex>`; competitive IDs use `pca_YYYYMMDDHHMMSS_<8 lowercase hex>`. Every complete competitive save produces a non-blank `slides.md` Marp deck; legacy analyses saved before this feature have no `slides.md` and the slides route returns 404.
 
-`/reports` is a grouped landing. `/reports/weekly` lists weekly reports while existing `/reports/<pmr-id>` detail links remain stable. `/reports/competitive` lists analyses and `/reports/competitive/<pca-id>` renders analysis, metadata, then original request. Authenticated APIs are `GET /api/storage/pm-reports[/<reportId>]` and `GET /api/storage/competitive-analyses[/<analysisId>]`. Server pages call focused server-only services and then `@chekku/storage`; browser code never imports storage or contacts Garage.
+`/reports` is a grouped landing. `/reports/weekly` lists weekly reports while existing `/reports/<pmr-id>` detail links remain stable. `/reports/competitive` lists analyses, `/reports/competitive/<pca-id>` renders analysis, metadata, then original request, and `/reports/competitive/<pca-id>/slides` renders the saved Marp deck in-app via `@marp-team/marp-core` (print-to-PDF only, no PPTX, no public sharing in v1). Authenticated APIs are `GET /api/storage/pm-reports[/<reportId>]` and `GET /api/storage/competitive-analyses[/<analysisId>]`. Server pages call focused server-only services and then `@chekku/storage`; browser code never imports storage or contacts Garage.
 
 Weekly and competitive list tools return structured metadata plus separate presentation-only URLs and deterministic Markdown. PM Agent returns `reportsMarkdown` or `analysesMarkdown` unchanged. Valid dates render as `YYYY-MM-DD HH:mm UTC`; invalid stored text remains visible and safely escaped. Links are URL-encoded relative paths and are never persisted. Chat, list, and feature-matrix tables use labeled keyboard-focusable horizontal-scroll regions with visible focus outlines.
 

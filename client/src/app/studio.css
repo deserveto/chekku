@@ -1890,3 +1890,25 @@ body.studio-sidebar-resizing * {
     padding-inline: 12px;
   }
 }
+
+/* Competitive slides stage */
+.competitive-slides-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.competitive-slides-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.competitive-slides-loading {
+  padding: 4rem 1rem;
+  text-align: center;
+  color: var(--studio-muted, #666);
+}
+
+.competitive-slides-stage {
+  overflow: hidden;
+}

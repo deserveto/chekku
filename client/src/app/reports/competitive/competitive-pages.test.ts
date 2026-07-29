@@ -15,6 +15,10 @@ vi.mock('@/components/markdown-message', () => ({
   MarkdownMessage: ({ content }: { content: string }) => `MARKDOWN:${content}`,
 }));
 vi.mock('@/components/studio/studio-nav', () => ({ StudioNav: () => null }));
+vi.mock('@/components/competitive-slides', () => ({
+  CompetitiveSlides: ({ slidesMarkdown, analysisId }: { slidesMarkdown: string; analysisId: string }) =>
+    `SLIDES:${analysisId}:${slidesMarkdown.slice(0, 6)}`,
+}));
 vi.mock('@/server/competitive-analyses', () => {
   class CompetitiveAnalysisServiceError extends Error {
     constructor(
@@ -37,6 +41,7 @@ vi.mock('@/server/pm-report-format', async () => import('../../../server/pm-repo
 import { CompetitiveAnalysisServiceError } from '@/server/competitive-analyses';
 
 import CompetitiveAnalysisDetailPage from './[analysisId]/page';
+import CompetitiveSlidesPage from './[analysisId]/slides/page';
 import CompetitiveAnalysesPage from './page';
 
 const analysisId = 'pca_20260723120000_deadbeef';
@@ -57,6 +62,13 @@ const analysis = {
   requestMarkdown: '/competitive-analysis GPT',
   analysisMarkdown: '# Competitive Analysis: GPT',
   metadata,
+};
+
+const slidesMarkdown = '---\nmarp: true\n---\n# Deck';
+
+const analysisWithSlides = {
+  ...analysis,
+  slidesMarkdown,
 };
 
 beforeEach(() => {
@@ -98,6 +110,15 @@ describe('competitive analyses list page', () => {
 
     expect(markup).toContain('role="alert"');
     expect(markup).toContain(message);
+  });
+
+  it('renders a Slides badge on each card', async () => {
+    mocks.listAnalyses.mockResolvedValue([metadata]);
+
+    const markup = renderToStaticMarkup(await CompetitiveAnalysesPage());
+
+    expect(markup).toContain('Slides');
+    expect(markup).toContain(`/reports/competitive/${analysisId}/slides`);
   });
 });
 
@@ -148,5 +169,74 @@ describe('competitive analysis detail page', () => {
     expect(markup).toContain(`MARKDOWN:${analysis.requestMarkdown}`);
     expect(markup).toContain('&quot;anchorProduct&quot;: &quot;GPT&quot;');
     expect(markup).toContain('href="/reports/competitive"');
+  });
+
+  it('renders a View slides button when slidesMarkdown is present', async () => {
+    mocks.getAnalysis.mockResolvedValue(analysisWithSlides);
+
+    const markup = renderToStaticMarkup(await CompetitiveAnalysisDetailPage({
+      params: Promise.resolve({ analysisId }),
+    }));
+
+    expect(markup).toContain('View slides');
+    expect(markup).toContain(`/reports/competitive/${analysisId}/slides`);
+  });
+
+  it('hides the View slides button when slidesMarkdown is missing (legacy)', async () => {
+    mocks.getAnalysis.mockResolvedValue({ ...analysis, slidesMarkdown: undefined });
+
+    const markup = renderToStaticMarkup(await CompetitiveAnalysisDetailPage({
+      params: Promise.resolve({ analysisId }),
+    }));
+
+    expect(markup).not.toContain('View slides');
+  });
+});
+
+describe('competitive analysis slides route', () => {
+  it('404s when analysis is missing slidesMarkdown', async () => {
+    mocks.getAnalysis.mockResolvedValue({ ...analysis });
+
+    await expect(CompetitiveSlidesPage({
+      params: Promise.resolve({ analysisId }),
+    })).rejects.toThrow('NEXT_NOT_FOUND');
+    expect(mocks.notFound).toHaveBeenCalledOnce();
+  });
+
+  it('404s when analysis service returns invalid-analysis-id or not-found', async () => {
+    mocks.getAnalysis.mockRejectedValue(new CompetitiveAnalysisServiceError(
+      'not-found', 404, 'Competitive analysis not found.',
+    ));
+
+    await expect(CompetitiveSlidesPage({
+      params: Promise.resolve({ analysisId }),
+    })).rejects.toThrow('NEXT_NOT_FOUND');
+  });
+
+  it('renders the slides component when slidesMarkdown present', async () => {
+    mocks.getAnalysis.mockResolvedValue(analysisWithSlides);
+
+    const markup = renderToStaticMarkup(await CompetitiveSlidesPage({
+      params: Promise.resolve({ analysisId }),
+    }));
+
+    expect(markup).toContain('SLIDES:pca_20260723120000_deadbeef:---\nma');
+    expect(markup).toContain('Back to analysis');
+    expect(markup).toContain(`href="/reports/competitive/${analysisId}"`);
+  });
+
+  it.each([
+    ['forbidden', 403, 'Authentication is required.'],
+    ['storage-unavailable', 503, 'Competitive analysis storage is unavailable.'],
+  ] as const)('renders safe error for %s service failure', async (code, status, message) => {
+    mocks.getAnalysis.mockRejectedValue(new CompetitiveAnalysisServiceError(code, status, message));
+
+    const markup = renderToStaticMarkup(await CompetitiveSlidesPage({
+      params: Promise.resolve({ analysisId }),
+    }));
+
+    expect(markup).toContain('Slides unavailable');
+    expect(markup).toContain(message);
+    expect(mocks.notFound).not.toHaveBeenCalled();
   });
 });

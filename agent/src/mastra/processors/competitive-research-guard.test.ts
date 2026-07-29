@@ -34,8 +34,11 @@ const readerErrorInvocation = (category: string, message: string) => ({
 });
 
 describe('competitive research guard', () => {
-  it('removes search after five attempts and preserves unrelated tools', () => {
+  it('removes search after eight attempts and preserves unrelated tools', () => {
     const messages = [
+      msg('assistant', [toolInvocation('search_web')]),
+      msg('assistant', [toolInvocation('search_web')]),
+      msg('assistant', [toolInvocation('search_web')]),
       msg('assistant', [toolInvocation('search_web')]),
       msg('assistant', [toolInvocation('search_web')]),
       msg('assistant', [toolInvocation('search_web')]),
@@ -49,9 +52,9 @@ describe('competitive research guard', () => {
     expect(decision.activeTools).toContain('list_competitive_analyses_from_garage');
   });
 
-  it('removes Reader after eight attempts including failures', () => {
+  it('removes Reader after fourteen attempts including failures', () => {
     const messages: unknown[] = [];
-    for (let i = 0; i < 7; i++) {
+    for (let i = 0; i < 13; i++) {
       messages.push(msg('assistant', [toolInvocation('read_web_page')]));
     }
     messages.push(msg('assistant', [readerErrorInvocation('unavailable', 'Web Reader is unavailable. Try again later.')]));

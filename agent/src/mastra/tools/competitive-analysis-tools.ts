@@ -47,6 +47,7 @@ const sourceSchema = z.object({
 const saveInputSchema = z.object({
   requestMarkdown: markdownSchema,
   analysisMarkdown: markdownSchema,
+  slidesMarkdown: markdownSchema,
   anchorProduct: nameSchema,
   market: boundedTrimmedString(MAX_MARKET_BYTES).optional(),
   competitorNames: z.array(nameSchema).min(5).max(7),
@@ -150,6 +151,7 @@ export function createSaveCompetitiveAnalysisToGarageTool(
         store,
         requestMarkdown: input.requestMarkdown,
         analysisMarkdown: input.analysisMarkdown,
+        slidesMarkdown: input.slidesMarkdown,
         anchorProduct: input.anchorProduct,
         ...(input.market === undefined ? {} : { market: input.market }),
         competitorNames: input.competitorNames,
@@ -196,12 +198,20 @@ export function createViewCompetitiveAnalysisFromGarageTool(
       analysisId: z.string(),
       requestMarkdown: z.string(),
       analysisMarkdown: z.string(),
+      slidesMarkdown: z.string(),
       metadata: metadataSchema,
     }).strict(),
     execute: async ({ analysisId }) => {
       const store = competitiveAnalysisStore(options);
       await store.ensureReady?.();
-      return getCompetitiveAnalysis(store, analysisId);
+      const result = await getCompetitiveAnalysis(store, analysisId);
+      return {
+        analysisId: result.analysisId,
+        requestMarkdown: result.requestMarkdown,
+        analysisMarkdown: result.analysisMarkdown,
+        slidesMarkdown: result.slidesMarkdown ?? '',
+        metadata: result.metadata,
+      };
     },
   });
 }

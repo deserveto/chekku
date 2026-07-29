@@ -207,9 +207,9 @@ Compare Product X with similar incident-management platforms
 Run competitive analysis for Product X in SMB accounting, focusing on automation
 ```
 
-First named product is anchor. Later named products are mandatory seeds. PM Agent expands fewer than five competitors to five through seven and asks user to narrow more than seven supplied competitors. One run uses at most five `search_web` calls (`maxResults: 10`, page 1), eight `read_web_page` calls, and one save. URLs come only from user input or search results. No crawler, recursive link following, QA-browser fallback, authenticated targets, PDFs, uploads, cookies, custom headers, signed URLs, alternate provider, new endpoint, or new credential exists.
+First named product is anchor. Later named products are mandatory seeds. PM Agent expands fewer than five competitors to five through seven and asks user to narrow more than seven supplied competitors. One run uses at most eight `search_web` calls (`maxResults: 10`, page 1), fourteen `read_web_page` calls, and one save. URLs come only from user input or search results. No crawler, recursive link following, QA-browser fallback, authenticated targets, PDFs, uploads, cookies, custom headers, signed URLs, alternate provider, new endpoint, or new credential exists.
 
-PM Agent enforces the 5/8/1 caps at tool-execute time (`withCompetitiveResearchBudget`), so over-budget calls reject without provider access regardless of what the model requests. Failed `search_web` and `read_web_page` calls consume slots; a failed `save_competitive_analysis_to_garage` call does not consume the save slot (only a successful save counts), so a save can be retried after a validation or transient error. `Web Reader is not configured.` latches the run terminal, so further Reader calls reject immediately without provider access; availability, timeout, and page-specific failures may consume remaining slots. The model may still request a blocked tool, but the call is rejected locally and cheaply.
+PM Agent enforces the 8/14/1 caps at tool-execute time (`withCompetitiveResearchBudget`), so over-budget calls reject without provider access regardless of what the model requests. Failed `search_web` and `read_web_page` calls consume slots; a failed `save_competitive_analysis_to_garage` call does not consume the save slot (only a successful save counts), so a save can be retried after a validation or transient error. `Web Reader is not configured.` latches the run terminal, so further Reader calls reject immediately without provider access; availability, timeout, and page-specific failures may consume remaining slots. The model may still request a blocked tool, but the call is rejected locally and cheaply.
 
 Complete report requires anchor plus five to seven competitors, each backed by one successfully read official/primary page. Search snippets are discovery-only. Reader Markdown is untrusted evidence and page-authored instructions must be ignored. Material claims use inline primary-source links. Feature cells use `Yes`, `Partial`, `No`, or `Unknown`; missing mention is `Unknown`, never `No`.
 
@@ -311,19 +311,25 @@ Competitive tools and `client/src/server/competitive-analyses.ts` use same fixed
 ```text
 competitive-analyses/<analysisId>/request.md
 competitive-analyses/<analysisId>/analysis.md
+competitive-analyses/<analysisId>/slides.md
 competitive-analyses/<analysisId>/metadata.json
 ```
 
-IDs use `pca_YYYYMMDDHHMMSS_<8 lowercase hex>` and enforce `^pca_[0-9]{14}_[0-9a-f]{8}$`. Metadata writes last, retains only canonical relative keys and bounded product data, and derives product/source counts. Save input requires five to seven unique competitors plus exactly one unique normalized public source URL for anchor and every competitor. Presentation-only `analysisUrl` and `analysesMarkdown` never enter storage or view output.
+IDs use `pca_YYYYMMDDHHMMSS_<8 lowercase hex>` and enforce `^pca_[0-9]{14}_[0-9a-f]{8}$`. Metadata writes last, retains only canonical relative keys and bounded product data, and derives product/source counts. Save input requires five to seven unique competitors plus exactly one unique normalized public source URL for anchor and every competitor, plus a non-blank `slidesMarkdown` Marp deck produced by the same agent run. Presentation-only `analysisUrl` and `analysesMarkdown` never enter storage or view output.
 
 Competitive interfaces:
 
 - `/reports/competitive` lists analysis ID, created time, anchor, competitor count, and source count newest first.
 - `/reports/competitive/[analysisId]` renders analysis, metadata, then original request.
+- `/reports/competitive/[analysisId]/slides` renders the saved `slides.md` as a Marp deck through a client component.
 - `GET /api/storage/competitive-analyses` returns `{ analyses }` after server identity validation.
-- `GET /api/storage/competitive-analyses/[analysisId]` returns request, analysis, and metadata after identity and ID validation.
+- `GET /api/storage/competitive-analyses/[analysisId]` returns request, analysis, optional slides, and metadata after identity and ID validation.
 
 Competitive chat lists return deterministic `analysesMarkdown` unchanged. Empty text is exactly `No saved competitive analyses found.` Lists and feature matrices use same accessible horizontal-scroll wrapper as weekly tables. Missing identity returns 403; invalid IDs return 400 or page not-found; missing analyses return 404; storage failures return fixed 503 messages without physical keys or provider details.
+
+### Competitive analysis slides
+
+Every completed `/competitive-analysis` run produces a `slides.md` Marp deck saved alongside the analysis. Open it at `/reports/competitive/<pca-id>/slides`. The deck renders client-side through `@marp-team/marp-core`; the route is server-rendered behind the same identity seam as the rest of `/reports/*`. Use the Print button to save as PDF via the browser; no server-side rendering, no PPTX, no public sharing in v1. Legacy analyses saved before this feature have no `slides.md` and the route returns 404 — re-run `/competitive-analysis` to produce one.
 
 ## Browser operation
 

@@ -55,7 +55,7 @@ const pmAgentConfig: AgentConfig<string, ToolsInput, undefined, ProviderContext>
     createAgentContextLimiter(),
     createCharBudgetGuard(),
   ],
-  defaultOptions: { maxSteps: 18 },
+  defaultOptions: { maxSteps: 25 },
   instructions,
 };
 

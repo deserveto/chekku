@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { createNamespacedObjectStorage } from './namespaced-objects.ts';
-import type { ObjectStorage } from './objects.ts';
+import { ObjectStorageError, type ObjectStorage } from './objects.ts';
 import { PM_REPORT_AGENT_ID, parsePmReportTimestamp } from './pm-reports.ts';
 
 export interface CompetitiveAnalysisMetadata {
@@ -21,6 +21,7 @@ export interface SaveCompetitiveAnalysisInput {
   store: ObjectStorage;
   requestMarkdown: string;
   analysisMarkdown: string;
+  slidesMarkdown: string;
   anchorProduct: string;
   market?: string;
   competitorNames: string[];
@@ -33,6 +34,7 @@ export interface CompetitiveAnalysisReadResult {
   analysisId: string;
   requestMarkdown: string;
   analysisMarkdown: string;
+  slidesMarkdown?: string;
   metadata: CompetitiveAnalysisMetadata;
 }
 
@@ -58,6 +60,7 @@ export function competitiveAnalysisKeysFor(analysisId: string) {
   return {
     requestObjectKey: `${base}/request.md`,
     analysisObjectKey: `${base}/analysis.md`,
+    slidesObjectKey: `${base}/slides.md`,
     metadataObjectKey: `${base}/metadata.json`,
   };
 }
@@ -155,7 +158,9 @@ function parseCompetitiveAnalysisMetadata(value: unknown): CompetitiveAnalysisMe
     competitorNames: products.competitorNames,
     productCount,
     sourceCount: productCount,
-    ...expectedKeys,
+    requestObjectKey: expectedKeys.requestObjectKey,
+    analysisObjectKey: expectedKeys.analysisObjectKey,
+    metadataObjectKey: expectedKeys.metadataObjectKey,
   };
 }
 
@@ -164,6 +169,7 @@ export async function saveCompetitiveAnalysis(
 ): Promise<CompetitiveAnalysisMetadata> {
   validateMarkdown(input.requestMarkdown, 'requestMarkdown');
   validateMarkdown(input.analysisMarkdown, 'analysisMarkdown');
+  validateMarkdown(input.slidesMarkdown, 'slidesMarkdown');
   const products = normalizeProducts(input.anchorProduct, input.competitorNames);
   const market = input.market === undefined
     ? undefined
@@ -184,11 +190,14 @@ export async function saveCompetitiveAnalysis(
     competitorNames: products.competitorNames,
     productCount,
     sourceCount: productCount,
-    ...objectKeys,
+    requestObjectKey: objectKeys.requestObjectKey,
+    analysisObjectKey: objectKeys.analysisObjectKey,
+    metadataObjectKey: objectKeys.metadataObjectKey,
   };
 
   await input.store.createText(objectKeys.requestObjectKey, input.requestMarkdown, 'text/markdown');
   await input.store.createText(objectKeys.analysisObjectKey, input.analysisMarkdown, 'text/markdown');
+  await input.store.createText(objectKeys.slidesObjectKey, input.slidesMarkdown, 'text/markdown');
   await input.store.createText(
     objectKeys.metadataObjectKey,
     JSON.stringify(metadata, null, 2),
@@ -256,5 +265,17 @@ export async function getCompetitiveAnalysis(
   if (!parsed || parsed.analysisId !== analysisId) {
     throw new Error(`Invalid competitive analysis metadata for ${analysisId}`);
   }
-  return { analysisId, requestMarkdown, analysisMarkdown, metadata: parsed };
+
+  let slidesMarkdown: string | undefined;
+  try {
+    slidesMarkdown = await store.getText(objectKeys.slidesObjectKey);
+  } catch (error) {
+    if (error instanceof ObjectStorageError && error.code === 'not-found') {
+      slidesMarkdown = undefined;
+    } else {
+      throw error;
+    }
+  }
+
+  return { analysisId, requestMarkdown, analysisMarkdown, slidesMarkdown, metadata: parsed };
 }
