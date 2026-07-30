@@ -67,6 +67,12 @@ const outputSchema = z.object({
 export interface GenerateImageToolOptions {
   imageClient?: ImageGenerationClient;
   storeFactory?: () => ObjectStorage;
+  /**
+   * Server-owned image model id. Defaults to `env.LLM_IMAGE_MODEL`; exposed as
+   * a constructor seam (like `imageClient`/`storeFactory`) so tests do not
+   * depend on ambient env. It is never read from tool/model input.
+   */
+  model?: string;
   now?: () => Date;
 }
 
@@ -87,8 +93,8 @@ const SAFE_ERRORS = {
   storage: 'Visual asset storage is unavailable. Try again later.',
 } as const;
 
-function requireImageModel(): string {
-  const model = env.LLM_IMAGE_MODEL.trim();
+function requireImageModel(explicit?: string): string {
+  const model = (explicit ?? env.LLM_IMAGE_MODEL).trim();
   if (!model) throw new Error(SAFE_ERRORS.notConfigured);
   return model;
 }
@@ -112,7 +118,7 @@ export function createGenerateImageTool(options: GenerateImageToolOptions = {}) 
       },
     },
     execute: async ({ postId, prompt, aspectRatio, imageSize, mimeType }) => {
-      const model = requireImageModel();
+      requireImageModel(options.model);
       const store = socialStore(options);
       await store.ensureReady?.();
 

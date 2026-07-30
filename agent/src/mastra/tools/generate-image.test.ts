@@ -109,6 +109,17 @@ function stubClient(result: Partial<ImageGenerationResult> = {}): ImageGeneratio
 
 const FIXED_NOW = () => new Date('2026-07-28T12:00:00.000Z');
 
+const MODEL = 'gemini-3.1-flash-image';
+
+/**
+ * Build the tool with the fixed image model injected, mirroring a configured
+ * server. Keeps these tests independent of ambient `env.LLM_IMAGE_MODEL`
+ * (which is empty in CI and only set by a local `agent/.env`).
+ */
+function makeTool(options: Parameters<typeof createGenerateImageTool>[0] = {}) {
+  return createGenerateImageTool({ model: MODEL, ...options });
+}
+
 interface GenerateImageResult {
   postId: string;
   assetId: string;
@@ -130,12 +141,12 @@ async function runTool(
 
 describe('generate_image tool — identity and schema', () => {
   it('exposes the stable tool id generate_image', () => {
-    const tool = createGenerateImageTool({ imageClient: stubClient() });
+    const tool = makeTool({ imageClient: stubClient() });
     expect(tool.id).toBe('generate_image');
   });
 
   it('accepts postId, prompt, and bounded options and rejects unknown fields', () => {
-    const tool = createGenerateImageTool({ imageClient: stubClient() });
+    const tool = makeTool({ imageClient: stubClient() });
     expect(tool.inputSchema.safeParse({
       postId: 'smp_20260713120000_00000001',
       prompt: 'warm light',
@@ -153,7 +164,7 @@ describe('generate_image tool — identity and schema', () => {
   });
 
   it('does not let the model choose a model, namespace, or object key', () => {
-    const tool = createGenerateImageTool({ imageClient: stubClient() });
+    const tool = makeTool({ imageClient: stubClient() });
     expect(tool.inputSchema.shape).not.toHaveProperty('model');
     expect(tool.inputSchema.shape).not.toHaveProperty('namespace');
     expect(tool.inputSchema.shape).not.toHaveProperty('objectKey');
@@ -165,7 +176,7 @@ describe('generate_image tool — identity and schema', () => {
     const root = createRootStore();
     const seeded = seedPost(root);
     await seeded.write();
-    const tool = createGenerateImageTool({
+    const tool = makeTool({
       imageClient: client,
       storeFactory: () => root,
       now: FIXED_NOW,
@@ -177,13 +188,31 @@ describe('generate_image tool — identity and schema', () => {
   });
 });
 
+describe('generate_image tool — configuration', () => {
+  it('fails closed with a fixed configuration error when no image model is configured', async () => {
+    // No `model` injected and an empty configured model -> the tool must not
+    // reach the provider. Deterministic regardless of ambient env.
+    const client = stubClient();
+    const tool = createGenerateImageTool({ imageClient: client, model: '' });
+    const root = createRootStore();
+    const seeded = seedPost(root);
+    await seeded.write();
+
+    await expect(tool.execute!(
+      { postId: seeded.metadata.postId, prompt: 'x' },
+      {} as never,
+    )).rejects.toThrow('Image generation is not configured.');
+    expect(client.calls).not.toHaveBeenCalled();
+  });
+});
+
 describe('generate_image tool — approval gate', () => {
   it('succeeds for an APPROVED post and returns the asset metadata', async () => {
     const client = stubClient();
     const root = createRootStore();
     const seeded = seedPost(root, { status: 'APPROVED' });
     await seeded.write();
-    const tool = createGenerateImageTool({
+    const tool = makeTool({
       imageClient: client,
       storeFactory: () => root,
       now: FIXED_NOW,
@@ -209,7 +238,7 @@ describe('generate_image tool — approval gate', () => {
     const root = createRootStore();
     const seeded = seedPost(root, { status: 'DRAFT' });
     await seeded.write();
-    const tool = createGenerateImageTool({
+    const tool = makeTool({
       imageClient: client,
       storeFactory: () => root,
       now: FIXED_NOW,
@@ -227,7 +256,7 @@ describe('generate_image tool — approval gate', () => {
     const root = createRootStore();
     const seeded = seedPost(root, { status: 'PUBLISHED' });
     await seeded.write();
-    const tool = createGenerateImageTool({
+    const tool = makeTool({
       imageClient: client,
       storeFactory: () => root,
       now: FIXED_NOW,
@@ -242,7 +271,7 @@ describe('generate_image tool — approval gate', () => {
   it('rejects an unknown post id with a safe not-found error', async () => {
     const client = stubClient();
     const root = createRootStore();
-    const tool = createGenerateImageTool({
+    const tool = makeTool({
       imageClient: client,
       storeFactory: () => root,
       now: FIXED_NOW,
@@ -262,7 +291,7 @@ describe('generate_image tool — ordering and failure handling', () => {
     const root = createRootStore();
     const seeded = seedPost(root);
     await seeded.write();
-    const tool = createGenerateImageTool({
+    const tool = makeTool({
       imageClient: client,
       storeFactory: () => root,
       now: FIXED_NOW,
@@ -291,7 +320,7 @@ describe('generate_image tool — ordering and failure handling', () => {
     const root = createRootStore();
     const seeded = seedPost(root);
     await seeded.write();
-    const tool = createGenerateImageTool({
+    const tool = makeTool({
       imageClient: failingClient,
       storeFactory: () => root,
       now: FIXED_NOW,
@@ -323,7 +352,7 @@ describe('generate_image tool — ordering and failure handling', () => {
       },
     };
 
-    const tool = createGenerateImageTool({
+    const tool = makeTool({
       imageClient: client,
       storeFactory: () => failingRoot,
       now: FIXED_NOW,
@@ -350,7 +379,7 @@ describe('generate_image tool — ordering and failure handling', () => {
     const root = createRootStore();
     const seeded = seedPost(root);
     await seeded.write();
-    const tool = createGenerateImageTool({
+    const tool = makeTool({
       imageClient: failingClient,
       storeFactory: () => root,
       now: FIXED_NOW,
@@ -371,7 +400,7 @@ describe('generate_image tool — revisions', () => {
     const root = createRootStore();
     const seeded = seedPost(root);
     await seeded.write();
-    const tool = createGenerateImageTool({
+    const tool = makeTool({
       imageClient: client,
       storeFactory: () => root,
       now: FIXED_NOW,
