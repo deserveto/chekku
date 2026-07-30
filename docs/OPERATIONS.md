@@ -96,6 +96,8 @@ The image-generation HTTP adapter assumes the OpenAI Images API standard contrac
 
 Image generation is on-demand only. Ask the Social Media Supervisor to generate a visual for a specific approved post; it delegates to the Visual Content Agent, which calls `generate_image`. The tool verifies the post is `APPROVED` from persisted metadata, stores the image bytes in Garage, attaches the asset to the post's metadata, and returns the asset id plus the application-facing image URL. Revisions generate a new asset and preserve the previous one. Images are served at `GET /api/storage/social-posts/<postId>/visuals/<assetId>`.
 
+The weekly workflow creates posts in the `DRAFT` status. To approve one for visual generation, open it on the social-posts detail page and use the Approve control, which issues `PATCH /api/storage/social-posts/[postId]` to transition `DRAFT → APPROVED` (the only permitted status mutation; `APPROVED` and `PUBLISHED` are terminal for this iteration). The `generate_image` tool rejects any post that is not `APPROVED`.
+
 ### `client/.env.local`
 
 ```dotenv

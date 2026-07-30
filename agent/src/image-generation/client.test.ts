@@ -278,6 +278,78 @@ describe('OpenAI-compatible image client — provider failures', () => {
   });
 });
 
+describe('OpenAI-compatible image client — provider-returned url safety', () => {
+  it('rejects a provider-returned internal url before any fetch leaves the host', async () => {
+    const fetch = vi.fn(async (input: URL | RequestInfo) => {
+      if (String(input).endsWith('/images/generations')) {
+        return urlResponse('http://127.0.0.1:8888/secret');
+      }
+      return new Response(PNG_MAGIC, { status: 200, headers: { 'content-type': 'image/png' } });
+    });
+    const client = createOpenAICompatibleImageClient({ config, fetch });
+
+    const error = await readError(client.generate({ prompt: 'hi' }));
+    expect(String(error)).toContain('Image generation returned an invalid response.');
+    // Only the POST to the gateway happened; the internal artifact url was never fetched.
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it('does not forward the gateway bearer to a non-gateway artifact host', async () => {
+    const fetch = vi.fn(async (input: URL | RequestInfo, init?: RequestInit) => {
+      if (String(input).endsWith('/images/generations')) {
+        return urlResponse('https://cdn.example.test/image.png');
+      }
+      return new Response(PNG_MAGIC, { status: 200, headers: { 'content-type': 'image/png' } });
+    });
+    const client = createOpenAICompatibleImageClient({ config, fetch });
+
+    await client.generate({ prompt: 'alt path' });
+
+    const artifactInit = fetch.mock.calls[1]![1] as RequestInit;
+    expect(artifactInit.headers).toEqual({ Accept: 'image/*' });
+    expect(JSON.stringify(artifactInit.headers)).not.toMatch(/private-token|Authorization/);
+  });
+
+  it('forwards the gateway bearer only when the artifact is on the gateway host', async () => {
+    const fetch = vi.fn(async (input: URL | RequestInfo, init?: RequestInit) => {
+      if (String(input).endsWith('/images/generations')) {
+        return urlResponse('https://llm.example.test/files/img.png');
+      }
+      return new Response(PNG_MAGIC, { status: 200, headers: { 'content-type': 'image/png' } });
+    });
+    const client = createOpenAICompatibleImageClient({ config, fetch });
+
+    await client.generate({ prompt: 'same host' });
+
+    const artifactInit = fetch.mock.calls[1]![1] as RequestInit;
+    expect(artifactInit.headers).toEqual({
+      Accept: 'image/*',
+      Authorization: 'Bearer private-token',
+    });
+  });
+});
+
+describe('OpenAI-compatible image client — mime type', () => {
+  it('trusts the actual magic bytes over a model-declared mime type', async () => {
+    // Provider returns PNG bytes; the caller (model tool input) asked for jpeg.
+    // The stored/served type must follow the real bytes, not the declaration.
+    const fetch = vi.fn(async () => b64Response(PNG_MAGIC));
+    const client = createOpenAICompatibleImageClient({ config, fetch });
+
+    const result = await client.generate({ prompt: 'hi', mimeType: 'image/jpeg' });
+    expect(result.mimeType).toBe('image/png');
+  });
+
+  it('falls back to a declared mime type only when no magic bytes match', async () => {
+    // Unrecognized bytes but a valid declared type: trust the declaration.
+    const fetch = vi.fn(async () => jsonBody({ data: [{ b64_json: base64(new Uint8Array([0, 0, 0, 0])) }] }));
+    const client = createOpenAICompatibleImageClient({ config, fetch });
+
+    const result = await client.generate({ prompt: 'hi', mimeType: 'image/webp' });
+    expect(result.mimeType).toBe('image/webp');
+  });
+});
+
 describe('ImageGenerationClientError', () => {
   it('exposes the category and a fixed safe message', () => {
     const error = new ImageGenerationClientError('timeout');

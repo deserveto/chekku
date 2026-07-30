@@ -193,8 +193,14 @@ async function readBoundedBytes(response: {
     return { value: body, ...(contentType ? { contentType } : {}) };
   }
 
-  if (body instanceof ReadableStream) {
-    const value = await collect(body);
+  // On Node, `@aws-sdk/client-s3` returns `Body` as an `SdkStream` wrapping a
+  // Node `Readable`, which is async-iterable but NOT a global `ReadableStream`.
+  // Route every async-iterable body (web ReadableStream included) through the
+  // streaming `collect()` so the cap cancels the stream mid-flight instead of
+  // materializing the whole object first. Only fall back to the buffered
+  // `transformToByteArray()` shape for bodies that expose neither protocol.
+  if (body instanceof ReadableStream || isAsyncIterable(body)) {
+    const value = await collect(body as ReadableStream<Uint8Array> | AsyncIterable<Uint8Array>);
     return { value, ...(contentType ? { contentType } : {}) };
   }
 
@@ -213,6 +219,12 @@ async function readBoundedBytes(response: {
   }
 
   throw new ObjectStorageError('unavailable', SAFE_MESSAGES.unavailable);
+}
+
+function isAsyncIterable(value: unknown): value is AsyncIterable<Uint8Array> {
+  return typeof value === 'object'
+    && value !== null
+    && typeof (value as AsyncIterable<Uint8Array>)[Symbol.asyncIterator] === 'function';
 }
 
 function createClient(config: GarageConfig): GarageClient {

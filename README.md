@@ -212,7 +212,7 @@ Local file: `agent/.env`
 | `LLM_DEFAULT_MODEL` | Yes | empty | Endpoint-native model ID. |
 | `LLM_DISPLAY_NAME` | No | `OpenAI-compatible endpoint` | Label shown in the studio. |
 | `LLM_MODELS` | No | empty | Comma-separated fallback model IDs. |
-| `LLM_IMAGE_MODEL` | No | `gemini-3.1-flash-image` | Fixed image model invoked by the Visual Content Agent's `generate_image` tool. Empty → tool fails closed. |
+| `LLM_IMAGE_MODEL` | No | empty | Fixed image model invoked by the Visual Content Agent's `generate_image` tool (e.g. `gemini-3.1-flash-image`). Empty/unset → tool fails closed. |
 | `LLM_IMAGE_ENDPOINT_PATH` | No | `/images/generations` | Narrowly-scoped path under `LLM_BASE_URL` for image generation. |
 | `CHEKKU_DEFAULT_AGENT_ID` | No | `main-agent` | Default agent for new sessions. |
 | `CHEKKU_LOCAL_USER_ID` | No | `local-user` | Development identity and Memory resource ID. |
@@ -478,7 +478,7 @@ LLM_API_KEY=...
 LLM_IMAGE_MODEL=gemini-3.1-flash-image
 ```
 
-`LLM_IMAGE_MODEL` defaults to `gemini-3.1-flash-image`; leave it empty only to disable image generation intentionally. The tool reuses the existing `LLM_BASE_URL` and `LLM_API_KEY` — no second key is required. If the gateway exposes image generation under a non-standard path, set `LLM_IMAGE_ENDPOINT_PATH` (default `/images/generations`). The concrete HTTP adapter assumes the OpenAI Images API standard contract; if the live gateway differs, only `agent/src/image-generation/client.ts` needs adjustment.
+`LLM_IMAGE_MODEL` is empty by default; the `generate_image` tool fails closed with a fixed configuration error until it is set (e.g. `gemini-3.1-flash-image`). The tool reuses the existing `LLM_BASE_URL` and `LLM_API_KEY` — no second key is required. If the gateway exposes image generation under a non-standard path, set `LLM_IMAGE_ENDPOINT_PATH` (default `/images/generations`). The concrete HTTP adapter assumes the OpenAI Images API standard contract; if the live gateway differs, only `agent/src/image-generation/client.ts` needs adjustment.
 
 ### Reset local agents and conversations
 

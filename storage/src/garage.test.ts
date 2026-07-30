@@ -423,6 +423,53 @@ describe('Garage binary object storage', () => {
     expect(stream.locked).toBe(false);
   });
 
+  it('cancels an async-iterable (SdkStream-shaped) body mid-stream instead of buffering it', async () => {
+    // On Node, `@aws-sdk/client-s3` returns `Body` as an `SdkStream`: an
+    // async-iterable that ALSO exposes `transformToByteArray`. The streaming
+    // cap path must win so a body over the cap is cancelled mid-flight rather
+    // than materialized through `transformToByteArray` first.
+    const calls = { transformCalled: false, yielded: 0 };
+    const totalChunks = 32;
+    const chunkSize = 1024 * 1024;
+    const body = {
+      [Symbol.asyncIterator]() {
+        let i = 0;
+        return {
+          next() {
+            if (i < totalChunks) {
+              i += 1;
+              calls.yielded += 1;
+              return Promise.resolve({ value: Buffer.alloc(chunkSize, 0x41), done: false });
+            }
+            return Promise.resolve({ value: undefined, done: true });
+          },
+          return() {
+            return Promise.resolve({ value: undefined, done: true });
+          },
+        };
+      },
+      transformToByteArray() {
+        calls.transformCalled = true;
+        return Promise.resolve(Buffer.alloc(totalChunks * chunkSize, 0x41));
+      },
+    };
+    const store = createGarageObjectStorage(config, {
+      async send() {
+        return { Body: body, ContentType: 'image/png' };
+      },
+    });
+
+    const failure = await store.getBytes('images/huge.png').catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ObjectStorageError);
+    expect(failure).toMatchObject({
+      code: 'unavailable',
+      message: 'Object storage is unavailable.',
+    });
+    expect(calls.transformCalled).toBe(false);
+    expect(calls.yielded).toBeLessThan(totalChunks);
+  });
+
   it('sanitizes unknown binary read failures without leaking credentials', async () => {
     const unsafeFailure = Object.assign(
       new Error('https://garage.internal secret-key authorization=secret'),

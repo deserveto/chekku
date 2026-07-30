@@ -1,4 +1,5 @@
 import { env } from '../config/env.js';
+import { parsePublicWebUrl, PublicWebUrlError } from '../mastra/web-reader/url.js';
 import {
   ImageGenerationClientError,
   isImageGenerationClientError,
@@ -88,6 +89,14 @@ function resolveConfig(explicit?: ImageClientConfig): ResolvedImageClientConfig 
   return { baseUrl, apiKey, model, endpointPath };
 }
 
+function hostOf(baseUrl: string): string {
+  try {
+    return new URL(baseUrl.trim().replace(/\/+$/, '')).hostname;
+  } catch {
+    return '';
+  }
+}
+
 function requireConfigured(config: ResolvedImageClientConfig): void {
   if (!config.baseUrl || /[\r\n]/.test(config.baseUrl)) {
     throw new ImageGenerationClientError('configuration');
@@ -144,12 +153,24 @@ function decodeBase64(input: string): Uint8Array {
   return new Uint8Array(buffer);
 }
 
-function inferMimeType(bytes: Uint8Array, declared?: string): ImageMimeType {
-  const candidate = declared?.split(';')[0]?.trim().toLowerCase();
-  if (candidate && ALLOWED_MIME_TYPES.has(candidate)) {
-    return candidate as ImageMimeType;
+function cancelBody(body: ReadableStream<Uint8Array> | null): void {
+  if (!body || body.locked) return;
+  try {
+    void body.cancel().catch(() => undefined);
+  } catch {
+    // Cleanup must not replace the fixed client error.
   }
-  // Sniff common image magic bytes when the provider omits a content type.
+}
+
+function cancelReader(reader: ReadableStreamDefaultReader<Uint8Array>): void {
+  try {
+    void reader.cancel().catch(() => undefined);
+  } catch {
+    // Cleanup must not replace the fixed client error.
+  }
+}
+
+function sniffImageMagic(bytes: Uint8Array): ImageMimeType | undefined {
   if (bytes.byteLength >= 4) {
     if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
       return 'image/png';
@@ -161,6 +182,20 @@ function inferMimeType(bytes: Uint8Array, declared?: string): ImageMimeType {
       && bytes.byteLength >= 12 && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) {
       return 'image/webp';
     }
+  }
+  return undefined;
+}
+
+function inferMimeType(bytes: Uint8Array, declared?: string): ImageMimeType {
+  // Trust the actual magic bytes first. A provider/model-declared MIME type is
+  // used only as a fallback when no known signature matches, so stored extension,
+  // object Content-Type, and served Content-Type always reflect the real bytes
+  // (PNG bytes are never persisted or served as image/jpeg).
+  const sniffed = sniffImageMagic(bytes);
+  if (sniffed) return sniffed;
+  const candidate = declared?.split(';')[0]?.trim().toLowerCase();
+  if (candidate && ALLOWED_MIME_TYPES.has(candidate)) {
+    return candidate as ImageMimeType;
   }
   throw new ImageGenerationClientError('format');
 }
@@ -182,12 +217,14 @@ async function readBoundedJson(
   checkpoint: () => void,
 ): Promise<unknown> {
   if (!response.ok) {
+    cancelBody(response.body);
     throw new ImageGenerationClientError(
       response.status === 401 || response.status === 403 ? 'configuration' : 'unavailable',
     );
   }
   const contentType = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase();
   if (contentType !== 'application/json' && contentType !== 'text/json') {
+    cancelBody(response.body);
     throw new ImageGenerationClientError('format');
   }
   if (!response.body) throw new ImageGenerationClientError('invalid');
@@ -202,6 +239,7 @@ async function readBoundedJson(
       if (value) {
         total += value.byteLength;
         if (total > MAX_BODY_BYTES) {
+          cancelReader(reader);
           throw new ImageGenerationClientError('tooLarge');
         }
         chunks.push(value);
@@ -236,25 +274,52 @@ async function readBoundedJson(
 
 async function fetchUrlBytes(
   fetchImpl: typeof globalThis.fetch,
-  url: string,
+  rawUrl: string,
+  gatewayHost: string,
   apiKey: string,
   signal: AbortSignal,
   checkpoint: () => void,
 ): Promise<{ bytes: Uint8Array; contentType?: string }> {
+  // The provider echoes the artifact URL in its response body, so treat it as
+  // untrusted and re-run the same public-URL guard the web reader applies to a
+  // provider-echoed URL. This blocks internal/private/non-public targets before
+  // any request leaves the agent host. `redirect: 'error'` alone cannot, because
+  // it only blocks redirect chains, not the initial URL.
+  let url: URL;
+  try {
+    url = parsePublicWebUrl(rawUrl);
+  } catch (error) {
+    if (error instanceof PublicWebUrlError) {
+      throw new ImageGenerationClientError('invalid');
+    }
+    throw error;
+  }
+  checkpoint();
+
+  // The OpenAI Images API returns public artifact URLs. Forward the gateway
+  // credential only when the artifact is hosted on the configured gateway host;
+  // never attach the gateway bearer to an arbitrary third-party host.
+  const headers: Record<string, string> = { Accept: 'image/*' };
+  if (gatewayHost && url.hostname === gatewayHost) {
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
+
   const response = await fetchImpl(url, {
     method: 'GET',
     redirect: 'error',
     signal,
-    headers: { Accept: 'image/*', Authorization: `Bearer ${apiKey}` },
+    headers,
   });
   checkpoint();
   if (!response.ok) {
+    cancelBody(response.body);
     throw new ImageGenerationClientError(
       response.status === 401 || response.status === 403 ? 'configuration' : 'unavailable',
     );
   }
   const contentType = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase();
   if (contentType && !ALLOWED_MIME_TYPES.has(contentType) && !contentType.startsWith('image/')) {
+    cancelBody(response.body);
     throw new ImageGenerationClientError('format');
   }
   if (!response.body) throw new ImageGenerationClientError('invalid');
@@ -268,6 +333,7 @@ async function fetchUrlBytes(
       if (value) {
         total += value.byteLength;
         if (total > MAX_IMAGE_BYTES) {
+          cancelReader(reader);
           throw new ImageGenerationClientError('tooLarge');
         }
         chunks.push(value);
@@ -293,6 +359,7 @@ async function fetchUrlBytes(
 async function resolveImageBytes(
   fetchImpl: typeof globalThis.fetch,
   entry: Record<string, unknown>,
+  gatewayHost: string,
   apiKey: string,
   request: ImageGenerationRequest,
   signal: AbortSignal,
@@ -309,7 +376,7 @@ async function resolveImageBytes(
   }
   if (typeof entry.url === 'string') {
     checkpoint();
-    const fetched = await fetchUrlBytes(fetchImpl, entry.url, apiKey, signal, checkpoint);
+    const fetched = await fetchUrlBytes(fetchImpl, entry.url, gatewayHost, apiKey, signal, checkpoint);
     if (fetched.bytes.byteLength > MAX_IMAGE_BYTES) {
       throw new ImageGenerationClientError('tooLarge');
     }
@@ -331,6 +398,7 @@ export function createOpenAICompatibleImageClient(
       const config = resolveConfig(options.config);
       requireConfigured(config);
       const prompt = normalizePrompt(request.prompt);
+      const gatewayHost = hostOf(config.baseUrl);
 
       const deadlineAt = now() + timeoutMs;
       const timeoutSignal = AbortSignal.timeout(timeoutMs);
@@ -380,6 +448,7 @@ export function createOpenAICompatibleImageClient(
         const { bytes, mimeType } = await resolveImageBytes(
           fetchImpl,
           entry,
+          gatewayHost,
           config.apiKey,
           request,
           requestSignal,

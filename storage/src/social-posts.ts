@@ -472,6 +472,37 @@ export interface VisualAssetBytes {
 }
 
 /**
+ * Per-post in-process serializer for canonical-metadata read-modify-writes.
+ * `attachVisualAsset` and `updateSocialPostStatus` both perform a non-atomic
+ * `getText` → mutate → `replaceText` over one post's metadata object; without
+ * serialization, two concurrent generations for the same post would each read
+ * the same snapshot and the second `replaceText` would drop the first asset
+ * (orphaning its bytes), breaking the "append preserves prior revisions" rule.
+ *
+ * This holds across the whole RMW within one server process. Cross-process /
+ * external writers remain subject to the documented Garage v2.3 limitation and
+ * are not covered by this lock.
+ */
+const metadataWriteTails = new Map<string, Promise<void>>();
+
+async function serializeMetadataWrite<T>(
+  postId: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previous = metadataWriteTails.get(postId) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => { release = resolve; });
+  metadataWriteTails.set(postId, current);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (metadataWriteTails.get(postId) === current) metadataWriteTails.delete(postId);
+  }
+}
+
+/**
  * Attach a freshly stored visual asset to a social post's canonical metadata.
  *
  * Reads the current metadata, appends the asset (preserving any prior revisions),
@@ -480,6 +511,10 @@ export interface VisualAssetBytes {
  * at `asset.objectKey` before calling this; a metadata-write failure therefore
  * leaves an orphan byte object that is unreachable through canonical metadata
  * or the application route, never a live entry pointing at missing bytes.
+ *
+ * The full read-modify-write is serialized per post within the process through
+ * {@link serializeMetadataWrite}, so concurrent attachments for one post land
+ * in order and never drop a prior revision.
  *
  * Returns the projected metadata after the update.
  */
@@ -492,29 +527,31 @@ export async function attachVisualAsset(
   if (asset.assetId === '') {
     throw new Error('Visual asset id must not be blank.');
   }
-  const metadataText = await store.getText(objectKeys.metadataObjectKey);
-  let metadata: unknown;
-  try {
-    metadata = JSON.parse(metadataText);
-  } catch {
-    throw new Error(`Invalid social post metadata for ${postId}`);
-  }
-  const parsed = parseSocialPostMetadata(metadata);
-  if (!parsed || parsed.postId !== postId) {
-    throw new Error(`Invalid social post metadata for ${postId}`);
-  }
+  return serializeMetadataWrite(postId, async () => {
+    const metadataText = await store.getText(objectKeys.metadataObjectKey);
+    let metadata: unknown;
+    try {
+      metadata = JSON.parse(metadataText);
+    } catch {
+      throw new Error(`Invalid social post metadata for ${postId}`);
+    }
+    const parsed = parseSocialPostMetadata(metadata);
+    if (!parsed || parsed.postId !== postId) {
+      throw new Error(`Invalid social post metadata for ${postId}`);
+    }
 
-  const existing = parsed.visualAssets ?? [];
-  if (existing.some((entry) => entry.assetId === asset.assetId)) {
-    throw new Error(`Visual asset ${asset.assetId} is already attached to ${postId}.`);
-  }
-  const updated: SocialPostMetadata = {
-    ...parsed,
-    visualAssets: [...existing, asset],
-    activeVisualAssetId: asset.assetId,
-  };
-  await store.replaceText(objectKeys.metadataObjectKey, JSON.stringify(updated, null, 2), 'application/json');
-  return updated;
+    const existing = parsed.visualAssets ?? [];
+    if (existing.some((entry) => entry.assetId === asset.assetId)) {
+      throw new Error(`Visual asset ${asset.assetId} is already attached to ${postId}.`);
+    }
+    const updated: SocialPostMetadata = {
+      ...parsed,
+      visualAssets: [...existing, asset],
+      activeVisualAssetId: asset.assetId,
+    };
+    await store.replaceText(objectKeys.metadataObjectKey, JSON.stringify(updated, null, 2), 'application/json');
+    return updated;
+  });
 }
 
 /**
@@ -579,27 +616,29 @@ export async function updateSocialPostStatus(
   nextStatus: SocialPostStatus,
 ): Promise<SocialPostMetadata> {
   const objectKeys = keysFor(postId);
-  const metadataText = await store.getText(objectKeys.metadataObjectKey);
-  let metadata: unknown;
-  try {
-    metadata = JSON.parse(metadataText);
-  } catch {
-    throw new Error(`Invalid social post metadata for ${postId}`);
-  }
-  const parsed = parseSocialPostMetadata(metadata);
-  if (!parsed || parsed.postId !== postId) {
-    throw new Error(`Invalid social post metadata for ${postId}`);
-  }
+  return serializeMetadataWrite(postId, async () => {
+    const metadataText = await store.getText(objectKeys.metadataObjectKey);
+    let metadata: unknown;
+    try {
+      metadata = JSON.parse(metadataText);
+    } catch {
+      throw new Error(`Invalid social post metadata for ${postId}`);
+    }
+    const parsed = parseSocialPostMetadata(metadata);
+    if (!parsed || parsed.postId !== postId) {
+      throw new Error(`Invalid social post metadata for ${postId}`);
+    }
 
-  const currentStatus = parsed.status;
-  const allowed = ALLOWED_STATUS_TRANSITIONS[currentStatus];
-  if (!allowed.includes(nextStatus)) {
-    throw new Error(
-      `Cannot transition social post ${postId} from ${currentStatus} to ${nextStatus}.`,
-    );
-  }
+    const currentStatus = parsed.status;
+    const allowed = ALLOWED_STATUS_TRANSITIONS[currentStatus];
+    if (!allowed.includes(nextStatus)) {
+      throw new Error(
+        `Cannot transition social post ${postId} from ${currentStatus} to ${nextStatus}.`,
+      );
+    }
 
-  const updated: SocialPostMetadata = { ...parsed, status: nextStatus };
-  await store.replaceText(objectKeys.metadataObjectKey, JSON.stringify(updated, null, 2), 'application/json');
-  return updated;
+    const updated: SocialPostMetadata = { ...parsed, status: nextStatus };
+    await store.replaceText(objectKeys.metadataObjectKey, JSON.stringify(updated, null, 2), 'application/json');
+    return updated;
+  });
 }

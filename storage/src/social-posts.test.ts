@@ -717,6 +717,44 @@ describe('attachVisualAsset and readVisualAssetBytes', () => {
 
     await expect(attachVisualAsset(storage, postId, built.asset)).rejects.toThrow('already attached');
   });
+
+  it('serializes concurrent attachments so both revisions are preserved', async () => {
+    const { storage } = createMemoryStorage();
+    await seedApprovedPost(storage);
+
+    const first = buildVisualAsset({
+      postId,
+      mimeType: 'image/png',
+      prompt: 'first attempt',
+      model: 'gemini-3.1-flash-image',
+      now: () => new Date('2026-07-28T12:00:00.000Z'),
+    });
+    const second = buildVisualAsset({
+      postId,
+      mimeType: 'image/jpeg',
+      prompt: 'second attempt',
+      model: 'gemini-3.1-flash-image',
+      now: () => new Date('2026-07-28T13:00:00.000Z'),
+    });
+    await storage.createBytes(first.objectKey, new Uint8Array([1]), 'image/png');
+    await storage.createBytes(second.objectKey, new Uint8Array([2]), 'image/jpeg');
+
+    const [a, b] = await Promise.all([
+      attachVisualAsset(storage, postId, first.asset),
+      attachVisualAsset(storage, postId, second.asset),
+    ]);
+
+    // Each call resolved with its own asset present (neither was lost in flight).
+    expect(a.visualAssets?.some((entry) => entry.assetId === first.asset.assetId)).toBe(true);
+    expect(b.visualAssets?.some((entry) => entry.assetId === second.asset.assetId)).toBe(true);
+
+    // The persisted metadata holds both revisions; under the old non-serialized
+    // RMW the second write would have clobbered the first and orphaned its bytes.
+    const post = await getSocialPost(storage, postId);
+    expect(post.metadata.visualAssets?.map((entry) => entry.assetId).sort()).toEqual(
+      [first.asset.assetId, second.asset.assetId].sort(),
+    );
+  });
 });
 
 describe('updateSocialPostStatus', () => {

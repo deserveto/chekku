@@ -422,6 +422,7 @@ Chat report links use URL-encoded relative `/reports/<reportId>` or `/reports/co
 - `GET /api/storage/competitive-analyses/[analysisId]` returns one analysis after identity and ID validation.
 - `GET /api/storage/social-posts` returns post metadata after identity validation.
 - `GET /api/storage/social-posts/[postId]` returns one post after identity and ID validation.
+- `PATCH /api/storage/social-posts/[postId]` transitions a post `DRAFT → APPROVED` (the only allowed status mutation) after identity and ID validation; the body selects the approval transition and the server helper (`updateSocialPostStatus`) rewrites canonical metadata last.
 - `GET /api/storage/social-posts/[postId]/visuals/[assetId]` returns one visual asset's image bytes with the correct `Content-Type` after identity and both ID validation.
 
 ### Mastra custom routes

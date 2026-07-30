@@ -34,8 +34,10 @@ const envSchema = z.object({
 
   // Fixed image-generation model invoked by the Visual Content Agent's
   // `generate_image` tool. The model never comes from tool/model input.
-  // Empty/unset → the tool fails closed with a fixed configuration error.
-  LLM_IMAGE_MODEL: z.string().default('gemini-3.1-flash-image'),
+  // Empty/unset → the tool fails closed with a fixed configuration error, so
+  // an operator who never sets the var does not get a silent live call to a
+  // model the gateway may not have.
+  LLM_IMAGE_MODEL: z.string().default(''),
   // Narrowly-scoped server-only path under LLM_BASE_URL for image generation.
   // Defaults to the OpenAI Images API standard path; override only when the
   // configured gateway exposes images under a different path.
