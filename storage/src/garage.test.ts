@@ -295,3 +295,198 @@ describe('Garage object storage', () => {
     );
   });
 });
+
+describe('Garage binary object storage', () => {
+  it('creates bytes only when its key does not exist and forwards content type', async () => {
+    let sentCommand: { input: unknown } | undefined;
+    const store = createGarageObjectStorage(config, {
+      async send(command) {
+        sentCommand = command as { input: unknown };
+        if ((command as { constructor: { name: string } }).constructor.name === 'HeadObjectCommand') {
+          throw sdkError('NotFound', 404);
+        }
+        return {};
+      },
+    });
+
+    const payload = new Uint8Array([1, 2, 3, 4]);
+    await expect(store.createBytes('images/one.png', payload, 'image/png')).resolves.toBeUndefined();
+    expect(sentCommand?.input).toMatchObject({
+      Bucket: 'objects',
+      Key: 'images/one.png',
+      Body: payload,
+      ContentType: 'image/png',
+      IfNoneMatch: '*',
+    });
+  });
+
+  it('returns stored bytes and content type for an existing binary object', async () => {
+    const bytes = new Uint8Array([10, 20, 30]);
+    const store = createGarageObjectStorage(config, {
+      async send() {
+        return { Body: bytes, ContentType: 'image/jpeg' };
+      },
+    });
+
+    await expect(store.getBytes('images/one.jpg')).resolves.toEqual({
+      value: bytes,
+      contentType: 'image/jpeg',
+    });
+  });
+
+  it('accepts a streaming body for binary reads', async () => {
+    const bytes = new Uint8Array([5, 6, 7, 8]);
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    });
+    const store = createGarageObjectStorage(config, {
+      async send() {
+        return { Body: stream, ContentType: 'image/webp' };
+      },
+    });
+
+    await expect(store.getBytes('images/one.webp')).resolves.toEqual({
+      value: bytes,
+      contentType: 'image/webp',
+    });
+  });
+
+  it('translates binary create collisions to a safe error', async () => {
+    const store = createGarageObjectStorage(config, {
+      async send(command) {
+        if ((command as { constructor: { name: string } }).constructor.name === 'HeadObjectCommand') {
+          throw sdkError('NotFound', 404);
+        }
+        throw sdkError('PreconditionFailed', 412);
+      },
+    });
+
+    await expect(store.createBytes('images/one.png', new Uint8Array([1]))).rejects.toMatchObject({
+      code: 'already-exists',
+      message: 'Object already exists.',
+    });
+  });
+
+  it('requires an existing object before replacing bytes', async () => {
+    const missing = createGarageObjectStorage(config, {
+      async send() {
+        throw sdkError('NotFound', 404);
+      },
+    });
+
+    await expect(missing.replaceBytes('images/one.png', new Uint8Array([1]))).rejects.toMatchObject({
+      code: 'not-found',
+      message: 'Object not found.',
+    });
+  });
+
+  it('translates a missing binary read to a safe error', async () => {
+    const store = createGarageObjectStorage(config, {
+      async send() {
+        throw sdkError('NoSuchKey', 404);
+      },
+    });
+
+    await expect(store.getBytes('images/missing.png')).rejects.toMatchObject({
+      code: 'not-found',
+      message: 'Object not found.',
+    });
+  });
+
+  it('rejects a binary body that exceeds the size cap without leaking provider details', async () => {
+    const oversized = new Uint8Array(16 * 1024 * 1024 + 1);
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(oversized);
+        controller.close();
+      },
+      cancel() {
+        return Promise.resolve();
+      },
+    });
+    const store = createGarageObjectStorage(config, {
+      async send() {
+        return { Body: stream, ContentType: 'image/png' };
+      },
+    });
+
+    const failure = await store.getBytes('images/huge.png').catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ObjectStorageError);
+    expect(failure).toMatchObject({
+      code: 'unavailable',
+      message: 'Object storage is unavailable.',
+    });
+    expect(stream.locked).toBe(false);
+  });
+
+  it('cancels an async-iterable (SdkStream-shaped) body mid-stream instead of buffering it', async () => {
+    // On Node, `@aws-sdk/client-s3` returns `Body` as an `SdkStream`: an
+    // async-iterable that ALSO exposes `transformToByteArray`. The streaming
+    // cap path must win so a body over the cap is cancelled mid-flight rather
+    // than materialized through `transformToByteArray` first.
+    const calls = { transformCalled: false, yielded: 0 };
+    const totalChunks = 32;
+    const chunkSize = 1024 * 1024;
+    const body = {
+      [Symbol.asyncIterator]() {
+        let i = 0;
+        return {
+          next() {
+            if (i < totalChunks) {
+              i += 1;
+              calls.yielded += 1;
+              return Promise.resolve({ value: Buffer.alloc(chunkSize, 0x41), done: false });
+            }
+            return Promise.resolve({ value: undefined, done: true });
+          },
+          return() {
+            return Promise.resolve({ value: undefined, done: true });
+          },
+        };
+      },
+      transformToByteArray() {
+        calls.transformCalled = true;
+        return Promise.resolve(Buffer.alloc(totalChunks * chunkSize, 0x41));
+      },
+    };
+    const store = createGarageObjectStorage(config, {
+      async send() {
+        return { Body: body, ContentType: 'image/png' };
+      },
+    });
+
+    const failure = await store.getBytes('images/huge.png').catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ObjectStorageError);
+    expect(failure).toMatchObject({
+      code: 'unavailable',
+      message: 'Object storage is unavailable.',
+    });
+    expect(calls.transformCalled).toBe(false);
+    expect(calls.yielded).toBeLessThan(totalChunks);
+  });
+
+  it('sanitizes unknown binary read failures without leaking credentials', async () => {
+    const unsafeFailure = Object.assign(
+      new Error('https://garage.internal secret-key authorization=secret'),
+      {
+        credential: 'secret-key',
+        $metadata: { requestId: 'request-secret' },
+      },
+    );
+    const store = createGarageObjectStorage(config, {
+      async send() {
+        throw unsafeFailure;
+      },
+    });
+
+    const failure = await store.getBytes('images/one.png').catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ObjectStorageError);
+    expect(JSON.stringify(failure)).not.toMatch(/garage\.internal|secret-key|authorization|request-secret/);
+  });
+});

@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('server-only', () => ({}));
-vi.mock('next/navigation', () => ({ notFound: mocks.notFound }));
+vi.mock('next/navigation', () => ({ notFound: mocks.notFound, useRouter: () => ({ refresh: vi.fn() }) }));
 vi.mock('@/components/markdown-message', () => ({
   MarkdownMessage: ({ content }: { content: string }) => content,
 }));
@@ -30,6 +30,11 @@ vi.mock('@/server/social-posts', () => {
   return {
     getSocialPostForUser: mocks.getPost,
     listSocialPostsForUser: mocks.listPosts,
+    approveSocialPostForUser: vi.fn(async (postId: string) => ({
+      ...metadata,
+      postId,
+      status: 'APPROVED' as const,
+    })),
     SocialPostServiceError,
   };
 });
@@ -153,5 +158,72 @@ describe('social post detail page', () => {
     expect(captionIndex).toBeGreaterThan(-1);
     expect(metadataIndex).toBeGreaterThan(captionIndex);
     expect(briefIndex).toBeGreaterThan(metadataIndex);
+  });
+
+  it('omits the visual section when the post has no visual assets', async () => {
+    const markup = renderToStaticMarkup(await SocialPostDetailPage({
+      params: Promise.resolve({ postId }),
+    }));
+
+    expect(markup).not.toContain('>Visual</h2>');
+    expect(markup).not.toContain('studio-visual-image');
+  });
+
+  it('shows an Approve button for DRAFT posts', async () => {
+    const markup = renderToStaticMarkup(await SocialPostDetailPage({
+      params: Promise.resolve({ postId }),
+    }));
+
+    expect(markup).toContain('>Approve<');
+  });
+
+  it('hides the Approve button for APPROVED posts', async () => {
+    mocks.getPost.mockResolvedValue({
+      ...post,
+      metadata: { ...metadata, status: 'APPROVED' as const },
+    });
+
+    const markup = renderToStaticMarkup(await SocialPostDetailPage({
+      params: Promise.resolve({ postId }),
+    }));
+
+    expect(markup).not.toContain('>Approve<');
+  });
+
+  it('renders the active visual asset image between caption and metadata', async () => {
+    const assetId = 'sva_20260728120000_0000000a';
+    const postWithVisual = {
+      ...post,
+      metadata: {
+        ...metadata,
+        status: 'APPROVED' as const,
+        visualAssets: [{
+          assetId,
+          objectKey: `social-posts/${postId}/visuals/${assetId}.png`,
+          imageUrl: `/api/storage/social-posts/${postId}/visuals/${assetId}`,
+          mimeType: 'image/png',
+          generatedAt: '2026-07-28T12:00:00.000Z',
+          model: 'gemini-3.1-flash-image',
+          prompt: 'soft morning light',
+        }],
+        activeVisualAssetId: assetId,
+      },
+    };
+    mocks.getPost.mockResolvedValue(postWithVisual);
+
+    const markup = renderToStaticMarkup(await SocialPostDetailPage({
+      params: Promise.resolve({ postId }),
+    }));
+
+    const captionIndex = markup.indexOf('>Caption</h2>');
+    const visualIndex = markup.indexOf('>Visual</h2>');
+    const metadataIndex = markup.indexOf('>Metadata</h2>');
+
+    expect(visualIndex).toBeGreaterThan(-1);
+    expect(visualIndex).toBeGreaterThan(captionIndex);
+    expect(metadataIndex).toBeGreaterThan(visualIndex);
+    expect(markup).toContain('src="/api/storage/social-posts/smp_20260714120000_deadbeef/visuals/sva_20260728120000_0000000a"');
+    expect(markup).toContain('alt="Generated visual sva_20260728120000_0000000a');
+    expect(markup).toContain('gemini-3.1-flash-image');
   });
 });

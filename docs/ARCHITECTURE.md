@@ -29,6 +29,7 @@ Chekku contains three npm workspaces: a Next.js client, a Mastra agent server, a
 │ - social-media-content-writer              │        │
 │ - social-media-supervisor-agent            │        │
 │ - social-media-strategist-agent            │        │
+│ - visual-content-agent                     │        │
 │                                            │        │
 │ Memory + LibSQLStore                       │        │
 │ Calculator + current-time + email tools    │        │
@@ -73,7 +74,7 @@ PM competitive analysis
 
 `agent/src/mastra/index.ts` creates the single `Mastra` instance and registers:
 
-- `mainAgent`, `pmAgent`, `qaWebAgent`, `qaAndroidAgent`, `socialMediaContentWriter`, `socialMediaSupervisorAgent`, and `socialMediaStrategistAgent`;
+- `mainAgent`, `pmAgent`, `qaWebAgent`, `qaAndroidAgent`, `socialMediaContentWriter`, `socialMediaSupervisorAgent`, `socialMediaStrategistAgent`, and `visualContentAgent`;
 - `storedAgentTools` (`calculatorTool`, `getCurrentTimeTool`, and `sendEmailTool`) for stored-agent hydration;
 - `garageMcpServer` for generic agent-isolated object storage;
 - `searxngMcpServer` for fixed read-only web search by selected stored agents;
@@ -128,7 +129,7 @@ The active role is held in-memory keyed by `${platform}:${userId}`. The agent re
 
 ### Social Media Supervisor
 
-`social-media-supervisor-agent` is the routing agent for the social-media surface. It has no tools of its own and delegates drafting/repurposing/planning requests to its sub-agents via Mastra's `agents` field. The supervisor binds Memory and the same context-safety processors as the other code agents so its own turns stay bounded. Active call paths opt into routing by invoking the supervisor; Telegram stays on the Content Writer for this phase. It attaches two sub-agents today: the Content Writer (platform-post drafting/repurposing/planning) and the Strategist (Content Strategy Brief and Content Plan research/interviews).
+`social-media-supervisor-agent` is the routing agent for the social-media surface. It has no tools of its own and delegates drafting/repurposing/planning requests to its sub-agents via Mastra's `agents` field. The supervisor binds Memory and the same context-safety processors as the other code agents so its own turns stay bounded. Active call paths opt into routing by invoking the supervisor; Telegram stays on the Content Writer for this phase. It attaches three sub-agents today: the Content Writer (platform-post drafting/repurposing/planning), the Strategist (Content Strategy Brief and Content Plan research/interviews), and the Visual Content Agent (on-demand image generation for an APPROVED post).
 
 ### Social Media Strategist
 
@@ -139,6 +140,16 @@ Its conversational workflow is: interview the user to identify the brand, projec
 The Strategist is independent of the Content Writer. It does not wire a Telegram channel, does not register slash commands, and does not participate in the scheduled `weekly-social-drafts` workflow. The supervisor routes strategy/brief/content-plan requests to it via Mastra's `agents` field.
 
 The Strategist keeps approved strategies inside its Mastra Memory thread only. Durable strategy persistence (a `storage/src/strategy-briefs.ts` helper plus a `save_strategy_to_garage` tool registered only on this agent, mirroring the PM report pattern) is deferred to a separately reviewed change. Markdown-based brand-product knowledge is also deferred: in v1 brand knowledge arrives as ordinary user messages, and the supervisor (or a future caller) may pass curated Markdown context through an `agent.generate(messages, { instructions })` override, the same mechanism `weekly-social-drafts` uses to pin the Instagram role on `socialMediaContentWriter`.
+
+### Visual Content Agent
+
+`visual-content-agent` is a code-defined image-generation agent and the third sub-agent under the Social Media Supervisor. It shares the common server orchestration model (`getServerModel()`), Mastra Memory, and the context-limiter + gateway-compatibility + char-budget-guard processor stack. It binds exactly one tool: `generate_image`. The fixed image model (`gemini-3.1-flash-image`) is invoked only inside that tool, never as the agent's orchestration model.
+
+Image generation is on-demand only: the user must explicitly ask the supervisor to generate a visual, and the supervisor delegates to this agent. The tool loads the named social post, verifies its persisted status is exactly `APPROVED`, calls the image-generation provider boundary (`agent/src/image-generation/`), stores the returned bytes in Garage under the historical `social-media-agent` namespace, and attaches the asset to the post's canonical metadata (written last). It never generates automatically after the Content Writer finishes or inside the `weekly-social-drafts` workflow.
+
+Revisions regenerate: a new `sva_` asset id and object key are produced and the previous asset is preserved in `visualAssets`; there is no editing, inpainting, or image-to-image path. Images are served through the stable application route `GET /api/storage/social-posts/<postId>/visuals/<assetId>`, which validates both canonical ids, verifies the asset belongs to the post through persisted metadata, and never accepts an arbitrary object key.
+
+The image-generation HTTP adapter (`agent/src/image-generation/client.ts`) targets the OpenAI Images API standard contract (`POST {LLM_BASE_URL}/images/generations`, `response_format: b64_json`) using the existing `LLM_BASE_URL` and `LLM_API_KEY`; no second key is required. It is bounded (60 s timeout, 16 MiB body cap, 10 MiB decoded-image cap, MIME allowlist of `image/png`/`image/jpeg`/`image/webp`) and normalizes every provider failure into fixed safe errors that never expose credentials, endpoints, response bodies, or diagnostics. The endpoint path is configurable via `LLM_IMAGE_ENDPOINT_PATH` (default `/images/generations`). Every layer below the client interface is exercised through dependency-injected test doubles, so the pipeline is verifiable independent of live gateway availability.
 
 ### PM Agent
 
@@ -254,7 +265,7 @@ This normalization applies to both `doGenerate` and `doStream`.
 
 The default URL is `file:./mastra.db`. The actual file location depends on the working directory used to launch the agent workspace.
 
-`@chekku/storage` is a separate generic object-storage boundary, not a replacement for LibSQL. It defines create, replace, get, existence, delete, and bounded-list operations and implements them through Garage's S3-compatible API. Application configuration uses only:
+`@chekku/storage` is a separate generic object-storage boundary, not a replacement for LibSQL. It defines create, replace, get, existence, delete, bounded-list, and binary object operations and implements them through Garage's S3-compatible API. The binary methods (`createBytes`, `replaceBytes`, `getBytes`) are optional on the `ObjectStorage` interface so existing text-only implementations keep typechecking unchanged; the Garage adapter, the lazy adapter, and the namespaced wrapper all implement them. `asBinaryObjectStorage` narrows a store to its binary capability at consumption sites and throws a fixed actionable error when a store lacks it. Binary reads are bounded to 16 MiB and reuse the same error-sanitization path as text operations. Application configuration uses only:
 
 ```text
 GARAGE_ENDPOINT
@@ -341,6 +352,20 @@ social-posts/<postId>/metadata.json
 
 Generated IDs and every repository, workflow, and public detail boundary use canonical form `smp_YYYYMMDDHHMMSS_<8 lowercase hex>` and enforce `^smp_[0-9]{14}_[0-9a-f]{8}$`. Noncanonical metadata is skipped during listing; there is no compatibility fallback. Social-post semantics stay outside Garage MCP; no social-post tool is registered on the generic five-tool MCP server.
 
+### Visual assets
+
+A visual asset is a generated image attached to an APPROVED social post. The Visual Content Agent's `generate_image` tool owns the write path (distinct from the weekly workflow's post creation via MCP): it stores the image bytes through the binary storage capability and attaches the asset to the post's canonical metadata. Visual assets live under the same historical `social-media-agent` namespace and the same `social-posts/<postId>/` prefix:
+
+```text
+social-posts/<postId>/visuals/<assetId>.<ext>
+```
+
+Asset IDs use canonical form `sva_YYYYMMDDHHMMSS_<8 lowercase hex>` and enforce `^sva_[0-9]{14}_[0-9a-f]{8}$`. The `<ext>` is derived from the asset's MIME type (`png` | `jpg` | `webp`). The tool generates the asset id and object key server-side; the model never chooses either.
+
+`SocialPostMetadata` is extended additively with `visualAssets?: SocialVisualAsset[]` and `activeVisualAssetId?: string`. The parser is granular: a malformed asset entry is dropped without poisoning the whole post, and `activeVisualAssetId` must reference a kept asset or it is unset. Metadata never contains base64 image data or Garage credentials — only the relative object key and the application-facing URL. A revision appends a new asset and sets it active; the previous asset is preserved.
+
+`attachVisualAsset` writes metadata last, so a failed image upload never becomes a live canonical entry. `readVisualAssetBytes` loads metadata first to verify the `assetId` belongs to the post (the route never accepts an arbitrary object key from a URL parameter), then reads the bytes through the binary capability. Visual-asset semantics stay outside Garage MCP; no visual-asset tool is registered on the generic five-tool MCP server.
+
 ## Conversation ownership
 
 Every thread is owned by an agent and resource:
@@ -400,6 +425,8 @@ Chat report links use URL-encoded relative `/reports/<reportId>` or `/reports/co
 - `GET /api/storage/competitive-analyses/[analysisId]` returns one analysis after identity and ID validation.
 - `GET /api/storage/social-posts` returns post metadata after identity validation.
 - `GET /api/storage/social-posts/[postId]` returns one post after identity and ID validation.
+- `PATCH /api/storage/social-posts/[postId]` transitions a post `DRAFT → APPROVED` (the only allowed status mutation) after identity and ID validation; the body selects the approval transition and the server helper (`updateSocialPostStatus`) rewrites canonical metadata last.
+- `GET /api/storage/social-posts/[postId]/visuals/[assetId]` returns one visual asset's image bytes with the correct `Content-Type` after identity and both ID validation.
 
 ### Mastra custom routes
 

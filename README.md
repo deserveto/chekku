@@ -28,6 +28,7 @@ Chekku provides a focused interface for managing agents, creating agent-specific
 - **Hosted Web Reader** — fixed read-only `read_web_page` capability for one chosen public page, returning bounded untrusted Markdown through hosted Jina Reader.
 - **Social media agent** — role-switchable content assistant reachable over Telegram (X, Instagram, LinkedIn, TikTok roles).
 - **Social media strategist** — research-backed planning agent that drafts a Content Strategy Brief for any brand or product, refines it on review, and (after approval) produces a Content Plan grounded in the approved brief.
+- **Visual content agent** — on-demand image-generation sub-agent that produces one image for an APPROVED social post through the fixed image model, stores it in Garage, and exposes a stable application-facing image URL.
 - **Scheduled social drafts** — a weekly Monday 09:00 Asia/Jakarta workflow drafts two Instagram posts from awareness days and evergreen pillars, saves them to Garage, and emails a review link.
 - **Hosted-vLLM compatibility** — final prompt normalization keeps system messages at the beginning.
 - **Local-first storage** — agent definitions, versions, memory, and threads live in LibSQL.
@@ -53,6 +54,7 @@ Next.js client :3000
   │     ├── social-media-content-writer (Telegram channel)            │
   │     ├── social-media-supervisor-agent (routes to sub-agents)      │
   │     ├── social-media-strategist-agent (research + planning)        │
+  │     ├── visual-content-agent (on-demand image generation)          │
   │     ├── @mastra/editor stored agents                              │
   │     ├── Mastra Memory + LibSQLStore                               │
   │     ├── calculator + current-time + email tools                   │
@@ -210,6 +212,8 @@ Local file: `agent/.env`
 | `LLM_DEFAULT_MODEL` | Yes | empty | Endpoint-native model ID. |
 | `LLM_DISPLAY_NAME` | No | `OpenAI-compatible endpoint` | Label shown in the studio. |
 | `LLM_MODELS` | No | empty | Comma-separated fallback model IDs. |
+| `LLM_IMAGE_MODEL` | No | empty | Fixed image model invoked by the Visual Content Agent's `generate_image` tool (e.g. `gemini-3.1-flash-image`). Empty/unset → tool fails closed. |
+| `LLM_IMAGE_ENDPOINT_PATH` | No | `/images/generations` | Narrowly-scoped path under `LLM_BASE_URL` for image generation. |
 | `CHEKKU_DEFAULT_AGENT_ID` | No | `main-agent` | Default agent for new sessions. |
 | `CHEKKU_LOCAL_USER_ID` | No | `local-user` | Development identity and Memory resource ID. |
 | `BROWSER_HEADLESS` | No | `true` | Run the QA browser without a visible window. |
@@ -268,8 +272,9 @@ The client uses system font stacks, so `next build` does not download fonts from
 .
 ├── agent/                  # Mastra server and agent runtime
 │   └── src/
-│       ├── agents/         # main, PM, QA Web, Social Media, and Social Media Strategist agents
+│       ├── agents/         # main, PM, QA Web, Social Media, Strategist, and Visual Content agents
 │       ├── config/         # environment and middleware
+│       ├── image-generation/ # bounded OpenAI-compatible image-generation client
 │       ├── mastra/
 │       │   ├── gateways/   # OpenAI-compatible gateway and normalization
 │       │   ├── mcp/        # fixed Garage, SearXNG, and Web Reader MCP servers
@@ -277,7 +282,7 @@ The client uses system font stacks, so `next build` does not download fonts from
 │       │   ├── routes/     # /healthz and /models
 │       │   ├── searxng/    # bounded search client and configuration
 │       │   ├── web-reader/ # bounded hosted page-reading client
-│       │   └── tools/      # stored-agent, PM, search, and reading tools
+│       │   └── tools/      # stored-agent, PM, search, reading, and image-generation tools
 │       └── providers/      # model configuration helpers
 ├── client/                 # Next.js studio
 │   └── src/
@@ -307,7 +312,7 @@ These rules keep the repository from drifting back into parallel implementations
 9. Garage identity comes from trusted Mastra execution context, never tool input; browser code never accesses Garage directly.
 10. Weekly and competitive PM semantics stay outside Garage MCP in code-defined `pm-agent` skills/tools and separate shared repositories.
 11. PM storage always binds to fixed `pm-agent`; persisted metadata contains only relative `pm-reports/...` or `competitive-analyses/...` keys.
-12. Social Media Content Writer keeps Telegram slash registration and direct email delivery in the single Mastra runtime; the Social Media Supervisor routes to it and to the Social Media Strategist as sub-agents.
+12. Social Media Content Writer keeps Telegram slash registration and direct email delivery in the single Mastra runtime; the Social Media Supervisor routes to it, to the Social Media Strategist, and to the Visual Content Agent as sub-agents.
 13. SearXNG MCP uses fixed ID `searxng` and exactly `search_web`; PM Agent receives the same reusable tool directly.
 14. `search_web` returns bounded result metadata and snippets only. PM Agent, not search, orchestrates competitive analysis.
 15. SearXNG endpoint and optional bearer configuration stay server-side; stored records contain only `mcpClients: { searxng: { tools: {} } }`.
@@ -463,6 +468,18 @@ Port `8888` must be free before local startup. Search has a fixed 12-second appl
 ### `Web Reader is not configured.`
 
 Set `WEB_READER_API_KEY` only in `agent/.env` or a deployment secret manager. For local development, rerun `npm run setup` after editing `agent/.env`, then restart the agent. The fixed Web Reader registry remains available without a key, but `read_web_page` fails closed until one is configured.
+
+### `Image generation is not configured.`
+
+The Visual Content Agent's `generate_image` tool fails closed until the server can reach the image endpoint. Confirm these are present in `agent/.env`:
+
+```dotenv
+LLM_BASE_URL=https://your-endpoint.example/v1
+LLM_API_KEY=...
+LLM_IMAGE_MODEL=gemini-3.1-flash-image
+```
+
+`LLM_IMAGE_MODEL` is empty by default; the `generate_image` tool fails closed with a fixed configuration error until it is set (e.g. `gemini-3.1-flash-image`). The tool reuses the existing `LLM_BASE_URL` and `LLM_API_KEY` — no second key is required. If the gateway exposes image generation under a non-standard path, set `LLM_IMAGE_ENDPOINT_PATH` (default `/images/generations`). The concrete HTTP adapter assumes the OpenAI Images API standard contract; if the live gateway differs, only `agent/src/image-generation/client.ts` needs adjustment.
 
 ### Reset local agents and conversations
 

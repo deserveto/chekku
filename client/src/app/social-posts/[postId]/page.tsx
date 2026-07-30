@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
+import ApproveButton from './ApproveButton';
 import { MarkdownMessage } from '@/components/markdown-message';
 import { StudioNav } from '@/components/studio/studio-nav';
 import {
@@ -56,6 +57,10 @@ export default async function SocialPostDetailPage({
     );
   }
 
+  const activeVisual = post.metadata.activeVisualAssetId
+    ? post.metadata.visualAssets?.find((asset) => asset.assetId === post.metadata.activeVisualAssetId)
+    : undefined;
+
   return (
     <div className="studio-shell">
       <StudioNav resourceId={resourceId} />
@@ -66,7 +71,12 @@ export default async function SocialPostDetailPage({
             <h1>{post.postId}</h1>
             <p>Drafted caption first, followed by storage metadata and the brief that generated it.</p>
           </div>
-          <Link className="studio-button" href="/social-posts">Back to social posts</Link>
+          <div className="studio-report-header-actions">
+            {post.metadata.status === 'DRAFT' ? (
+              <ApproveButton postId={post.postId} />
+            ) : null}
+            <Link className="studio-button" href="/social-posts">Back to social posts</Link>
+          </div>
         </header>
 
         <div className="studio-report-detail">
@@ -76,6 +86,31 @@ export default async function SocialPostDetailPage({
               <MarkdownMessage content={post.postMarkdown} />
             </div>
           </section>
+
+          {activeVisual ? (
+            <section className="studio-panel studio-report-panel">
+              <h2 className="studio-eyebrow">Visual</h2>
+              <figure className="studio-visual">
+                {/* Image is served from the same-origin dynamic storage route
+                    and is already a bounded binary, so next/image optimization
+                    does not apply here. */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  className="studio-visual-image"
+                  src={activeVisual.imageUrl}
+                  alt={`Generated visual ${activeVisual.assetId} for ${post.postId}`}
+                  loading="lazy"
+                />
+                <figcaption className="studio-visual-meta">
+                  <code>{activeVisual.assetId}</code>
+                  {' '}
+                  <span>{activeVisual.mimeType}</span>
+                  {' '}
+                  <span>{activeVisual.model}</span>
+                </figcaption>
+              </figure>
+            </section>
+          ) : null}
 
           <section className="studio-panel studio-report-panel">
             <h2 className="studio-eyebrow">Metadata</h2>

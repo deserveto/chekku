@@ -29,12 +29,16 @@ import {
   type ObjectStorage,
   type SocialPostMetadata,
   type SocialPostReadResult,
+  type VisualAssetBytes,
 } from '@chekku/storage';
 
-import { GET as getPostRoute } from '../app/api/storage/social-posts/[postId]/route';
+import { GET as getPostRoute, PATCH as patchPostRoute } from '../app/api/storage/social-posts/[postId]/route';
+import { GET as getVisualAssetRoute } from '../app/api/storage/social-posts/[postId]/visuals/[assetId]/route';
 import { GET as listPostsRoute } from '../app/api/storage/social-posts/route';
 import {
   getSocialPostForUser,
+  getSocialPostVisualAssetForUser,
+  approveSocialPostForUser,
   listSocialPostsForUser,
   SocialPostServiceError,
 } from './social-posts';
@@ -304,5 +308,335 @@ describe('social post API routes', () => {
       error: { code: 'internal-error', message: 'Could not load social posts.' },
     });
     expect(body).not.toContain(providerDetail);
+  });
+
+  it('PATCH approves a DRAFT post and returns the updated metadata', async () => {
+    const getText = vi.fn(async (key: string) => {
+      if (key.endsWith('metadata.json')) return JSON.stringify(metadata);
+      return '';
+    });
+    const replaceText = vi.fn();
+    mocks.rootStoreFactory.mockReturnValue(createRootStore({ getText, replaceText }));
+
+    const response = await patchPostRoute(
+      new Request(`http://localhost`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'APPROVED' }),
+      }),
+      { params: Promise.resolve({ postId }) },
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.metadata.status).toBe('APPROVED');
+    expect(replaceText).toHaveBeenCalledOnce();
+  });
+
+  it('PATCH rejects an unsupported status value', async () => {
+    const response = await patchPostRoute(
+      new Request(`http://localhost`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'PUBLISHED' }),
+      }),
+      { params: Promise.resolve({ postId }) },
+    );
+
+    expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.error.code).toBe('invalid-status');
+  });
+
+  it('PATCH requires identity', async () => {
+    mocks.getUserId.mockResolvedValue(null);
+    const response = await patchPostRoute(
+      new Request(`http://localhost`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'APPROVED' }),
+      }),
+      { params: Promise.resolve({ postId }) },
+    );
+
+    expect(response.status).toBe(403);
+    expect(mocks.rootStoreFactory).not.toHaveBeenCalled();
+  });
+});
+
+const assetId = 'sva_20260728120000_0000000a';
+const visualBytes: VisualAssetBytes = {
+  value: new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a]),
+  contentType: 'image/png',
+};
+
+describe('social post approval service', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getUserId.mockResolvedValue('user-1');
+  });
+
+  it('rejects missing identity before creating storage', async () => {
+    const rootStoreFactory = vi.fn(() => createRootStore());
+    const approvePost = vi.fn();
+
+    await expect(approveSocialPostForUser(postId, {
+      getServerUserId: async () => null,
+      rootStoreFactory,
+      approvePost,
+    })).rejects.toMatchObject({
+      code: 'forbidden',
+      status: 403,
+      message: 'Authentication is required.',
+    });
+    expect(rootStoreFactory).not.toHaveBeenCalled();
+    expect(approvePost).not.toHaveBeenCalled();
+  });
+
+  it('rejects a malformed post id before resolving storage', async () => {
+    const rootStoreFactory = vi.fn(() => createRootStore());
+    const approvePost = vi.fn();
+
+    await expect(approveSocialPostForUser('smp_legacy', {
+      getServerUserId: async () => 'user-1',
+      rootStoreFactory,
+      approvePost,
+    })).rejects.toMatchObject({
+      code: 'invalid-post-id',
+      status: 400,
+      message: 'Invalid social post id.',
+    });
+    expect(rootStoreFactory).not.toHaveBeenCalled();
+  });
+
+  it('calls the approve dependency through social-media-agent-namespaced storage', async () => {
+    const approvePost = vi.fn(async (store: ObjectStorage, id: string) => {
+      await store.getText(`social-posts/${id}/metadata.json`);
+      return { ...metadata, status: 'APPROVED' as const };
+    });
+
+    const result = await approveSocialPostForUser(postId, {
+      getServerUserId: async () => 'user-1',
+      rootStoreFactory: () => createRootStore({ getText: vi.fn(async () => '{}') }),
+      approvePost,
+    });
+
+    expect(result.status).toBe('APPROVED');
+    expect(approvePost).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['not-found', 'not-found', 404, 'Social post not found.'],
+    ['configuration', 'storage-unavailable', 503, 'Social post storage is unavailable.'],
+  ] as const)('maps ObjectStorageError %s without leaking details', async (
+    storageCode,
+    serviceCode,
+    status,
+    message,
+  ) => {
+    const providerDetail = 'private-endpoint request-id=secret';
+    let failure: unknown;
+
+    try {
+      await approveSocialPostForUser(postId, {
+        getServerUserId: async () => 'user-1',
+        rootStoreFactory: () => createRootStore(),
+        approvePost: async () => {
+          throw new ObjectStorageError(storageCode, providerDetail);
+        },
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(SocialPostServiceError);
+    expect(failure).toMatchObject({ code: serviceCode, status, message });
+    expect(String(failure)).not.toContain(providerDetail);
+  });
+});
+
+describe('social post visual asset server service', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getUserId.mockResolvedValue('user-1');
+  });
+
+  it('rejects missing identity before creating storage', async () => {
+    const rootStoreFactory = vi.fn(() => createRootStore());
+    const readVisualAsset = vi.fn(async () => visualBytes);
+
+    await expect(getSocialPostVisualAssetForUser(postId, assetId, {
+      getServerUserId: async () => null,
+      rootStoreFactory,
+      readVisualAsset,
+    })).rejects.toMatchObject({
+      code: 'forbidden',
+      status: 403,
+      message: 'Authentication is required.',
+    });
+    expect(rootStoreFactory).not.toHaveBeenCalled();
+    expect(readVisualAsset).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'smp_x',
+    'smp_20260714120000_DEADBEEF',
+    '../secret',
+  ])('rejects malformed post ID %s before resolving storage', async (malformedPostId) => {
+    const rootStoreFactory = vi.fn(() => createRootStore());
+    const readVisualAsset = vi.fn(async () => visualBytes);
+
+    await expect(getSocialPostVisualAssetForUser(malformedPostId, assetId, {
+      getServerUserId: async () => 'user-1',
+      rootStoreFactory,
+      readVisualAsset,
+    })).rejects.toMatchObject({
+      code: 'invalid-post-id',
+      status: 400,
+      message: 'Invalid social post id.',
+    });
+    expect(rootStoreFactory).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'sva_x',
+    'sva_20260728120000_DEADBEEF',
+    '../escape',
+    'arbitrary/object/key.png',
+  ])('rejects malformed asset ID %s before resolving storage', async (malformedAssetId) => {
+    const rootStoreFactory = vi.fn(() => createRootStore());
+    const readVisualAsset = vi.fn(async () => visualBytes);
+
+    await expect(getSocialPostVisualAssetForUser(postId, malformedAssetId, {
+      getServerUserId: async () => 'user-1',
+      rootStoreFactory,
+      readVisualAsset,
+    })).rejects.toMatchObject({
+      code: 'invalid-asset-id',
+      status: 400,
+      message: 'Invalid visual asset id.',
+    });
+    expect(rootStoreFactory).not.toHaveBeenCalled();
+  });
+
+  it('returns the stored bytes and content type for a valid asset', async () => {
+    await expect(getSocialPostVisualAssetForUser(postId, assetId, {
+      getServerUserId: async () => 'user-1',
+      rootStoreFactory: () => createRootStore(),
+      readVisualAsset: async () => visualBytes,
+    })).resolves.toEqual(visualBytes);
+  });
+
+  it.each([
+    ['not-found', 'not-found', 404, 'Social post not found.'],
+    ['configuration', 'storage-unavailable', 503, 'Social post storage is unavailable.'],
+    ['unavailable', 'storage-unavailable', 503, 'Social post storage is unavailable.'],
+  ] as const)('maps ObjectStorageError %s without leaking provider details', async (
+    storageCode,
+    serviceCode,
+    status,
+    message,
+  ) => {
+    const providerDetail = 'private-endpoint request-id=secret';
+    let failure: unknown;
+
+    try {
+      await getSocialPostVisualAssetForUser(postId, assetId, {
+        getServerUserId: async () => 'user-1',
+        rootStoreFactory: () => createRootStore(),
+        readVisualAsset: async () => {
+          throw new ObjectStorageError(storageCode, providerDetail);
+        },
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(SocialPostServiceError);
+    expect(failure).toMatchObject({ code: serviceCode, status, message });
+    expect(String(failure)).not.toContain(providerDetail);
+  });
+});
+
+describe('social post visual asset API route', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getUserId.mockResolvedValue('user-1');
+  });
+
+  it('returns the image bytes with the correct content type and cache headers', async () => {
+    const getText = vi.fn(async (key: string) => key.endsWith('metadata.json')
+      ? JSON.stringify({
+        ...metadata,
+        status: 'APPROVED',
+        visualAssets: [{
+          assetId,
+          objectKey: `social-posts/${postId}/visuals/${assetId}.png`,
+          imageUrl: `/api/storage/social-posts/${postId}/visuals/${assetId}`,
+          mimeType: 'image/png',
+          generatedAt: '2026-07-28T12:00:00.000Z',
+          model: 'gemini-3.1-flash-image',
+          prompt: 'soft morning light',
+        }],
+        activeVisualAssetId: assetId,
+      })
+      : '');
+    const getBytes = vi.fn(async () => ({ value: visualBytes.value, contentType: 'image/png' }));
+    mocks.rootStoreFactory.mockReturnValue(createRootStore({ getText, getBytes }));
+
+    const response = await getVisualAssetRoute(new Request('http://localhost'), {
+      params: Promise.resolve({ postId, assetId }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Content-Type')).toBe('image/png');
+    expect(response.headers.get('Cache-Control')).toContain('immutable');
+    const body = new Uint8Array(await response.arrayBuffer());
+    expect(body).toEqual(visualBytes.value);
+  });
+
+  it('returns 400 for an invalid asset id and never resolves storage', async () => {
+    const response = await getVisualAssetRoute(new Request('http://localhost'), {
+      params: Promise.resolve({ postId, assetId: '../escape' }),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: { code: 'invalid-asset-id', message: 'Invalid visual asset id.' },
+    });
+    expect(mocks.rootStoreFactory).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 when the asset id does not belong to the post', async () => {
+    const getText = vi.fn(async (key: string) => key.endsWith('metadata.json')
+      ? JSON.stringify({ ...metadata, visualAssets: [] })
+      : '');
+    mocks.rootStoreFactory.mockReturnValue(createRootStore({ getText }));
+
+    const response = await getVisualAssetRoute(new Request('http://localhost'), {
+      params: Promise.resolve({ postId, assetId }),
+    });
+
+    expect(response.status).toBe(404);
+    const body = await response.text();
+    expect(JSON.parse(body)).toEqual({
+      error: { code: 'not-found', message: 'Social post not found.' },
+    });
+  });
+
+  it('never leaks provider details on a storage failure', async () => {
+    const providerDetail = 'https://garage.internal token=secret';
+    const getText = vi.fn(async () => {
+      throw new ObjectStorageError('unavailable', providerDetail);
+    });
+    mocks.rootStoreFactory.mockReturnValue(createRootStore({ getText }));
+
+    const response = await getVisualAssetRoute(new Request('http://localhost'), {
+      params: Promise.resolve({ postId, assetId }),
+    });
+    const body = await response.text();
+
+    expect(response.status).toBe(503);
+    expect(body).not.toMatch(/garage\.internal|token=secret|secret/);
   });
 });

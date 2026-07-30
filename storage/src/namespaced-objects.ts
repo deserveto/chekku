@@ -1,4 +1,4 @@
-import type { ObjectStorage } from './objects.ts';
+import type { BinaryObjectStorage, ObjectStorage } from './objects.ts';
 
 const MAX_KEY_BYTES = 512;
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f-\u009f]/;
@@ -35,7 +35,7 @@ export function encodeAgentNamespace(agentId: string): string {
 export function createNamespacedObjectStorage(
   root: ObjectStorage,
   agentId: string,
-): ObjectStorage {
+): BinaryObjectStorage {
   const namespace = `agents/${encodeAgentNamespace(agentId)}/`;
   const keyFor = (key: string): string => `${namespace}${validateRelativeObjectKey(key)}`;
 
@@ -67,6 +67,24 @@ export function createNamespacedObjectStorage(
           .map((key) => key.slice(namespace.length)),
         truncated: result.truncated,
       };
+    },
+    async createBytes(key, value, contentType) {
+      if (!root.createBytes) {
+        throw new Error('Binary object storage is not supported by this store.');
+      }
+      await root.createBytes(keyFor(key), value, contentType);
+    },
+    async replaceBytes(key, value, contentType) {
+      if (!root.replaceBytes) {
+        throw new Error('Binary object storage is not supported by this store.');
+      }
+      await root.replaceBytes(keyFor(key), value, contentType);
+    },
+    async getBytes(key) {
+      if (!root.getBytes) {
+        throw new Error('Binary object storage is not supported by this store.');
+      }
+      return root.getBytes(keyFor(key));
     },
   };
 }

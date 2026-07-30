@@ -164,3 +164,93 @@ describe('agent namespace storage', () => {
     expect(root.calls).toEqual([]);
   });
 });
+
+function createBinaryMemoryStorage() {
+  const bytes = new Map<string, { value: Uint8Array; contentType?: string }>();
+  const calls: Array<{ operation: string; key: string; extra?: unknown }> = [];
+  const storage: ObjectStorage = {
+    async createText(key, value) {
+      bytes.set(key, { value: new TextEncoder().encode(value) });
+    },
+    async replaceText(key, value) {
+      bytes.set(key, { value: new TextEncoder().encode(value) });
+    },
+    async getText(key) {
+      const entry = bytes.get(key);
+      return entry ? new TextDecoder().decode(entry.value) : '';
+    },
+    async exists(key) {
+      return bytes.has(key);
+    },
+    async delete(key) {
+      bytes.delete(key);
+    },
+    async listKeys(prefix) {
+      return {
+        keys: [...bytes.keys()].filter((key) => key.startsWith(prefix)).sort(),
+        truncated: false,
+      };
+    },
+    async createBytes(key, value, contentType) {
+      calls.push({ operation: 'createBytes', key, extra: contentType });
+      if (bytes.has(key)) {
+        throw new Error(`Already exists: ${key}`);
+      }
+      bytes.set(key, { value: new Uint8Array(value), contentType });
+    },
+    async replaceBytes(key, value, contentType) {
+      calls.push({ operation: 'replaceBytes', key, extra: contentType });
+      bytes.set(key, { value: new Uint8Array(value), contentType });
+    },
+    async getBytes(key) {
+      calls.push({ operation: 'getBytes', key });
+      const entry = bytes.get(key);
+      if (!entry) throw new Error(`Missing object: ${key}`);
+      return { value: new Uint8Array(entry.value), ...(entry.contentType ? { contentType: entry.contentType } : {}) };
+    },
+  };
+  return { bytes, calls, storage };
+}
+
+describe('agent namespace binary storage', () => {
+  it('routes binary create and read through the agent namespace prefix', async () => {
+    const root = createBinaryMemoryStorage();
+    const store = createNamespacedObjectStorage(root.storage, 'social-media-agent');
+    const namespace = `agents/${encodeAgentNamespace('social-media-agent')}/`;
+
+    const image = new Uint8Array([0, 1, 2, 3]);
+    await store.createBytes('social-posts/smp_1/visuals/sva_1.png', image, 'image/png');
+
+    expect([...root.bytes.keys()]).toEqual([
+      `${namespace}social-posts/smp_1/visuals/sva_1.png`,
+    ]);
+
+    await expect(store.getBytes('social-posts/smp_1/visuals/sva_1.png')).resolves.toEqual({
+      value: image,
+      contentType: 'image/png',
+    });
+  });
+
+  it('isolates binary objects across agent namespaces', async () => {
+    const root = createBinaryMemoryStorage();
+    const social = createNamespacedObjectStorage(root.storage, 'social-media-agent');
+    const foreign = createNamespacedObjectStorage(root.storage, 'other-agent');
+
+    const image = new Uint8Array([10, 20]);
+    await social.createBytes('social-posts/p1/visuals/v1.png', image, 'image/png');
+    await foreign.createBytes('social-posts/p1/visuals/v1.png', new Uint8Array([99]), 'image/png');
+
+    await expect(social.getBytes('social-posts/p1/visuals/v1.png')).resolves.toMatchObject({
+      value: image,
+    });
+  });
+
+  it('validates binary keys before calling root storage', async () => {
+    const root = createBinaryMemoryStorage();
+    const store = createNamespacedObjectStorage(root.storage, 'social-media-agent');
+
+    await expect(store.createBytes('../escape', new Uint8Array([1]))).rejects.toThrow();
+    await expect(store.getBytes('escape\\key')).rejects.toThrow();
+    expect(root.calls).toEqual([]);
+  });
+});
