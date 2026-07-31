@@ -10,6 +10,7 @@ import {
   normalizeCommandWord,
   listRolesText,
   buildInstructions,
+  buildCanonicalInstructions,
   buildInstructionsForRole,
   HELP_TEXT,
   unknownCommandReply,
@@ -234,6 +235,39 @@ describe('buildInstructions', () => {
       expect(instructions).toContain('draft and plan only');
       expect(instructions).toContain('Chekku Social');
     }
+  });
+});
+
+describe('buildCanonicalInstructions', () => {
+  it('frames the visual script brick as a platform-agnostic sequence of visual concepts', () => {
+    const instructions = buildCanonicalInstructions();
+    expect(instructions).toContain('VISUAL / VIDEO SCRIPT BRICK');
+    expect(instructions).toContain('platform-agnostic');
+    expect(instructions).toContain('sequence of reusable visual concepts');
+    expect(instructions).toContain('Do NOT label items "Panel 1');
+    expect(instructions).toContain('one concept can carry it');
+    expect(instructions).toContain('Ground every visual in the source');
+    expect(instructions).toContain('Do NOT include camera direction');
+    expect(instructions).toContain('transition effects');
+    expect(instructions).toContain('"carousel", "slide", or "reel"');
+  });
+
+  it('demands descriptive Purpose, concrete scenes, concise Overlay, and a coherent narrative', () => {
+    const instructions = buildCanonicalInstructions();
+    expect(instructions).toContain('generic labels');
+    expect(instructions).toContain('Highlight the healthcare accessibility problem');
+    expect(instructions).toContain('prioritize concrete scenes');
+    expect(instructions).toContain('logos, maps, icons');
+    expect(instructions).toContain('3–8 words');
+    expect(instructions).toContain('Never a full sentence');
+    expect(instructions).toContain('coherent story');
+  });
+
+  it('keeps the medium-form brick factual and hedged', () => {
+    const instructions = buildCanonicalInstructions();
+    expect(instructions).toContain('Keep it factual');
+    expect(instructions).toContain('diharapkan');
+    expect(instructions).toContain('berpotensi');
   });
 });
 

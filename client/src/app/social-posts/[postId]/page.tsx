@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import ApproveButton from './ApproveButton';
 import { MarkdownMessage } from '@/components/markdown-message';
 import { StudioNav } from '@/components/studio/studio-nav';
+import { splitPostMarkdown } from '@/lib/post-markdown';
 import {
   getSocialPostForUser,
   SocialPostServiceError,
@@ -57,6 +58,8 @@ export default async function SocialPostDetailPage({
     );
   }
 
+  const { canonicalMarkdown, captionMarkdown } = splitPostMarkdown(post.postMarkdown);
+  const hasCanonical = Boolean(canonicalMarkdown);
   const activeVisual = post.metadata.activeVisualAssetId
     ? post.metadata.visualAssets?.find((asset) => asset.assetId === post.metadata.activeVisualAssetId)
     : undefined;
@@ -69,7 +72,11 @@ export default async function SocialPostDetailPage({
           <div>
             <p className="studio-eyebrow">Social post</p>
             <h1>{post.postId}</h1>
-            <p>Drafted caption first, followed by storage metadata and the brief that generated it.</p>
+            <p>
+              {hasCanonical
+                ? 'Drafted canonical content unit and the repurposed caption derived from it, followed by storage metadata and the brief that generated it.'
+                : 'Drafted caption first, followed by storage metadata and the brief that generated it.'}
+            </p>
           </div>
           <div className="studio-report-header-actions">
             {post.metadata.status === 'DRAFT' ? (
@@ -80,10 +87,19 @@ export default async function SocialPostDetailPage({
         </header>
 
         <div className="studio-report-detail">
+          {hasCanonical && (
+            <section className="studio-panel studio-report-panel">
+              <h2 className="studio-eyebrow">Canonical Content Unit</h2>
+              <div className="studio-report-markdown markdown">
+                <MarkdownMessage content={canonicalMarkdown!} />
+              </div>
+            </section>
+          )}
+
           <section className="studio-panel studio-report-panel">
-            <h2 className="studio-eyebrow">Caption</h2>
+            <h2 className="studio-eyebrow">{hasCanonical ? 'Repurposed Caption' : 'Caption'}</h2>
             <div className="studio-report-markdown markdown">
-              <MarkdownMessage content={post.postMarkdown} />
+              <MarkdownMessage content={captionMarkdown} />
             </div>
           </section>
 

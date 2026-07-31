@@ -13,18 +13,22 @@ import { visualContentAgent } from './visual-content-agent.js';
  *
  * The routing agent that owns the social-media surface and delegates drafting
  * work to its sub-agents. It has no tools of its own — per the supervisor
- * architecture, it only routes incoming requests to the right sub-agent
- * (Content Writer today; Strategist in a later phase).
+ * architecture, it only routes incoming requests to the right sub-agent:
+ * Content Writer (drafting/repurposing/planning of platform posts) and
+ * Strategist (Content Strategy Brief and Content Plan research/interviews).
  *
  * Routing is exercised via Mastra's `agents` sub-agent field, which exposes
  * each sub-agent as a delegation primitive the supervisor can invoke through
- * its network loop. Active call paths (chat UI, future integrations) opt into
+ * its network loop. Active call paths (chat UI, scheduled workflow) opt into
  * routing by calling the supervisor; the Telegram channel stays on the
  * Content Writer for this refactor per the meeting brief.
  *
- * Sub-agents today: the Content Writer (drafting/repurposing/planning of
- * platform posts) and the Strategist (Content Strategy Brief and Content
- * Plan research/interviews).
+ * Scheduled workflow fast-path: when the weekly-social-drafts workflow calls
+ * the supervisor with the "[weekly-social-drafts]" system marker, the
+ * supervisor delegates straight to Content Writer without reasoning. This
+ * keeps the supervisor as the single routing seam for the social-media
+ * surface (per locked D3=a) without paying an extra reasoning turn for a
+ * deterministic call path.
  *
  * The supervisor still binds Memory and the same context-safety processors as
  * the other code-defined agents so its own turns cannot overflow the model
@@ -59,7 +63,10 @@ How you work:
 - Return the sub-agent's output to the user without reformatting, summarizing, or adding your own preamble.
 - If a request is clearly out of social-media scope, say so in one short line and suggest the right Chekku agent. Do not invent capabilities.
 - Keep replies concise and skimmable; no preamble like "Sure!" — lead with the delegated result.
-- You plan and route only. Do not claim to publish or to generate images yourself; publishing is a later phase.`,
+- You plan and route only. Do not claim to publish or to generate images yourself; publishing is a later phase.
+
+Scheduled workflow routing (deterministic fast-path):
+- When the prompt starts with the system marker "[weekly-social-drafts]", the request comes from the scheduled weekly-social-drafts workflow. It always wants the Content Writer (canonical content unit drafting) — never the Strategist. Delegate to Content Writer immediately without reasoning about which sub-agent is appropriate, without preamble, and without surfacing the marker to the user. The workflow already knows the target sub-agent; your reasoning step would only add latency and a non-determinism risk for a deterministic call path.`,
 };
 
 export const socialMediaSupervisorAgent = new Agent(socialMediaSupervisorAgentConfig);
