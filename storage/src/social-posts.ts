@@ -273,6 +273,24 @@ function parseSocialPostMetadata(value: unknown): SocialPostMetadata | undefined
  * touches storage. The caller (workflow) is responsible for writing the three
  * objects in `brief → post → metadata` order so partial saves never become
  * list entries.
+ *
+ * `post.md` content contract (per PROMPT.md action item #3 — Canonical
+ * Content Unit, locked D2=c layered + D4=a markdown serialized): the file
+ * stores BOTH the canonical content unit and the repurposed platform caption,
+ * wrapped via HTML comment delimiters from
+ * `agent/src/mastra/social-content/canonical-unit.ts` → `wrapPostMarkdown`:
+ *
+ *     <!-- canonical-unit -->
+ *     <canonical unit markdown — 7-brick platform-agnostic intermediate>
+ *     <!-- /canonical-unit -->
+ *     <!-- repurposed-caption -->
+ *     <final platform-specific caption>
+ *     <!-- /repurposed-caption -->
+ *
+ * The metadata schema itself does not change — the canonical unit is just
+ * markdown text. Legacy posts written before the canonical contract fall back
+ * gracefully: `unwrapPostMarkdown` returns the whole file as
+ * `canonicalMarkdown` when no delimiters are present.
  */
 export function buildSocialPostMetadata(input: SocialPostMetadataInput): BuiltSocialPost {
   if (typeof input.topic !== 'string' || input.topic.trim().length === 0) {

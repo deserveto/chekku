@@ -39,6 +39,11 @@ vi.mock('@/server/social-posts', () => {
   };
 });
 vi.mock('@/server/social-post-format', async () => import('../../server/social-post-format'));
+// `@/` aliases are not resolved by the vitest environment for real files, so
+// re-export the real implementation via a relative import (same pattern as
+// the social-post-format mock above) — the page's `@/lib/post-markdown` import
+// is satisfied and the real `splitPostMarkdown` runs end-to-end.
+vi.mock('@/lib/post-markdown', async () => import('../../lib/post-markdown'));
 
 import { SocialPostServiceError } from '@/server/social-posts';
 

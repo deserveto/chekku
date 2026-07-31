@@ -7,13 +7,22 @@ import {
 } from '@chekku/storage';
 import { z } from 'zod';
 
-import { socialMediaContentWriter, buildInstructionsForRole } from '../../agents/social-media-content-writer.js';
+import {
+  createSocialDraftRequestContext,
+  socialMediaContentWriter,
+} from '../../agents/social-media-content-writer.js';
+import { socialMediaSupervisorAgent } from '../../agents/social-media-supervisor-agent.js';
 import { env } from '../../config/env.js';
 import {
   createPublicHolidayClient,
   type PublicHoliday,
   type PublicHolidayClient,
 } from '../calendar/public-holidays.js';
+import {
+  CANONICAL_UNIT_TEMPLATE,
+  parseCanonicalUnit,
+  wrapPostMarkdown,
+} from '../social-content/canonical-unit.js';
 import { createCreateTextObjectTool } from '../tools/garage-object-tools.js';
 import { sendEmailViaResend, type SendEmailInput } from '../tools/send-email.js';
 import { searchWebTool } from '../tools/searxng-search.js';
@@ -59,18 +68,30 @@ import { researchTrendingTopics, type ReadPageFn, type SearchFn } from './trendi
  * it, while keeping canonical post id / key / metadata construction
  * deterministic via `buildSocialPostMetadata`.
  *
- * The drafter reuses `socialMediaContentWriter` so the Instagram voice stays a single
- * source of truth (the `instagram-writer` role). Because the workflow runs
- * outside any chat channel, the role cannot be resolved from channel context;
- * we pin it by overriding the agent's instructions via `generate(..., {
- * instructions })`.
+ * Two-step drafting (per PROMPT.md action item #3, locked D2=c layered):
+ *
+ * 1. Canonical step — the workflow calls `socialMediaSupervisorAgent.generate()`
+ *    (per D3=a) with the system marker `[weekly-social-drafts]` so the
+ *    supervisor delegates straight to Content Writer without reasoning. The
+ *    Content Writer runs in canonical mode (`buildCanonicalInstructions`) and
+ *    emits a Canonical Content Unit: a platform-agnostic intermediate
+ *    representation with [TOPIC], [THESIS], HOOKS, CORE POINTS, and three
+ *    platform bricks (short-form, medium-form, visual/video).
+ *
+ * 2. Repurpose step — the workflow calls `socialMediaContentWriter.generate()`
+ *    with repurpose instructions (`buildRepurposeInstructions`) and a format
+ *    directive (`buildRepurposePrompt` dispatches by topic kind: greeting-card
+ *    for awareness days/evergreen, Folkative news caption for trending). The
+ *    AGENTS.md format-split invariant lives in this layer.
+ *
+ * The two outputs are wrapped together (`wrapPostMarkdown`) and stored in
+ * `post.md` under HTML comment delimiters so legacy readers can still render
+ * the file as Markdown while canonical-aware readers can split the sections.
  *
  * The orchestrator (`runWeeklySocialDrafts`) is dependency-injected so the
  * schedule/agent/storage/email/search seams can be unit-tested with fakes;
  * the `createStep` binding supplies the real defaults.
  */
-
-const INSTAGRAM_INSTRUCTIONS = buildInstructionsForRole('instagram-writer');
 
 // ---------------------------------------------------------------------------
 // Garage MCP tool wiring
@@ -125,39 +146,94 @@ export function buildPostUrl(postId: string, webUrl: string): string {
 }
 
 /**
- * Build the draft prompt for one topic. Format splits by topic kind:
+ * Canonical-content-unit prompt (Step 1 of the layered flow, per PROMPT.md
+ * action item #3 + locked D2=c). Asks the Content Writer (running in
+ * canonical mode via {@link buildCanonicalInstructions}) to produce a
+ * platform-agnostic Canonical Content Unit from the topic — not a final
+ * platform caption. The supervisor routes this call straight to Content
+ * Writer because of the `[weekly-social-drafts]` system marker (see
+ * Supervisor instructions).
  *
- * - `trending` → Folkative-style news caption (10-15 word headline for the
- *   image, 1-2 paragraph casual conversational caption, CTA + emoji at the
- *   end). No brand stamps, no formal sign-off, no "Poin-poin" bullets.
- *
- * - `special-day` and `evergreen` → brand greeting-card copy (matches the
- *   RafiqSpace R brand examples: header → "Selamat {day}" title → date line
- *   → opening → optional verse → "Poin-poin" brand-value bullets → tagline
- *   → formal sign-off). This path is unchanged from Stage 2.
- *
- * The split is intentional: awareness-day content suits the formal brand
- * greeting-card voice, but trending news reads as a brand-stamped
- * pseudo-greeting when forced into that structure. Trending needs the casual
- * news-magazine voice (Folkative-style) to land with the audience.
+ * Output contract: a markdown blob with `[TOPIC]`, `[THESIS]`, `HOOKS` (all
+ * three angles), `CORE POINTS` (3-5 bullets), `SHORT-FORM BRICK`,
+ * `MEDIUM-FORM BRICK`, `VISUAL / VIDEO SCRIPT BRICK`, and
+ * `CALL TO ACTION / ENGAGEMENT` sections — see {@link CANONICAL_UNIT_TEMPLATE}.
  */
-export function buildDraftPrompt(topic: Topic, weekStart: string): string {
-  if (topic.kind === 'trending') return buildTrendingCaptionPrompt(topic, weekStart);
-  return buildGreetingCardPrompt(topic, weekStart);
-}
-
-/**
- * Folkative-style caption prompt for trending topics. Indonesian-first,
- * casual conversational tone, no brand stamps, no formal sign-off.
- */
-export function buildTrendingCaptionPrompt(topic: Topic, weekStart: string): string {
+export function buildCanonicalPrompt(topic: Topic, weekStart: string): string {
   const sourceBlock = buildSourceBlock(topic);
-  return `Draft ONE Instagram post for this week's trending topic. The output is a Folkative-style news caption (casual, conversational, ready for Instagram), NOT a formal greeting card.
+  return `[weekly-social-drafts] Canonical Content Unit request.
 
 Topic: ${topic.name}
 Angle: ${topic.angle}
 ${sourceBlock}
 Week of: ${weekStart}
+
+Draft ONE Canonical Content Unit for this topic. The output is NOT a final Instagram/LinkedIn caption — it is the platform-agnostic intermediate that a downstream repurpose step will derive platform captions from.
+
+Required output structure (produce every section, in this exact order):
+
+${CANONICAL_UNIT_TEMPLATE}
+
+Rules:
+- Indonesian-first when the topic targets Indonesian audience; English only when natural.
+- [THESIS] is the angle or point of view — not a topic summary. Make it sharp enough that a reader could disagree with it.
+- HOOKS must include all three angles: Curiosity, Contrarian, Data/Impact. Each hook is a single line, ready to lead a post.
+- CORE POINTS are the substance — 3 to 5 self-contained bullets. Each bullet must make sense on its own.
+- Each platform brick (SHORT-FORM / MEDIUM-FORM / VISUAL-VIDEO) must be self-contained. Do NOT cross-reference ("see above"). A downstream repurpose step will read bricks independently.
+- Never invent quotes, stats, or facts. If a claim needs a source, leave a [source] placeholder.
+
+DILARANG KERAS (aturan ini wajib dipatuhi tanpa pengecualian):
+- DILARANG menambah paragraf pembuka berupa "Assumption:", "Note:", "Catatan:", "Since no specific article...", "Because the link is a section page...", atau meta-commentary / reasoning paragraph APAPUN. Output HARUS langsung dimulai dari "[TOPIC]". Jangan jelaskan proses berpikir model.
+  - DILARANG mention sumber article/URL di output ("Menurut CNN Indonesia...", "Berdasarkan berita dari..."). Reference di Source block di atas adalah konteks riset internal, bukan untuk di-paste ke canonical unit.
+  - Reference URL/title/snippet/page content di Source block di atas adalah konteks riset saja. JANGAN paste URL, judul mentah, atau raw research ke output canonical. Output canonical di-persist verbatim dan ditampilkan ke reviewer, jadi tidak boleh membocorkan raw research.
+- Kalau reference adalah section/category page (mis. CNN Indonesia Teknologi homepage), ANGGAP itu topik terkini di bidang tersebut. JANGAN bilang "asumsi", "assumption", atau "karena tidak ada artikel spesifik" di output.
+- Output the canonical unit ONLY. No preamble, no postscript, no explanation, no "Here is the canonical unit…" line.`;
+}
+
+/**
+ * Repurpose prompt (Step 2 of the layered flow). Takes a Canonical Content
+ * Unit (the markdown blob produced by {@link buildCanonicalPrompt}) and a
+ * topic, and asks the Content Writer (running in repurpose mode via
+ * {@link buildRepurposeInstructions}) to derive a final Instagram caption
+ * that follows the format-appropriate style for the topic kind.
+ *
+ * Per AGENTS.md invariant (locked in D2=c): the format split — greeting-card
+ * for awareness days/evergreen, Folkative news caption for trending — lives
+ * in this layer, not in canonical generation. Canonical is always
+ * platform-agnostic; repurpose applies the brand stamps (or absence thereof).
+ */
+export function buildRepurposePrompt(
+  canonicalMarkdown: string,
+  topic: Topic,
+  weekStart: string,
+): string {
+  if (topic.kind === 'trending') {
+    return buildTrendingRepurposePrompt(canonicalMarkdown, topic, weekStart);
+  }
+  return buildGreetingCardRepurposePrompt(canonicalMarkdown, topic, weekStart);
+}
+
+/**
+ * Folkative-style repurpose prompt for trending topics. Combines the canonical
+ * unit with a "repurpose canonical → Folkative caption" directive (10-15 word
+ * headline for the image + casual conversational caption + subtle CTA).
+ */
+function buildTrendingRepurposePrompt(
+  canonicalMarkdown: string,
+  topic: Topic,
+  weekStart: string,
+): string {
+  const sourceBlock = buildSourceBlock(topic);
+  return `Repurpose the Canonical Content Unit below into ONE Folkative-style Instagram caption. The output is a casual news-magazine caption, NOT a formal greeting card.
+
+Topic: ${topic.name}
+Angle: ${topic.angle}
+${sourceBlock}
+Week of: ${weekStart}
+
+Canonical Content Unit (the source of truth — do not contradict its thesis or invent claims beyond it):
+
+${canonicalMarkdown.trim()}
 
 Required output structure (produce every section, in this exact order):
 
@@ -194,20 +270,28 @@ Output: [Headline for image] + [Caption] saja. Tidak ada teks lain sebelum, sesu
 }
 
 /**
- * Brand greeting-card prompt for awareness days and evergreen pillars.
- * Output matches the RafiqSpace R brand examples: header → title → date
- * line → opening → optional verse → "Poin-poin" brand-value bullets →
- * tagline → sign-off.
+ * Brand greeting-card repurpose prompt for awareness days and evergreen
+ * pillars. Combines the canonical unit with a "repurpose canonical →
+ * greeting-card caption" directive (R brand header, "Poin-poin" brand-value
+ * bullets, tagline, formal sign-off).
  */
-export function buildGreetingCardPrompt(topic: Topic, weekStart: string): string {
+function buildGreetingCardRepurposePrompt(
+  canonicalMarkdown: string,
+  topic: Topic,
+  weekStart: string,
+): string {
   const sourceBlock = buildSourceBlock(topic);
   const titleHint = buildTitleHint(topic);
-  return `Draft ONE brand greeting-card post for this week's content calendar. The output is greeting-card copy that will be rendered into a brand image, not a traditional Instagram caption.
+  return `Repurpose the Canonical Content Unit below into ONE brand greeting-card Instagram post. The output is greeting-card copy that will be rendered into a brand image, not a traditional Instagram caption.
 
 Topic: ${topic.name}
 Angle: ${topic.angle}
 ${sourceBlock}
 Week of: ${weekStart}
+
+Canonical Content Unit (the source of truth — do not contradict its thesis or invent claims beyond it):
+
+${canonicalMarkdown.trim()}
 
 Required output structure (produce every line, in this exact order):
 
@@ -394,7 +478,22 @@ export function renderReviewEmail(
 // ---------------------------------------------------------------------------
 // Dependency-injected orchestrator
 // ---------------------------------------------------------------------------
-export type DraftGenerateFn = (prompt: string, instructions: string) => Promise<string>;
+
+/**
+ * Generate-function signatures. Two are exposed because the workflow runs a
+ * two-step layered flow (per PROMPT.md #3 + locked D2=c):
+ *
+ * - {@link CanonicalGenerateFn} — Step 1. Routes through the supervisor (per
+ *   D3=a) so the supervisor stays the single routing seam for the
+ *   social-media surface. The supervisor sees the `[weekly-social-drafts]`
+ *   system marker in the prompt and delegates straight to Content Writer.
+ *
+ * - {@link RepurposeFn} — Step 2. Calls Content Writer directly (it already
+ *   holds the canonical unit; no routing decision to make) with repurpose
+ *   instructions and a format-specific prompt (greeting-card or Folkative).
+ */
+export type CanonicalGenerateFn = (prompt: string) => Promise<string>;
+export type RepurposeFn = (prompt: string) => Promise<string>;
 export type CreateTextFn = (key: string, text: string) => Promise<void>;
 export type SendReviewEmailFn = (input: SendEmailInput) => Promise<unknown>;
 export type SelectBonusAwarenessDayFn = (now: Date) => Promise<SpecialDay | undefined>;
@@ -417,14 +516,54 @@ export interface WeeklySocialDraftsDeps {
   readPage?: ReadPageFn | undefined;
   /** Override the awareness-day bonus picker (defaults to the calendar). */
   selectBonusAwarenessDay?: SelectBonusAwarenessDayFn;
-  generate?: DraftGenerateFn;
+  /**
+   * Step 1 seam — canonical generation via supervisor. Override in tests to
+   * stub the supervisor+writer LLM call.
+   */
+  generateCanonical?: CanonicalGenerateFn;
+  /**
+   * Step 2 seam — repurpose via Content Writer. Override in tests to stub
+   * the repurpose LLM call.
+   */
+  repurpose?: RepurposeFn;
   createText?: CreateTextFn;
   sendEmail?: SendReviewEmailFn;
   webUrl?: string;
 }
 
-const defaultGenerate: DraftGenerateFn = (prompt, instructions) =>
-  socialMediaContentWriter.generate(prompt, { instructions }).then((result) => result.text);
+/**
+ * Step 1 default — calls the Supervisor. Per locked D3=a (full supervisor
+ * routing), the workflow does not bypass the supervisor even though it
+ * already knows the target sub-agent. The supervisor sees the
+ * `[weekly-social-drafts]` system marker in {@link buildCanonicalPrompt} and
+ * delegates straight to Content Writer per its static instructions
+ * (`agent/src/agents/social-media-supervisor-agent.ts`).
+ *
+ * The canonical mode is carried via `requestContext` (not the Mastra
+ * `.generate({ instructions })` option) so the Supervisor's OWN routing
+ * instructions run — passing `instructions` here would override them and the
+ * Supervisor would draft the unit itself. When the Supervisor delegates to the
+ * Content Writer, `requestContext` propagates and the Content Writer's
+ * instructions resolver switches to canonical mode. See
+ * `SOCIAL_DRAFT_MODE_KEY` in `social-media-content-writer.ts`.
+ */
+export const defaultGenerateCanonical: CanonicalGenerateFn = (prompt) =>
+  socialMediaSupervisorAgent
+    .generate(prompt, { requestContext: createSocialDraftRequestContext('canonical') })
+    .then((result) => result.text);
+
+/**
+ * Step 2 default — calls Content Writer directly. The canonical unit is
+ * already in hand; no routing decision is needed, so the supervisor is not
+ * invoked again (avoids +1 reasoning turn per post). The repurpose + Instagram
+ * mode is pinned via `requestContext` so the Content Writer's instructions
+ * resolver returns `buildRepurposeInstructions(instagram-writer)` without the
+ * caller overriding instructions.
+ */
+export const defaultRepurpose: RepurposeFn = (prompt) =>
+  socialMediaContentWriter
+    .generate(prompt, { requestContext: createSocialDraftRequestContext('repurpose-instagram') })
+    .then((result) => result.text);
 
 const defaultCreateText: CreateTextFn = (key, text) =>
   defaultCreateTextTool.execute!({ key, text }, SOCIAL_AGENT_CONTEXT).then(() => undefined);
@@ -538,7 +677,8 @@ export async function runWeeklySocialDrafts(
   const now = deps.now?.() ?? new Date();
   const weekStart = weekStartLabel(now);
   const webUrl = deps.webUrl ?? env.WEB_URL;
-  const generate = deps.generate ?? defaultGenerate;
+  const generateCanonical = deps.generateCanonical ?? defaultGenerateCanonical;
+  const repurpose = deps.repurpose ?? defaultRepurpose;
   const createText = deps.createText ?? defaultCreateText;
   const sendEmail = deps.sendEmail ?? defaultSendEmail;
   // The recipient always comes from `SOCIAL_DRAFT_REVIEW_EMAIL`. The workflow
@@ -617,8 +757,37 @@ export async function runWeeklySocialDrafts(
 
   const posts: DraftedPost[] = [];
   for (const topic of topics) {
-    const prompt = buildDraftPrompt(topic, weekStart);
-    const postMarkdown = await generate(prompt, INSTAGRAM_INSTRUCTIONS);
+    // Step 1: canonical unit via supervisor (per locked D2=c + D3=a). The
+    // canonical mode is carried in requestContext, not an instructions
+    // override, so the supervisor's own routing instructions run and it
+    // delegates to Content Writer.
+    const canonicalPrompt = buildCanonicalPrompt(topic, weekStart);
+    const canonicalMarkdown = await generateCanonical(canonicalPrompt);
+
+    // Validate the canonical unit before persisting. An empty, refused, or
+    // unstructured response must not be written to post.md verbatim or
+    // re-injected into the repurpose prompt as "the source of truth". Skip
+    // the post, log, and surface a researchNote so the run is not silently
+    // incomplete (AGENTS.md: "Preserve errors that help the user act").
+    if (parseCanonicalUnit(canonicalMarkdown) === undefined) {
+      console.warn(
+        `[weekly-social-drafts] Canonical unit for "${topic.name}" was empty or unstructured; skipping post.`,
+      );
+      const skipNote = `Canonical draft for "${topic.name}" was empty or malformed; post skipped.`;
+      researchNote = researchNote ? `${researchNote} ${skipNote}` : skipNote;
+      continue;
+    }
+
+    // Step 2: repurpose canonical → platform caption (Instagram voice,
+    // format-specific per AGENTS.md invariant — greeting-card for awareness
+    // days/evergreen, Folkative for trending).
+    const repurposePrompt = buildRepurposePrompt(canonicalMarkdown, topic, weekStart);
+    const repurposedCaption = await repurpose(repurposePrompt);
+
+    // Wrap both into a single `post.md` blob via HTML comment delimiters so
+    // legacy readers still render the file as readable Markdown while
+    // canonical-aware readers can split the two sections.
+    const postMarkdown = wrapPostMarkdown(canonicalMarkdown, repurposedCaption);
     const metadata = await savePostViaMcp({
       postMarkdown,
       briefMarkdown: buildBrief(topic, weekStart),

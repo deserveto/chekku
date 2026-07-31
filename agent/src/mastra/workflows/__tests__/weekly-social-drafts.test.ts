@@ -1,15 +1,25 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { RequestContext } from '@mastra/core/request-context';
 
-import { buildInstructionsForRole } from '../../../agents/social-media-content-writer.js';
+import {
+  buildInstructionsForRole,
+  createSocialDraftRequestContext,
+  resolveContentWriterInstructions,
+  socialMediaContentWriter,
+} from '../../../agents/social-media-content-writer.js';
+import { socialMediaSupervisorAgent } from '../../../agents/social-media-supervisor-agent.js';
 import type { SearxngSearchOutput, SearxngSearchResult } from '../../searxng/client.js';
 import type { SendEmailInput } from '../../tools/send-email.js';
 import type { Topic } from '../special-days.js';
 import {
   buildBrief,
-  buildDraftPrompt,
+  buildCanonicalPrompt,
   buildPostUrl,
+  buildRepurposePrompt,
   buildSourceBlock,
   buildTitleHint,
+  defaultGenerateCanonical,
+  defaultRepurpose,
   renderReviewEmail,
   runWeeklySocialDrafts,
   weeklySocialDrafts,
@@ -52,6 +62,41 @@ const TRENDING_TOPIC: Topic = {
   },
 };
 
+// A complete 7-section Canonical Content Unit. The workflow now validates
+// Step 1 output with `parseCanonicalUnit` before persisting, so fakes must
+// return a parseable unit (TOPIC + THESIS minimum) on the happy path.
+function makeCanonicalUnit(label: string): string {
+  return [
+    '[TOPIC]',
+    label,
+    '',
+    '[THESIS]',
+    `Thesis for ${label}.`,
+    '',
+    'HOOKS',
+    '1. Curiosity: hook one.',
+    '2. Contrarian: hook two.',
+    '3. Data/Impact: hook three.',
+    '',
+    'CORE POINTS',
+    '- Point one.',
+    '- Point two.',
+    '',
+    'SHORT-FORM BRICK',
+    'Short-form body.',
+    '',
+    'MEDIUM-FORM BRICK',
+    'Medium-form body.',
+    '',
+    'VISUAL / VIDEO SCRIPT BRICK',
+    'Visual concept one.',
+    '',
+    'CALL TO ACTION / ENGAGEMENT',
+    'Reply with your take.',
+    '',
+  ].join('\n');
+}
+
 function makeSearchResult(overrides: Partial<SearxngSearchResult> = {}): SearxngSearchResult {
   return {
     url: 'https://example.com/article',
@@ -84,74 +129,12 @@ describe('pure helpers', () => {
     );
   });
 
-  it('buildDraftPrompt names the topic, week, and the no-preamble rule for greeting-card copy', () => {
-    const prompt = buildDraftPrompt(TOPICS[0]!, '2026-11-23');
-    expect(prompt).toContain('Topic: Hari Guru Nasional');
-    expect(prompt).toContain('Angle: Apresiasi dan peran guru.');
-    expect(prompt).toContain('Week of: 2026-11-23');
-    expect(prompt).toContain('greeting-card');
-    expect(prompt).toContain('no preamble');
-    // Required brand identity surfaces in the output template.
-    expect(prompt).toContain('R — Your Gentle AI Companion');
-    expect(prompt).toContain('AI Human-Centered Intelligence');
-    expect(prompt).toContain('Hormat kami,');
-    expect(prompt).toContain('Keluarga Besar PT Rafiq Space Intelligence');
-  });
-
-  it('buildDraftPrompt pins the "Selamat {day}" title template for awareness days', () => {
-    const prompt = buildDraftPrompt(TOPICS[0]!, '2026-11-23');
-    expect(prompt).toContain('Selamat Hari Guru Nasional');
-    expect(prompt).toContain('Poin-poin');
-    // Date line gets its own template slot between title and opening, with
-    // separate rules for Hijri vs Gregorian vs omit for trending/evergreen.
-    expect(prompt).toContain('canonical date or year line');
-    expect(prompt).toMatch(/Date\/year line[\s\S]*Hijri form[\s\S]*Gregorian/i);
-    // Poin-poin must use the explicit **[Brand value]:** <elaboration> format.
-    expect(prompt).toContain('**[Brand value');
-    expect(prompt).toContain('Human-Centered');
-    expect(prompt).toContain('Memanfaatkan teknologi sebagai alat bantu belajar');
-    // Caption-style requirements are gone: no mandatory hashtag set, no
-    // mandatory "Visual:" direction line. The prompt explicitly forbids both
-    // for the greeting-card format, so the literal strings appear only inside
-    // a "do not include" rule — not as positive requirements.
-    expect(prompt).not.toMatch(/^[^-].*\bhashtag set\b/m);
-    expect(prompt).toContain('no caption-style hashtags');
-    expect(prompt).toContain('no "Visual:" line');
-  });
-
-  it('buildDraftPrompt dispatches to Folkative-style caption for trending topics', () => {
-    const prompt = buildDraftPrompt(TRENDING_TOPIC, '2026-11-23');
-    // Folkative structure markers
-    expect(prompt).toContain('[Headline for image]');
-    expect(prompt).toContain('[Caption]');
-    expect(prompt).toContain('10-15 kata');
-    expect(prompt).toContain('casual');
-    expect(prompt).toContain('conversational');
-    // Source context still injected via buildSourceBlock
-    expect(prompt).toContain('trending topic from this week\'s web search');
-    expect(prompt).toContain('Reference URL: https://example.com/article');
-    expect(prompt).toContain('Reference snippet: Sejumlah AI tool baru dirilis pekan ini.');
-    // The prohibition list names what is forbidden; we check the output
-    // template structure (no [Headline for image] in greeting-card prompts,
-    // no greeting-card header line in trending prompts) instead of literal
-    // substring absence, because the prohibition rule necessarily mentions
-    // the forbidden tokens.
-    expect(prompt).toMatch(/DILARANG[\s\S]*Poin-poin/);
-    expect(prompt).toMatch(/DILARANG[\s\S]*Hormat kami/);
-    // No "Tren Minggu Ini:" title prefix anymore (Folkative uses Headline instead)
-    expect(prompt).not.toContain('Tren Minggu Ini:');
-    // No greeting-card title template (the literal "Selamat" appears in
-    // the prohibition rule as an example of what NOT to do — that's
-    // correct. We check absence of the title *template* instead).
-    expect(prompt).not.toMatch(/^[^<]*Selamat \{day\}/m);
-  });
-
-  it('buildTrendingCaptionPrompt explicitly forbids Assumption/Note preambles and meta-commentary', () => {
-    // Regression: in production, the model produced an "Assumption: Since no
-    // specific article was provided..." preamble before the headline. The
-    // prompt must explicitly forbid that pattern so the model does not
-    // invent a reasoning paragraph.
-    const prompt = buildDraftPrompt(TRENDING_TOPIC, '2026-11-23');
+  it('buildRepurposePrompt forbids Assumption/Note preambles and meta-commentary for trending topics', () => {
+    // Regression: the model produced an "Assumption: Since no specific article
+    // was provided..." preamble before the headline. The live Folkative
+    // repurpose prompt must forbid that pattern so the model does not invent a
+    // reasoning paragraph.
+    const prompt = buildRepurposePrompt(makeCanonicalUnit('AI tools'), TRENDING_TOPIC, '2026-11-23');
     expect(prompt).toContain('Assumption:');
     expect(prompt).toContain('Since no specific article');
     expect(prompt).toContain('meta-commentary');
@@ -159,50 +142,63 @@ describe('pure helpers', () => {
     expect(prompt).toContain('Jangan jelaskan proses berpikir model');
   });
 
-  it('buildTrendingCaptionPrompt explicitly forbids hashtags anywhere (not just at the end)', () => {
-    // Regression: in production, the model appended `#AIAgent #TechTrends
-    // #FutureOfWork` to the caption even though the prompt said no caption-
-    // style hashtags. The prompt must explicitly forbid ALL hashtags with
-    // no exception for "trending" or "relevan" ones.
-    const prompt = buildDraftPrompt(TRENDING_TOPIC, '2026-11-23');
+  it('buildRepurposePrompt explicitly forbids hashtags anywhere for trending topics', () => {
+    // Regression: the model appended `#AIAgent #TechTrends #FutureOfWork` even
+    // though the prompt said no caption-style hashtags. The live repurpose
+    // prompt must forbid ALL hashtags with no exception for "trending" ones.
+    const prompt = buildRepurposePrompt(makeCanonicalUnit('AI tools'), TRENDING_TOPIC, '2026-11-23');
     expect(prompt).toContain('DILARANG menggunakan hashtag di mana pun');
     expect(prompt).toContain('Tidak ada hashtag whatsoever');
     expect(prompt).toContain('Tidak ada pengecualian untuk "trending hashtag"');
-    // Anti-pattern: model often interprets "no caption-style hashtags" as
-    // "no hashtags in caption body, but OK at end". The new wording closes
-    // that loophole explicitly.
     expect(prompt).toContain('termasuk di akhir caption');
   });
 
-  it('buildTrendingCaptionPrompt instructs the model to treat section/category URLs as current topics without disclaimers', () => {
-    // Regression: when the reference URL was a section page (e.g.
-    // cnnindonesia.com/teknologi), the model said "Since no specific
-    // article was provided...". The prompt must redirect that behavior
-    // into drafting the caption as a current topic.
-    const prompt = buildDraftPrompt(TRENDING_TOPIC, '2026-11-23');
+  it('buildRepurposePrompt treats section/category URLs as current topics without disclaimers', () => {
+    // Regression: when the reference URL was a section page, the model said
+    // "Since no specific article was provided...". The live repurpose prompt
+    // redirects that into drafting the caption as a current topic.
+    const prompt = buildRepurposePrompt(makeCanonicalUnit('AI tools'), TRENDING_TOPIC, '2026-11-23');
     expect(prompt).toContain('section/category page');
     expect(prompt).toContain('ANGGAP itu topik terkini');
     expect(prompt).toContain('JANGAN bilang "asumsi"');
   });
 
-  it('buildDraftPrompt keeps greeting-card format for awareness days (unchanged)', () => {
-    const prompt = buildDraftPrompt(TOPICS[0]!, '2026-11-23');
-    expect(prompt).toContain('R — Your Gentle AI Companion');
+  it('buildRepurposePrompt pins the "Selamat {day}" title and Poin-poin format for awareness days', () => {
+    const prompt = buildRepurposePrompt(makeCanonicalUnit('Hari Guru'), TOPICS[0]!, '2026-11-23');
     expect(prompt).toContain('Selamat Hari Guru Nasional');
     expect(prompt).toContain('Poin-poin');
-    expect(prompt).toContain('Hormat kami');
-    expect(prompt).toContain('AI Human-Centered Intelligence');
-    // Folkative markers must NOT appear in greeting-card prompt
-    expect(prompt).not.toContain('[Headline for image]');
-    expect(prompt).not.toContain('[Caption]');
+    // Date line gets its own template slot between title and opening, with
+    // separate rules for Hijri vs Gregorian vs omit for trending/evergreen.
+    expect(prompt).toContain('canonical date or year line');
+    expect(prompt).toMatch(/Date\/year line[\s\S]*Hijri form[\s\S]*Gregorian/i);
+    // Poin-poin must use the explicit **[Brand value]:** <elaboration> format.
+    expect(prompt).toContain('**[Brand value 1]:**');
+    expect(prompt).toContain('Human-Centered');
+    // Caption-style requirements are gone: the prompt explicitly forbids
+    // caption-style hashtags and a "Visual:" line for the greeting-card format.
+    expect(prompt).toContain('no caption-style hashtags');
+    expect(prompt).toContain('no "Visual:" line');
   });
 
-  it('buildDraftPrompt keeps greeting-card format for evergreen topics', () => {
-    const prompt = buildDraftPrompt(TOPICS[1]!, '2026-11-23');
+  it('buildRepurposePrompt keeps greeting-card brand stamps for evergreen topics', () => {
+    const prompt = buildRepurposePrompt(makeCanonicalUnit('Tips'), TOPICS[1]!, '2026-11-23');
     expect(prompt).toContain('R — Your Gentle AI Companion');
     expect(prompt).toContain('Poin-poin');
     expect(prompt).toContain('Hormat kami');
     expect(prompt).not.toContain('[Headline for image]');
+  });
+
+  it('buildCanonicalPrompt forbids source leakage and preambles (review issue #4)', () => {
+    // The canonical prompt injects the full Source block (reference URL, title,
+    // snippet, page markdown) for trending topics, and its output is persisted
+    // verbatim into post.md and shown to reviewers. The prompt must therefore
+    // forbid leaking raw research and forbid reasoning preambles.
+    const prompt = buildCanonicalPrompt(TRENDING_TOPIC, '2026-11-23');
+    expect(prompt).toContain('Reference URL: https://example.com/article');
+    expect(prompt).toContain('DILARANG mention sumber article/URL di output');
+    expect(prompt).toContain('JANGAN paste URL, judul mentah, atau raw research');
+    expect(prompt).toContain('Assumption:');
+    expect(prompt).toContain('Output HARUS langsung dimulai dari "[TOPIC]"');
   });
 
   it('buildSourceBlock keeps evergreen and special-day copy stable', () => {
@@ -298,6 +294,170 @@ describe('pure helpers', () => {
   });
 });
 
+describe('buildCanonicalPrompt', () => {
+  const CANONICAL_TOPIC: Topic = {
+    kind: 'evergreen',
+    name: 'Meeting Fatigue',
+    angle: 'Async-first beats meeting-defaults.',
+  };
+
+  it('marks the prompt with the [weekly-social-drafts] system marker for supervisor routing', () => {
+    const prompt = buildCanonicalPrompt(CANONICAL_TOPIC, '2026-11-23');
+    expect(prompt.startsWith('[weekly-social-drafts]')).toBe(true);
+  });
+
+  it('names the topic and angle', () => {
+    const prompt = buildCanonicalPrompt(CANONICAL_TOPIC, '2026-11-23');
+    expect(prompt).toContain('Topic: Meeting Fatigue');
+    expect(prompt).toContain('Angle: Async-first beats meeting-defaults.');
+    expect(prompt).toContain('Week of: 2026-11-23');
+  });
+
+  it('embeds the 7-brick canonical template (TOPIC, THESIS, HOOKS, CORE POINTS, 3 bricks, CTA)', () => {
+    const prompt = buildCanonicalPrompt(CANONICAL_TOPIC, '2026-11-23');
+    expect(prompt).toContain('[TOPIC]');
+    expect(prompt).toContain('[THESIS]');
+    expect(prompt).toContain('HOOKS');
+    expect(prompt).toContain('Curiosity');
+    expect(prompt).toContain('Contrarian');
+    expect(prompt).toContain('Data/Impact');
+    expect(prompt).toContain('CORE POINTS');
+    expect(prompt).toContain('SHORT-FORM BRICK');
+    expect(prompt).toContain('MEDIUM-FORM BRICK');
+    expect(prompt).toContain('VISUAL / VIDEO SCRIPT BRICK');
+    expect(prompt).toContain('CALL TO ACTION / ENGAGEMENT');
+  });
+
+  it('forbids platform-specific caption output in canonical mode', () => {
+    const prompt = buildCanonicalPrompt(CANONICAL_TOPIC, '2026-11-23');
+    expect(prompt).toContain('NOT a final Instagram/LinkedIn caption');
+    expect(prompt).toContain('platform-agnostic');
+  });
+
+  it('keeps the no-preamble rule', () => {
+    const prompt = buildCanonicalPrompt(CANONICAL_TOPIC, '2026-11-23');
+    expect(prompt).toContain('No preamble');
+    expect(prompt).toContain('Output the canonical unit ONLY');
+  });
+
+  it('keeps the [source] placeholder rule for unverifiable claims', () => {
+    const prompt = buildCanonicalPrompt(CANONICAL_TOPIC, '2026-11-23');
+    expect(prompt).toContain('[source] placeholder');
+  });
+
+  it('inherits the platform-agnostic visual-concept contract from the template', () => {
+    const prompt = buildCanonicalPrompt(CANONICAL_TOPIC, '2026-11-23');
+    expect(prompt).toContain('sequence of reusable visual concepts');
+    expect(prompt).toContain('Do NOT label items "Panel 1');
+    expect(prompt).toContain('platform-agnostic');
+    expect(prompt).toContain('Keep it factual');
+    expect(prompt).toContain('prioritize concrete scenes');
+    expect(prompt).toContain('3–8 words');
+    expect(prompt).toContain('coherent story');
+  });
+});
+
+describe('buildRepurposePrompt', () => {
+  const CANONICAL_MARKDOWN = [
+    '[TOPIC]',
+    'Meeting Fatigue',
+    '',
+    '[THESIS]',
+    'Async-first beats meeting-defaults.',
+    '',
+    'HOOKS',
+    '1. Curiosity: The 5-minute rule that saved our team 12 hours/week.',
+    '2. Contrarian: Stop booking 30-min meetings.',
+    '3. Data/Impact: 70% of meetings could be a 2-min async update.',
+    '',
+    'CORE POINTS',
+    '- Default to async.',
+    '- Cut to 15 minutes.',
+    '- Require a 1-sentence goal.',
+    '',
+    'SHORT-FORM BRICK',
+    'Stop booking 30-min meetings.',
+    '',
+    'MEDIUM-FORM BRICK',
+    'Meeting fatigue is real. Cut to 15-min with a goal.',
+    '',
+    'VISUAL / VIDEO SCRIPT BRICK',
+    'Panel 1: full calendar. Panel 2: empty calendar.',
+    '',
+    'CALL TO ACTION / ENGAGEMENT',
+    'Reply with the meeting you cancelled.',
+  ].join('\n');
+
+  it('dispatches to Folkative caption for trending topics', () => {
+    const trending: Topic = {
+      kind: 'trending',
+      name: 'AI tools ramai',
+      angle: 'Sejumlah tool baru dirilis.',
+      source: { url: 'https://kompas.com/news/a', title: 'AI tools ramai', snippet: 'Snip.' },
+    };
+    const prompt = buildRepurposePrompt(CANONICAL_MARKDOWN, trending, '2026-11-23');
+    expect(prompt).toContain('Folkative-style');
+    expect(prompt).toContain('[Headline for image]');
+    expect(prompt).toContain('[Caption]');
+    expect(prompt).toContain('10-15 kata');
+    expect(prompt).toContain('DILARANG');
+    // Brand stamps appear only inside the DILARANG rules (forbidding them),
+    // never as required output structure for trending topics.
+    expect(prompt).toMatch(/DILARANG[\s\S]*Poin-poin/);
+    expect(prompt).toMatch(/DILARANG[\s\S]*Hormat kami/);
+    // No required output line "R — Your Gentle AI Companion" — only forbidden.
+    expect(prompt).not.toMatch(/^R — Your Gentle AI Companion$/m);
+  });
+
+  it('dispatches to greeting-card caption for awareness days', () => {
+    const awareness: Topic = {
+      kind: 'special-day',
+      name: 'Hari Guru Nasional',
+      angle: 'Apresiasi dan peran guru.',
+      specialDay: 'Hari Guru Nasional',
+    };
+    const prompt = buildRepurposePrompt(CANONICAL_MARKDOWN, awareness, '2026-11-23');
+    expect(prompt).toContain('R — Your Gentle AI Companion');
+    expect(prompt).toContain('Poin-poin');
+    expect(prompt).toContain('Hormat kami');
+    expect(prompt).toContain('AI Human-Centered Intelligence');
+    expect(prompt).toContain('Keluarga Besar PT Rafiq Space Intelligence');
+    expect(prompt).not.toContain('[Headline for image]');
+  });
+
+  it('dispatches to greeting-card caption for evergreen topics', () => {
+    const evergreen: Topic = {
+      kind: 'evergreen',
+      name: 'Tips & Trik',
+      angle: 'Praktis untuk pengguna sehari-hari.',
+    };
+    const prompt = buildRepurposePrompt(CANONICAL_MARKDOWN, evergreen, '2026-11-23');
+    expect(prompt).toContain('R — Your Gentle AI Companion');
+    expect(prompt).toContain('Poin-poin');
+    expect(prompt).toContain('Hormat kami');
+  });
+
+  it('embeds the canonical unit markdown as input context', () => {
+    const evergreen: Topic = {
+      kind: 'evergreen',
+      name: 'Tips & Trik',
+      angle: 'Praktis.',
+    };
+    const prompt = buildRepurposePrompt(CANONICAL_MARKDOWN, evergreen, '2026-11-23');
+    expect(prompt).toContain('Canonical Content Unit');
+    expect(prompt).toContain('Meeting Fatigue');
+    expect(prompt).toContain('Async-first beats meeting-defaults.');
+    expect(prompt).toContain('Reply with the meeting you cancelled.');
+  });
+
+  it('declares the canonical unit as the source of truth (do not contradict)', () => {
+    const evergreen: Topic = { kind: 'evergreen', name: 'X', angle: 'Y.' };
+    const prompt = buildRepurposePrompt(CANONICAL_MARKDOWN, evergreen, '2026-11-23');
+    expect(prompt).toContain('source of truth');
+    expect(prompt).toContain('do not contradict');
+  });
+});
+
 describe('runWeeklySocialDrafts', () => {
   /**
    * The workflow persists via three `create_text_object` MCP calls per post
@@ -306,18 +466,37 @@ describe('runWeeklySocialDrafts', () => {
    * storage or the MCP server.
    */
   function buildFakes() {
-    const generateCalls: Array<{ prompt: string; instructions: string }> = [];
+    const generateCanonicalCalls: Array<{ prompt: string }> = [];
+    const repurposeCalls: Array<{ prompt: string }> = [];
     const createTextCalls: Array<{ key: string; text: string }> = [];
-    let counter = 0;
-    const generate = vi.fn(async (prompt: string, instructions: string) => {
-      generateCalls.push({ prompt, instructions });
-      return `caption-${generateCalls.length}`;
+    let canonicalCounter = 0;
+    let repurposeCounter = 0;
+    const generateCanonical = vi.fn(async (prompt: string) => {
+      generateCanonicalCalls.push({ prompt });
+      canonicalCounter += 1;
+      // A complete, parseable canonical unit so the validation gate
+      // (`parseCanonicalUnit`) and the repurpose + storage steps can proceed.
+      return makeCanonicalUnit(`Topic ${canonicalCounter}`);
+    });
+    const repurpose = vi.fn(async (prompt: string) => {
+      repurposeCalls.push({ prompt });
+      repurposeCounter += 1;
+      return `caption-${repurposeCounter}`;
     });
     const createText = vi.fn(async (key: string, text: string): Promise<void> => {
       createTextCalls.push({ key, text });
     });
     const sendEmail = vi.fn(async (_input: SendEmailInput) => ({ success: true, provider: 'resend' as const }));
-    return { generate, createText: createText as CreateTextFn, sendEmail, generateCalls, createTextCalls, createTextMock: createText };
+    return {
+      generateCanonical,
+      repurpose,
+      createText: createText as CreateTextFn,
+      sendEmail,
+      generateCanonicalCalls,
+      repurposeCalls,
+      createTextCalls,
+      createTextMock: createText,
+    };
   }
 
   beforeEach(() => {
@@ -344,10 +523,15 @@ describe('runWeeklySocialDrafts', () => {
     expect(result.posts[0]!.postUrl).toMatch(/^http:\/\/localhost:3000\/social-posts\/smp_/);
     expect(result.posts[1]!.postUrl).toMatch(/^http:\/\/localhost:3000\/social-posts\/smp_/);
 
-    // The drafter reused the pinned Instagram instructions and named each topic.
-    expect(fakes.generate).toHaveBeenCalledTimes(2);
-    expect(fakes.generateCalls[0]!.instructions).toContain('Instagram');
-    expect(fakes.generateCalls[0]!.prompt).toContain('Hari Guru Nasional');
+    // Canonical step (Step 1) runs once per topic via supervisor; repurpose
+    // (Step 2) runs once per topic via Content Writer. 2 topics × 2 steps = 4 LLM calls.
+    expect(fakes.generateCanonical).toHaveBeenCalledTimes(2);
+    expect(fakes.repurpose).toHaveBeenCalledTimes(2);
+    // The mode (canonical vs repurpose-instagram) is now carried in
+    // requestContext on the default seams, not passed through the seam as an
+    // `instructions` arg — so only the prompt is recorded here.
+    expect(fakes.generateCanonicalCalls[0]!.prompt).toContain('Hari Guru Nasional');
+    expect(fakes.repurposeCalls[0]!.prompt).toContain('Canonical Content Unit');
 
     // Three MCP create_text_object writes per post in canonical order.
     expect(fakes.createText).toHaveBeenCalledTimes(6);
@@ -359,7 +543,12 @@ describe('runWeeklySocialDrafts', () => {
       `social-posts/${firstPostId}/metadata.json`,
     ]);
     expect(firstTriplet[0]!.text).toContain('Week of: 2026-11-23');
-    expect(firstTriplet[1]!.text).toBe('caption-1');
+    // post.md now contains BOTH the canonical unit and the repurposed caption,
+    // wrapped via HTML comment delimiters.
+    expect(firstTriplet[1]!.text).toContain('<!-- canonical-unit -->');
+    expect(firstTriplet[1]!.text).toContain('Topic 1');
+    expect(firstTriplet[1]!.text).toContain('<!-- repurposed-caption -->');
+    expect(firstTriplet[1]!.text).toContain('caption-1');
     expect(JSON.parse(firstTriplet[2]!.text)).toMatchObject({
       postId: firstPostId,
       platform: 'instagram',
@@ -473,7 +662,8 @@ describe('runWeeklySocialDrafts', () => {
     expect(topics).toEqual(['Trend Satu', 'Trend Dua', 'Hari Kemerdekaan Republik Indonesia']);
     expect(result.posts[2]!.specialDay).toBe('Hari Kemerdekaan Republik Indonesia');
     expect(result.researchNote).toBeUndefined();
-    expect(fakes.generate).toHaveBeenCalledTimes(3);
+    expect(fakes.generateCanonical).toHaveBeenCalledTimes(3);
+    expect(fakes.repurpose).toHaveBeenCalledTimes(3);
     expect(fakes.createText).toHaveBeenCalledTimes(9); // 3 writes per post
     expect(fakes.sendEmail.mock.calls[0]![0]).toMatchObject({
       subject: expect.stringContaining('3 Instagram drafts'),
@@ -578,7 +768,8 @@ describe('runWeeklySocialDrafts', () => {
       now: () => FIXED_NOW,
       selectTopics: () => TOPICS,
       webUrl: 'http://localhost:3000',
-      generate: fakes.generate,
+      generateCanonical: fakes.generateCanonical,
+      repurpose: fakes.repurpose,
       createText: fakes.createText,
       sendEmail: fakes.sendEmail,
     })).rejects.toThrow('Garage MCP: create_text_object failed');
@@ -590,6 +781,89 @@ describe('runWeeklySocialDrafts', () => {
     expect((fakes.createTextMock.mock.calls[0]![0] as string)).toMatch(/\/brief\.md$/);
     expect((fakes.createTextMock.mock.calls[1]![0] as string)).toMatch(/\/post\.md$/);
     expect(fakes.createTextMock.mock.calls.some((call) => (call[0] as string).endsWith('/metadata.json'))).toBe(false);
+  });
+
+  it('skips a post and records a researchNote when the canonical unit is empty or malformed (review issue #5)', async () => {
+    const fakes = buildFakes();
+    // First canonical draft returns unstructured garbage (no [TOPIC]/[THESIS])
+    // → parseCanonicalUnit fails → the post is skipped before persistence.
+    // Second draft returns a valid unit → saved normally.
+    fakes.generateCanonical
+      .mockResolvedValueOnce('Sorry, I cannot help with that.')
+      .mockResolvedValueOnce(makeCanonicalUnit('Tips & Trik'));
+
+    const result = await runWeeklySocialDrafts({
+      now: () => FIXED_NOW,
+      selectTopics: () => TOPICS,
+      webUrl: 'http://localhost:3000',
+      ...fakes,
+    });
+
+    // Only the second topic was saved.
+    expect(result.posts).toHaveLength(1);
+    expect(result.posts[0]!.topic).toBe('Tips & Trik');
+    expect(result.researchNote).toContain('empty or malformed');
+    // 1 post × 3 objects — the malformed topic was skipped before any write.
+    expect(fakes.createText).toHaveBeenCalledTimes(3);
+    // Repurpose only ran for the valid topic.
+    expect(fakes.repurpose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Content Writer mode resolution (review issue #1)', () => {
+  it('resolveContentWriterInstructions returns canonical instructions in canonical mode', () => {
+    const ctx = createSocialDraftRequestContext('canonical');
+    expect(resolveContentWriterInstructions(ctx)).toContain('Canonical Content Unit');
+  });
+
+  it('resolveContentWriterInstructions returns repurpose instructions in repurpose-instagram mode', () => {
+    const ctx = createSocialDraftRequestContext('repurpose-instagram');
+    const instr = resolveContentWriterInstructions(ctx);
+    expect(instr).toContain('repurposing a Canonical Content Unit');
+    expect(instr).toContain('instagram-writer');
+  });
+
+  it('resolveContentWriterInstructions falls back to the general role with no mode set (chat path)', () => {
+    expect(resolveContentWriterInstructions(new RequestContext())).toContain('Active role: general');
+  });
+
+  it('defaultGenerateCanonical routes via the Supervisor with canonical mode and NO instructions override', async () => {
+    const spy = vi
+      .spyOn(socialMediaSupervisorAgent, 'generate')
+      .mockResolvedValue({ text: 'unit' } as never);
+    try {
+      await defaultGenerateCanonical('hello prompt');
+      expect(spy).toHaveBeenCalledTimes(1);
+      // `generate` is overloaded; cast through unknown to read the options arg.
+      const [, options] = spy.mock.calls[0] as unknown as [
+        unknown,
+        { instructions?: unknown; requestContext?: { get?: (k: string) => unknown } },
+      ];
+      // The bug under review: passing `instructions` here overrode the
+      // supervisor's routing. The fix carries the mode in requestContext and
+      // passes NO instructions option.
+      expect(options?.instructions).toBeUndefined();
+      expect(options?.requestContext?.get?.('socialDraftMode')).toBe('canonical');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('defaultRepurpose calls the Content Writer with repurpose-instagram mode and NO instructions override', async () => {
+    const spy = vi
+      .spyOn(socialMediaContentWriter, 'generate')
+      .mockResolvedValue({ text: 'caption' } as never);
+    try {
+      await defaultRepurpose('hello prompt');
+      const [, options] = spy.mock.calls[0] as unknown as [
+        unknown,
+        { instructions?: unknown; requestContext?: { get?: (k: string) => unknown } },
+      ];
+      expect(options?.instructions).toBeUndefined();
+      expect(options?.requestContext?.get?.('socialDraftMode')).toBe('repurpose-instagram');
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
