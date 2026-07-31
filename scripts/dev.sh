@@ -175,6 +175,7 @@ ensure_service_ready() {
 
   case "$service" in
     garage) required_port=3900 ;;
+    postgres) required_port=5432 ;;
     searxng) required_port=8888 ;;
     *) echo "Unsupported development service." >&2; exit 1 ;;
   esac
@@ -272,6 +273,10 @@ printf 'Garage ready\n  endpoint: %s\n  region: %s\n  bucket: %s\n' \
 ensure_service_ready searxng SearXNG "${CHEKKU_SEARXNG_PORTS:-8888}"
 
 printf 'SearXNG ready\n  base URL: %s\n' "$SEARXNG_BASE_URL"
+
+ensure_service_ready postgres Postgres "${CHEKKU_POSTGRES_PORTS:-5432}"
+
+printf 'Postgres ready\n  database: chekku_agent\n'
 
 garage_app_cleanup='for garage_name in ${!GARAGE_@}; do case "$garage_name" in GARAGE_ENDPOINT|GARAGE_REGION|GARAGE_BUCKET|GARAGE_ACCESS_KEY_ID|GARAGE_SECRET_ACCESS_KEY) ;; *) unset "$garage_name" ;; esac; done'
 searxng_agent_cleanup='for searxng_name in ${!SEARXNG_@}; do case "$searxng_name" in SEARXNG_BASE_URL|SEARXNG_API_KEY) ;; *) unset "$searxng_name" ;; esac; done'

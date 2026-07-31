@@ -115,6 +115,7 @@ process.stdout.write([
   `GARAGE_RPC_SECRET=${pick('GARAGE_RPC_SECRET', hex(32))}`,
   `GARAGE_ADMIN_TOKEN=${pick('GARAGE_ADMIN_TOKEN', token())}`,
   `GARAGE_METRICS_TOKEN=${pick('GARAGE_METRICS_TOKEN', token())}`,
+  `POSTGRES_PASSWORD=${pick('POSTGRES_PASSWORD', token())}`,
   '',
 ].join('\n'));
 NODE
@@ -132,6 +133,7 @@ const required = [
   'GARAGE_ENDPOINT', 'GARAGE_REGION', 'GARAGE_BUCKET',
   'GARAGE_ACCESS_KEY_ID', 'GARAGE_SECRET_ACCESS_KEY',
   'GARAGE_RPC_SECRET', 'GARAGE_ADMIN_TOKEN', 'GARAGE_METRICS_TOKEN',
+  'POSTGRES_PASSWORD',
 ];
 const values = parse(readFileSync(process.argv[2], 'utf8'));
 for (const name of required) {
@@ -326,6 +328,7 @@ let source = readFileSync(sourcePath, 'utf8');
 const userValues = parse(source);
 source = removeAssignments('GARAGE_')(source);
 source = removeAssignments('SEARXNG_')(source);
+source = removeAssignments('DATABASE_')(source);
 
 for (const name of serviceSecretNames) {
   const value = process.env[name];
@@ -343,8 +346,14 @@ const searxngAssignments = searxngKeys.map((name) => {
   }
   return serialize(name, process.env[name] ?? '');
 });
+const postgresPassword = process.env.POSTGRES_PASSWORD;
+if (!postgresPassword) throw new Error('Missing POSTGRES_PASSWORD in storage/.env.local');
+const databaseAssignment = serialize(
+  'DATABASE_URL',
+  `postgresql://chekku:${postgresPassword}@127.0.0.1:5432/chekku_agent`,
+);
 const separator = source.length > 0 && !source.endsWith('\n') ? '\n' : '';
-writeFileSync(outputPath, `${source}${separator}${[...garageAssignments, ...searxngAssignments].join('\n')}\n`);
+writeFileSync(outputPath, `${source}${separator}${[...garageAssignments, ...searxngAssignments, databaseAssignment].join('\n')}\n`);
 NODE
   chmod 600 "$tmp"
   if [[ -f "$AGENT_DEV_ENV_FILE" ]] && cmp -s "$tmp" "$AGENT_DEV_ENV_FILE"; then

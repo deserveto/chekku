@@ -21,8 +21,9 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().min(1).max(65535).default(4111),
   HOST: z.string().default('localhost'),
-  DATABASE_URL: z.string().default('file:./mastra.db'),
-  DATABASE_AUTH_TOKEN: z.string().default(''),
+  DATABASE_URL: z
+    .string()
+    .default('postgresql://chekku:postgres@localhost:5432/chekku_agent'),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
   WEB_URL: z.string().url().default('http://localhost:3000'),
 

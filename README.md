@@ -12,7 +12,7 @@
 
 </div>
 
-Chekku provides a focused interface for managing agents, creating agent-specific conversations, searching the web through SearXNG, reading chosen public pages through hosted Jina Reader, analyzing engineering weekly reports, publishing social-media drafts through Telegram and a weekly scheduled workflow, and running browser-assisted QA through a provider-neutral OpenAI-compatible model gateway. Three npm workspaces provide the Next.js client, Mastra server, and shared Garage/S3 object-storage package. LibSQL remains the local source of truth for agents and conversations; Garage stores generic agent objects, PM report artifacts, and scheduled social-post drafts.
+Chekku provides a focused interface for managing agents, creating agent-specific conversations, searching the web through SearXNG, reading chosen public pages through hosted Jina Reader, analyzing engineering weekly reports, publishing social-media drafts through Telegram and a weekly scheduled workflow, and running browser-assisted QA through a provider-neutral OpenAI-compatible model gateway. Three npm workspaces provide the Next.js client, Mastra server, and shared Garage/S3 object-storage package. Postgres remains the source of truth for agents and conversations; Garage stores generic agent objects, PM report artifacts, and scheduled social-post drafts.
 
 ## Highlights
 
@@ -31,7 +31,7 @@ Chekku provides a focused interface for managing agents, creating agent-specific
 - **Visual content agent** — on-demand image-generation sub-agent that produces one image for an APPROVED social post through the fixed image model, stores it in Garage, and exposes a stable application-facing image URL.
 - **Scheduled social drafts** — a weekly Monday 09:00 Asia/Jakarta workflow drafts two Instagram posts from awareness days and evergreen pillars, saves them to Garage, and emails a review link.
 - **Hosted-vLLM compatibility** — final prompt normalization keeps system messages at the beginning.
-- **Local-first storage** — agent definitions, versions, memory, and threads live in LibSQL.
+- **Centralized Postgres storage** — agent definitions, versions, memory, and threads live in Postgres.
 - **Same-origin client traffic** — browser requests go through the Next.js proxy instead of calling the Mastra server directly.
 - **Email + time + calculator tools** — registered for stored agents and selectively bound to code-defined agents; email delivery goes through Resend.
 
@@ -56,7 +56,7 @@ Next.js client :3000
   │     ├── social-media-strategist-agent (research + planning)        │
   │     ├── visual-content-agent (on-demand image generation)          │
   │     ├── @mastra/editor stored agents                              │
-  │     ├── Mastra Memory + LibSQLStore                               │
+  │     ├── Mastra Memory + PostgresStore                              │
   │     ├── calculator + current-time + email tools                   │
   │     ├── Chat SDK + Telegram adapter                               │
   │     ├── weekly-social-drafts scheduled workflow                   │
@@ -95,7 +95,7 @@ SearXNG uses a server-owned endpoint (Mastra-only configuration):
 SearXNG endpoint and bearer configuration never enter browser code,
 model input, or stored-agent records.
 
-LibSQL stores agent definitions, versions, memory, and threads.
+Postgres stores agent definitions, versions, memory, and threads.
 ```
 
 See [Architecture](docs/ARCHITECTURE.md) for the runtime boundaries and data flow.
@@ -202,8 +202,8 @@ Local file: `agent/.env`
 | --- | --- | --- | --- |
 | `PORT` | No | `4111` | Mastra HTTP port. |
 | `HOST` | No | `localhost` | Mastra bind host. |
-| `DATABASE_URL` | No | `file:./mastra.db` | LibSQL database URL. |
-| `DATABASE_AUTH_TOKEN` | No | empty | Auth token for remote LibSQL-compatible storage. |
+| `DATABASE_URL` | No | `postgresql://chekku:postgres@localhost:5432/chekku_agent` | Postgres connection string for Mastra storage. |
+| `POSTGRES_PASSWORD` | No | `postgres` | Postgres password; generated into `storage/.env.local` by `scripts/setup-env.sh` for the compose container. |
 | `LOG_LEVEL` | No | `info` | `debug`, `info`, `warn`, or `error`. |
 | `MASTRA_TELEMETRY_DISABLED` | No | unset | Set to `true` to disable Mastra CLI telemetry. |
 | `WEB_URL` | No | `http://localhost:3000` | Allowed client origin. |
@@ -483,13 +483,14 @@ LLM_IMAGE_MODEL=gemini-3.1-flash-image
 
 ### Reset local agents and conversations
 
-Stop the server, then remove the local database:
+Stop the server, then recreate the Postgres volume:
 
 ```bash
-rm -f agent/mastra.db agent/mastra.db-wal agent/mastra.db-shm
+docker compose down
+docker volume rm chekku_postgres-data
 ```
 
-Depending on the current working directory used by the Mastra CLI, the database may also appear at the repository root. See [Operations](docs/OPERATIONS.md) before deleting data.
+The next `npm run dev:sh` recreates the container and re-runs the init script. The volume name is `<compose-project>_postgres-data` (project defaults to the repository directory name, `chekku`). See [Operations](docs/OPERATIONS.md) before deleting data.
 
 ## Security
 

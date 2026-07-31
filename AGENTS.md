@@ -6,7 +6,7 @@ This file defines the operating rules for coding agents and contributors working
 
 Chekku is a local-first agent studio built from three npm workspaces:
 
-- `agent/`: Mastra server, code-defined agents, stored-agent runtime, Memory, LibSQL, browser automation, tools, and model gateway.
+- `agent/`: Mastra server, code-defined agents, stored-agent runtime, Memory, Postgres, browser automation, tools, and model gateway.
 - `client/`: Next.js interface, same-origin proxy, agent catalog and builder, chat UI, thread history, and server-side identity seam.
 - `storage/`: shared generic object-storage contract, agent namespace helpers, Garage/S3 adapter, and PM report repository.
 
@@ -70,7 +70,7 @@ A task is not complete until affected tests pass. Before finalizing any reposito
 
 ### Storage and conversations
 
-- `LibSQLStore` is the sole Mastra storage implementation.
+- `PostgresStore` (`@mastra/pg`) is the sole Mastra storage implementation. It connects via `DATABASE_URL` to the centralized Postgres instance in `compose.yaml` (database `chekku_agent`); the same instance hosts `chekku_auth` for Better Auth. `@chekku/storage` (Garage/S3) remains the separate object-storage boundary and is not a relational store.
 - Generic Garage object access belongs in `storage/`, not agent-private or browser modules.
 - `ObjectStorage` exposes text operations as required members and binary operations (`createBytes`, `replaceBytes`, `getBytes`) as optional interface members; production Garage, lazy, and namespaced adapters implement all three. Use `asBinaryObjectStorage` to narrow a store to binary capability at consumption sites. Binary reads are bounded to 16 MiB and reuse the same error-sanitization path as text operations.
 - Garage MCP and server-side code share `@chekku/storage`; browser components must never import it or access Garage directly.
@@ -318,7 +318,7 @@ The root `README.md` is the public onboarding document. `docs/ARCHITECTURE.md` d
 
 - `.env` and `.env.local` files containing secrets, including `searxng/.env.local`;
 - `node_modules/`, `.next/`, `.mastra/`, `dist/`, coverage, and TypeScript build info;
-- `mastra.db`, WAL, SHM, SQLite, or other local database files;
+- Postgres data lives in a Docker volume; do not commit database volumes or any leftover local database files (e.g. legacy `mastra.db*`);
 - browser recordings, Playwright output, screenshots used only for local debugging;
 - installer backups, ZIP packages, patch files, and worktree pointers.
 

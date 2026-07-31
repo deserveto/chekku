@@ -256,28 +256,22 @@ Optional live smoke: configure existing SearXNG and Web Reader values without pr
 
 ## Storage
 
-The default storage URL is:
+Mastra storage runs in the centralized Postgres container (`compose.yaml`, database `chekku_agent`). The default connection is:
 
 ```dotenv
-DATABASE_URL=file:./mastra.db
+DATABASE_URL=postgresql://chekku:postgres@localhost:5432/chekku_agent
 ```
 
-With `npm run dev --workspace agent`, the database normally appears under `agent/`. Tooling may create it at the repository root when tests or scripts import the runtime from there.
+`scripts/setup-env.sh` generates `POSTGRES_PASSWORD` into `storage/.env.local` (read by compose) and injects it into `DATABASE_URL` in `agent/.env.development`. The same Postgres instance hosts the `chekku_auth` database for Better Auth; the `scripts/postgres/init-databases.sh` init script creates it on first container init.
 
-Before resetting data, stop the agent process and back up any database you need.
+Before resetting data, stop the agent process. Reset local Postgres state by recreating its volume (this removes stored agents and conversation history):
 
 ```bash
-find . -maxdepth 2 -name 'mastra.db*' -print
+docker compose down
+docker volume rm chekku_postgres-data
 ```
 
-Reset local state:
-
-```bash
-rm -f agent/mastra.db agent/mastra.db-wal agent/mastra.db-shm
-rm -f mastra.db mastra.db-wal mastra.db-shm
-```
-
-This removes stored agents and conversation history.
+The next `npm run dev:sh` recreates the container and re-runs the init script. The volume name is `<compose-project>_postgres-data` (project defaults to the repository directory name, `chekku`).
 
 ### Garage object storage
 
@@ -640,7 +634,7 @@ Before deploying beyond local development:
 
 - replace `CHEKKU_LOCAL_USER_ID` with real authentication;
 - configure a deployment secret manager;
-- set a durable LibSQL-compatible database URL and token;
+- set a durable Postgres `DATABASE_URL` and `POSTGRES_PASSWORD`;
 - restrict `WEB_URL` to the deployed client origin;
 - configure an authenticated server-to-server hop if the Mastra service is exposed separately;
 - configure `SEARXNG_BASE_URL` and optional `SEARXNG_API_KEY` only in the agent service or deployment secret manager; keep the endpoint private or protect it with a reverse proxy;

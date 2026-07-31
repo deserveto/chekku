@@ -39,7 +39,27 @@ services:
       retries: 30
       start_period: 5s
 
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: chekku
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      POSTGRES_DB: chekku_agent
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - ./scripts/postgres/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chekku -d chekku_agent"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 5s
+
 volumes:
   garage-metadata:
   garage-data:
   searxng-cache:
+  postgres-data:
