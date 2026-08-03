@@ -9,7 +9,10 @@ import {
   competitiveAnalysisKeysFor,
   createCompetitiveAnalysisId,
   createCompetitiveAnalysisStorage,
+  createShareToken,
   getCompetitiveAnalysis,
+  getShareToken,
+  getShareableSlides,
   listCompetitiveAnalyses,
   saveCompetitiveAnalysis,
 } from './competitive-analyses.ts';
@@ -78,6 +81,7 @@ describe('competitive analysis storage', () => {
       requestObjectKey: `competitive-analyses/${analysisId}/request.md`,
       analysisObjectKey: `competitive-analyses/${analysisId}/analysis.md`,
       slidesObjectKey: `competitive-analyses/${analysisId}/slides.md`,
+      shareTokenObjectKey: `competitive-analyses/${analysisId}/share-token.json`,
       metadataObjectKey: `competitive-analyses/${analysisId}/metadata.json`,
     });
   });
@@ -519,5 +523,132 @@ describe('competitive analysis storage', () => {
     };
 
     await expect(getCompetitiveAnalysis(failingStorage, analysisId)).rejects.toThrow('injected outage');
+  });
+
+  describe('share token', () => {
+    it('createShareToken is idempotent and returns the same token on repeated calls', async () => {
+      const { storage } = createMemoryStorage();
+      const store = createCompetitiveAnalysisStorage(storage);
+
+      const first = await createShareToken(store, analysisId, 'GPT');
+      const second = await createShareToken(store, analysisId, 'GPT');
+
+      expect(second.token).toBe(first.token);
+      expect(second.createdAt).toBe(first.createdAt);
+      expect(first.token).toMatch(/^[0-9a-f]{32}$/);
+    });
+
+    it('createShareToken persists share-token.json with token + createdAt + anchorProduct', async () => {
+      const { objects, storage } = createMemoryStorage();
+      const store = createCompetitiveAnalysisStorage(storage);
+
+      const bundle = await createShareToken(store, analysisId, 'GPT',
+        () => new Date('2026-07-29T10:00:00.000Z'));
+
+      const raw = objects.get(`agents/cG0tYWdlbnQ/competitive-analyses/${analysisId}/share-token.json`);
+      expect(raw).toBeDefined();
+      const parsed = JSON.parse(raw!);
+      expect(parsed).toMatchObject({
+        token: bundle.token,
+        createdAt: '2026-07-29T10:00:00.000Z',
+        anchorProduct: 'GPT',
+      });
+    });
+
+    it('createShareToken rejects anchorProduct mismatch on repeated call', async () => {
+      const { storage } = createMemoryStorage();
+      const store = createCompetitiveAnalysisStorage(storage);
+      await createShareToken(store, analysisId, 'GPT');
+
+      await expect(createShareToken(store, analysisId, 'Claude')).rejects.toThrow(
+        'share-token anchorProduct mismatch',
+      );
+    });
+
+    it('getShareToken returns undefined when no token file exists', async () => {
+      const { storage } = createMemoryStorage();
+      const store = createCompetitiveAnalysisStorage(storage);
+
+      await expect(getShareToken(store, analysisId)).resolves.toBeUndefined();
+    });
+
+    it('getShareToken returns undefined on malformed JSON or shape', async () => {
+      const { objects, storage } = createMemoryStorage();
+      const store = createCompetitiveAnalysisStorage(storage);
+      objects.set(`agents/cG0tYWdlbnQ/competitive-analyses/${analysisId}/share-token.json`, '{bad json');
+
+      await expect(getShareToken(store, analysisId)).resolves.toBeUndefined();
+    });
+
+    it('getShareToken propagates non-not-found storage errors', async () => {
+      const { storage } = createMemoryStorage();
+      const failingStorage: ObjectStorage = {
+        ...storage,
+        async getText(key) {
+          if (key.endsWith('/share-token.json')) {
+            throw new ObjectStorageError('unavailable', 'injected');
+          }
+          return storage.getText(key);
+        },
+      };
+      const store = createCompetitiveAnalysisStorage(failingStorage);
+
+      await expect(getShareToken(store, analysisId)).rejects.toThrow('injected');
+    });
+
+    it('getShareableSlides returns undefined for missing token', async () => {
+      const { storage } = createMemoryStorage();
+      const store = createCompetitiveAnalysisStorage(storage);
+
+      await expect(getShareableSlides(store, analysisId, 'a'.repeat(32))).resolves.toBeUndefined();
+    });
+
+    it('getShareableSlides returns undefined for mismatched token', async () => {
+      const { storage } = createMemoryStorage();
+      const store = createCompetitiveAnalysisStorage(storage);
+      const bundle = await createShareToken(store, analysisId, 'GPT');
+
+      await expect(getShareableSlides(store, analysisId, '0'.repeat(32))).resolves.toBeUndefined();
+      expect(bundle.token).not.toBe('0'.repeat(32));
+    });
+
+    it('getShareableSlides returns undefined for malformed token input', async () => {
+      const { storage } = createMemoryStorage();
+      const store = createCompetitiveAnalysisStorage(storage);
+      await createShareToken(store, analysisId, 'GPT');
+
+      await expect(getShareableSlides(store, analysisId, 'short')).resolves.toBeUndefined();
+      await expect(getShareableSlides(store, analysisId, '')).resolves.toBeUndefined();
+    });
+
+    it('getShareableSlides returns payload for valid token + existing slides', async () => {
+      const { storage } = createMemoryStorage();
+      const store = createCompetitiveAnalysisStorage(storage);
+      await saveCompetitiveAnalysis({ ...validInput(store), slidesMarkdown: '# Deck\n' });
+      const bundle = await createShareToken(store, analysisId, 'GPT');
+
+      await expect(getShareableSlides(store, analysisId, bundle.token)).resolves.toMatchObject({
+        anchorProduct: 'GPT',
+        slidesMarkdown: '# Deck\n',
+      });
+    });
+
+    it('getShareableSlides propagates storage errors from slides.md read', async () => {
+      const { storage } = createMemoryStorage();
+      const failingStorage: ObjectStorage = {
+        ...storage,
+        async getText(key) {
+          if (key.endsWith('/slides.md')) {
+            throw new ObjectStorageError('unavailable', 'slides outage');
+          }
+          return storage.getText(key);
+        },
+      };
+      const store = createCompetitiveAnalysisStorage(failingStorage);
+      await saveCompetitiveAnalysis({ ...validInput(store), slidesMarkdown: '# Deck\n' });
+      const bundle = await createShareToken(store, analysisId, 'GPT');
+
+      await expect(getShareableSlides(store, analysisId, bundle.token)).rejects.toThrow('slides outage');
+    });
   });
 });
