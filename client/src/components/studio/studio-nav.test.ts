@@ -12,6 +12,12 @@ vi.mock('next/navigation', () => ({
   usePathname: () => mocks.pathname,
   useRouter: () => ({ push: mocks.push }),
 }));
+vi.mock('@/lib/auth-client', () => ({
+  authClient: {
+    useSession: () => ({ data: { user: { email: 'owner@chekku.test' } } }),
+    signOut: vi.fn(async () => ({ success: true })),
+  },
+}));
 vi.mock('@/components/studio/resizable-sidebar', () => ({
   ResizableSidebar: ({ children }: {
     children: (collapsed: boolean, toggleCollapsed: () => void) => ReactNode;
@@ -62,4 +68,11 @@ it('keeps Studio navigation available in the compact mobile header', () => {
   expect(markup).toContain('href="/reports"');
   expect(navRule).toContain('display: flex');
   expect(navRule).not.toContain('display: none');
+});
+
+it('renders the signed-in email and a logout control', () => {
+  const markup = renderToStaticMarkup(createElement(StudioNav, { resourceId: 'user-1' }));
+
+  expect(markup).toContain('owner@chekku.test');
+  expect(markup).toMatch(/log out|sign out/i);
 });
