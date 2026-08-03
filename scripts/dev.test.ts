@@ -223,13 +223,13 @@ const { parse } = require('dotenv');
 
 const values = { ...process.env, ...parse(readFileSync('agent/.env.development')) };
 const lines = Object.entries(values)
-  .filter(([name]) => /^(?:GARAGE|SEARXNG)_/.test(name) || name === 'WEB_READER_API_KEY')
+  .filter(([name]) => /^(?:GARAGE|SEARXNG)_/.test(name) || name === 'WEB_READER_API_KEY' || name === 'POSTGRES_PASSWORD')
   .sort(([left], [right]) => left.localeCompare(right))
   .map(([name, value]) => name + '=' + value);
 writeFileSync(process.argv[2], lines.join('\\n') + '\\n');
 NODE
 else
-  env | grep -E '^(GARAGE|SEARXNG)_|^WEB_READER_API_KEY=' | sort > "$MOCK_LOG/env-$role"
+  env | grep -E '^(GARAGE|SEARXNG)_|^(WEB_READER_API_KEY|POSTGRES_PASSWORD)=' | sort > "$MOCK_LOG/env-$role"
 fi
 touch "$MOCK_LOG/ready-$role"
 for _ in {1..100}; do
@@ -723,6 +723,9 @@ describe('development launcher', () => {
         const separator = line.indexOf('=');
         expect(line.slice(separator + 1)).toBe(expectedValues[line.slice(0, separator)]);
       }
+      // POSTGRES_PASSWORD is a container-side secret embedded in DATABASE_URL;
+      // it must not survive into either dev process (regression for PR #19 review).
+      expect(lines.some((line) => line.startsWith('POSTGRES_PASSWORD='))).toBe(false);
     }
   });
 
@@ -1165,6 +1168,18 @@ describe('setup-env.sh', () => {
       const values = parse(readFileSync(resolve(root, 'agent/.env.development'), 'utf8'));
       expect(values.SEARXNG_BASE_URL).toBe('http://127.0.0.1:8888');
       expect(values.SEARXNG_API_KEY).toBe('user-bearer-token');
+    });
+
+    it('preserves a non-empty user-set DATABASE_URL from agent/.env into agent/.env.development', () => {
+      const root = fixture();
+      writeFileSync(
+        resolve(root, 'agent/.env'),
+        [validAgentEnv.trimEnd(), 'DATABASE_URL=postgresql://custom:5433/customdb', ''].join('\n'),
+      );
+      const result = runSetup(root);
+      expect(result.status, result.stderr).toBe(0);
+      const values = parse(readFileSync(resolve(root, 'agent/.env.development'), 'utf8'));
+      expect(values.DATABASE_URL).toBe('postgresql://custom:5433/customdb');
     });
 
     it('regenerates a clean development env from the example when agent/.env is removed between runs', () => {

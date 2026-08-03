@@ -346,12 +346,20 @@ const searxngAssignments = searxngKeys.map((name) => {
   }
   return serialize(name, process.env[name] ?? '');
 });
-const postgresPassword = process.env.POSTGRES_PASSWORD;
-if (!postgresPassword) throw new Error('Missing POSTGRES_PASSWORD in storage/.env.local');
-const databaseAssignment = serialize(
-  'DATABASE_URL',
-  `postgresql://chekku:${postgresPassword}@127.0.0.1:5432/chekku_agent`,
-);
+const userDatabaseUrl =
+  typeof userValues.DATABASE_URL === 'string' && userValues.DATABASE_URL !== ''
+    ? userValues.DATABASE_URL
+    : null;
+const databaseAssignment = userDatabaseUrl
+  ? serialize('DATABASE_URL', userDatabaseUrl)
+  : (() => {
+      const postgresPassword = process.env.POSTGRES_PASSWORD;
+      if (!postgresPassword) throw new Error('Missing POSTGRES_PASSWORD in storage/.env.local');
+      return serialize(
+        'DATABASE_URL',
+        `postgresql://chekku:${postgresPassword}@127.0.0.1:5432/chekku_agent`,
+      );
+    })();
 const separator = source.length > 0 && !source.endsWith('\n') ? '\n' : '';
 writeFileSync(outputPath, `${source}${separator}${[...garageAssignments, ...searxngAssignments, databaseAssignment].join('\n')}\n`);
 NODE

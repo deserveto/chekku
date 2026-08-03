@@ -203,7 +203,6 @@ Local file: `agent/.env`
 | `PORT` | No | `4111` | Mastra HTTP port. |
 | `HOST` | No | `localhost` | Mastra bind host. |
 | `DATABASE_URL` | No | `postgresql://chekku:postgres@localhost:5432/chekku_agent` | Postgres connection string for Mastra storage. |
-| `POSTGRES_PASSWORD` | No | `postgres` | Postgres password; generated into `storage/.env.local` by `scripts/setup-env.sh` for the compose container. |
 | `LOG_LEVEL` | No | `info` | `debug`, `info`, `warn`, or `error`. |
 | `MASTRA_TELEMETRY_DISABLED` | No | unset | Set to `true` to disable Mastra CLI telemetry. |
 | `WEB_URL` | No | `http://localhost:3000` | Allowed client origin. |
