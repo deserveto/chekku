@@ -1474,4 +1474,23 @@ describe('scripts/db-migrate.sh', () => {
     expect(result.stdout + result.stderr).toMatch(/AUTH_DATABASE_URL|npm run setup/i);
     expect(existsSync(markerFile)).toBe(false);
   });
+
+  it('suppresses CLI output that could leak AUTH_DATABASE_URL on failure', () => {
+    const root = fixture({ setupEnv: false });
+    writeFileSync(
+      resolve(root, 'client/.env.local'),
+      'AUTH_DATABASE_URL=postgresql://chekku:secret-pw-123@127.0.0.1:5432/chekku_auth\nBETTER_AUTH_SECRET=anything\n',
+    );
+    executable(
+      resolve(root, 'bin/npx'),
+      `echo "$AUTH_DATABASE_URL" >&2\nexit 1\n`,
+    );
+    const result = run(root, [resolve(sourceRoot, 'scripts/db-migrate.sh')], {
+      CHEKKU_CLIENT_ENV: resolve(root, 'client/.env.local'),
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).not.toContain('secret-pw-123');
+    expect(result.stdout + result.stderr).toMatch(/Better Auth migration failed/i);
+  });
 });
