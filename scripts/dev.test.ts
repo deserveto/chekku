@@ -60,8 +60,9 @@ const searxngSecretKeyNames = new Set([
   'SEARXNG_SECRET',
   'SEARXNG_CONFIG_HASH',
 ]);
+const authSecretKeyNames = new Set(['BETTER_AUTH_SECRET']);
 function isSecretKeyName(name: string): boolean {
-  return storageSecretKeyNames.has(name) || searxngSecretKeyNames.has(name);
+  return storageSecretKeyNames.has(name) || searxngSecretKeyNames.has(name) || authSecretKeyNames.has(name);
 }
 
 function executable(path: string, body: string): void {
@@ -936,9 +937,11 @@ describe('setup-env.sh', () => {
       expect(result.status, result.stderr).toBe(0);
       const envPath = resolve(root, 'client/.env.local');
       expect(existsSync(envPath)).toBe(true);
-      expect(readFileSync(envPath, 'utf8')).toBe(
-        readFileSync(resolve(sourceRoot, 'client/.env.example'), 'utf8'),
-      );
+      const exampleValues = parse(readFileSync(resolve(sourceRoot, 'client/.env.example'), 'utf8'));
+      const values = parse(readFileSync(envPath, 'utf8'));
+      for (const name of Object.keys(exampleValues)) {
+        expect(values[name], `${name} should be present after bootstrap copy`).toBeDefined();
+      }
       if (process.platform !== 'win32') {
         expect(statSync(envPath).mode & 0o077).toBe(0);
       }
@@ -1363,6 +1366,90 @@ describe('setup-env.sh', () => {
       expect(result.stdout).toContain('RESEND_API_KEY');
       expect(result.stdout).toContain('WEB_READER_API_KEY');
       expect(result.stdout).toContain('Rerun npm run setup after editing agent/.env.');
+    });
+  });
+
+  describe('client auth env (render_client_env)', () => {
+    it('generates a non-empty BETTER_AUTH_SECRET of at least 32 chars', () => {
+      const root = fixture();
+      const result = runSetup(root, [], '');
+      expect(result.status, result.stderr).toBe(0);
+      const clientEnv = parse(readFileSync(resolve(root, 'client/.env.local'), 'utf8'));
+      expect(typeof clientEnv.BETTER_AUTH_SECRET).toBe('string');
+      expect(clientEnv.BETTER_AUTH_SECRET.length).toBeGreaterThanOrEqual(32);
+    });
+
+    it('wires AUTH_DATABASE_URL to the generated POSTGRES_PASSWORD at chekku_auth', () => {
+      const root = fixture();
+      const result = runSetup(root, [], '');
+      expect(result.status, result.stderr).toBe(0);
+      const clientEnv = parse(readFileSync(resolve(root, 'client/.env.local'), 'utf8'));
+      const storageEnv = parse(readFileSync(resolve(root, 'storage/.env.local'), 'utf8'));
+      expect(clientEnv.AUTH_DATABASE_URL).toBe(
+        `postgresql://chekku:${storageEnv.POSTGRES_PASSWORD}@127.0.0.1:5432/chekku_auth`,
+      );
+    });
+
+    it('overwrites the broken example placeholder AUTH_DATABASE_URL', () => {
+      const root = fixture({ setupEnv: false });
+      writeFileSync(
+        resolve(root, 'client/.env.local'),
+        'AUTH_DATABASE_URL=postgresql://chekku:chekku@localhost:5432/chekku_auth\n',
+      );
+      const result = runSetup(root, [], '');
+      expect(result.status, result.stderr).toBe(0);
+      const clientEnv = parse(readFileSync(resolve(root, 'client/.env.local'), 'utf8'));
+      const storageEnv = parse(readFileSync(resolve(root, 'storage/.env.local'), 'utf8'));
+      expect(clientEnv.AUTH_DATABASE_URL).toBe(
+        `postgresql://chekku:${storageEnv.POSTGRES_PASSWORD}@127.0.0.1:5432/chekku_auth`,
+      );
+    });
+
+    it('preserves a user-set BETTER_AUTH_SECRET and a non-placeholder AUTH_DATABASE_URL override', () => {
+      const root = fixture({ setupEnv: false });
+      writeFileSync(
+        resolve(root, 'client/.env.local'),
+        [
+          'BETTER_AUTH_SECRET=user-kept-secret',
+          'AUTH_DATABASE_URL=postgresql://chekku:x@remote.host:5432/chekku_auth',
+          '',
+        ].join('\n'),
+      );
+      const result = runSetup(root, [], '');
+      expect(result.status, result.stderr).toBe(0);
+      const clientEnv = parse(readFileSync(resolve(root, 'client/.env.local'), 'utf8'));
+      expect(clientEnv.BETTER_AUTH_SECRET).toBe('user-kept-secret');
+      expect(clientEnv.AUTH_DATABASE_URL).toBe('postgresql://chekku:x@remote.host:5432/chekku_auth');
+    });
+
+    it('mirrors prompted RESEND values from agent/.env into client/.env.local', () => {
+      const root = fixture({ setupEnv: false });
+      writeFileSync(
+        resolve(root, 'agent/.env'),
+        [
+          validAgentEnv.trimEnd(),
+          'RESEND_API_KEY=rk_test',
+          'RESEND_FROM_EMAIL=Custom <hello@example.com>',
+          '',
+        ].join('\n'),
+      );
+      const result = runSetup(root, [], '');
+      expect(result.status, result.stderr).toBe(0);
+      const clientEnv = parse(readFileSync(resolve(root, 'client/.env.local'), 'utf8'));
+      expect(clientEnv.RESEND_API_KEY).toBe('rk_test');
+      expect(clientEnv.RESEND_FROM_EMAIL).toBe('Custom <hello@example.com>');
+    });
+
+    it('does not leak BETTER_AUTH_SECRET or POSTGRES_PASSWORD to stdout', () => {
+      const root = fixture();
+      const result = runSetup(root, [], '');
+      expect(result.status, result.stderr).toBe(0);
+      const clientEnv = parse(readFileSync(resolve(root, 'client/.env.local'), 'utf8'));
+      const storageEnv = parse(readFileSync(resolve(root, 'storage/.env.local'), 'utf8'));
+      expect(result.stdout).not.toContain(clientEnv.BETTER_AUTH_SECRET);
+      expect(result.stdout).not.toContain(storageEnv.POSTGRES_PASSWORD);
+      expect(result.stderr).not.toContain(clientEnv.BETTER_AUTH_SECRET);
+      expect(result.stderr).not.toContain(storageEnv.POSTGRES_PASSWORD);
     });
   });
 });
