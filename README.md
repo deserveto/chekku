@@ -214,7 +214,6 @@ Local file: `agent/.env`
 | `LLM_IMAGE_MODEL` | No | empty | Fixed image model invoked by the Visual Content Agent's `generate_image` tool (e.g. `gemini-3.1-flash-image`). Empty/unset → tool fails closed. |
 | `LLM_IMAGE_ENDPOINT_PATH` | No | `/images/generations` | Narrowly-scoped path under `LLM_BASE_URL` for image generation. |
 | `CHEKKU_DEFAULT_AGENT_ID` | No | `main-agent` | Default agent for new sessions. |
-| `CHEKKU_LOCAL_USER_ID` | No | `local-user` | Development identity and Memory resource ID. |
 | `BROWSER_HEADLESS` | No | `true` | Run the QA browser without a visible window. |
 | `SEARXNG_BASE_URL` | Conditional | empty | Server-owned SearXNG base URL. `npm run dev:sh` supplies `http://127.0.0.1:8888`; set it explicitly for an external service. |
 | `SEARXNG_API_KEY` | No | empty | Optional server-only bearer token for an authenticated external SearXNG reverse proxy. |
@@ -240,7 +239,9 @@ Local file: `client/.env.local`
 | --- | --- | --- | --- |
 | `AGENT_URL` | No | `http://localhost:4111` | Server-only upstream used by the Next.js proxy. |
 | `NEXT_PUBLIC_APP_URL` | No | `http://localhost:3000` | Browser-visible Next.js origin used by the Mastra client. |
-| `CHEKKU_LOCAL_USER_ID` | No | `local-user` | Temporary local identity until OIDC is added. |
+| `BETTER_AUTH_SECRET` | Yes | empty | Better Auth session-signing secret. Use 32+ random chars in real deployments. |
+| `BETTER_AUTH_URL` | Yes | empty | Canonical Next.js origin used by Better Auth (e.g. `http://localhost:3000`). |
+| `AUTH_DATABASE_URL` | Yes | empty | Postgres connection string for Better Auth tables (points at the `chekku_auth` database). |
 | `AGENT_SERVICE_TOKEN` | No | empty | Optional server-to-server bearer token. |
 
 ## Commands
@@ -501,7 +502,7 @@ The next `npm run dev:sh` recreates the container and re-runs the init script. T
 - Local SearXNG service credentials stay in ignored generated `searxng/.env.local`; they are not application configuration and must not be copied into tracked environment examples, logs, or tickets.
 - Keep `.env`, local databases, logs, and browser artifacts out of commits.
 - No tool requires approval; browser, mobile, Garage, and email actions all run directly.
-- `CHEKKU_LOCAL_USER_ID` is a development seam, not production authentication.
+- Identity resolves from the Better Auth session: sign up at `/signup`, verify via email, sign in at `/login`.
 
 ## Documentation
 

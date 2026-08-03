@@ -2,10 +2,10 @@
 
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import { authClient } from '@/lib/auth-client';
 
-export default function VerifyEmailPage() {
+function VerifyEmailContent() {
   const search = useSearchParams();
   const verified = search.get('status') === 'verified';
   const [email, setEmail] = useState('');
@@ -68,5 +68,13 @@ export default function VerifyEmailPage() {
         <Link href="/login">Back to sign in</Link>
       </p>
     </main>
+  );
+}
+
+export default function VerifyEmailPage() {
+  return (
+    <Suspense>
+      <VerifyEmailContent />
+    </Suspense>
   );
 }

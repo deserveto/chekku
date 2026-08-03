@@ -393,7 +393,7 @@ Garage access remains server-side through two explicit paths. Chat tool calls pa
 
 SearXNG and Web Reader also remain server-side. Builder state carries only fixed capability selection; browser requests cannot set endpoints, keys, headers, commands, packages, environment, provider controls, or tool registries. Search and page-reading requests run from the Mastra process through fixed clients.
 
-`client/src/server/pm-reports.ts` is a separate server-only boundary for report pages and APIs. It requires the same server identity seam before storage access, validates public report IDs before reads, fixes the namespace to `pm-agent`, and maps provider failures to safe 400, 403, 404, or 503 responses. OIDC may replace `CHEKKU_LOCAL_USER_ID` later without changing namespace or report-access semantics.
+`client/src/server/pm-reports.ts` is a separate server-only boundary for report pages and APIs. It requires the same server identity seam before storage access, validates public report IDs before reads, fixes the namespace to `pm-agent`, and maps provider failures to safe 400, 403, 404, or 503 responses. The identity seam now resolves from the Better Auth session cookie (`getUserId()` / `requireUserId()` in `client/src/server/auth.ts`); `resourceId` (Memory thread ownership) equals `session.user.id`, so namespace and report-access semantics are unchanged.
 
 `client/src/server/competitive-analyses.ts` mirrors this boundary for `pca_...` records, validating canonical IDs before storage creation and exposing only projected relative metadata. Unknown route failures become fixed 500 responses; provider diagnostics never reach clients.
 

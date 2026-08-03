@@ -184,7 +184,9 @@ LLM_IMAGE_ENDPOINT_PATH
 - Browser-to-Mastra agent-service requests target the Next.js origin and pass through `/api/agent/*`. PM report pages stay under `/reports/*`; weekly and competitive APIs stay under `/api/storage/pm-reports/*` and `/api/storage/competitive-analyses/*` in the Next.js server. Social post pages stay under `/social-posts/*`, and social post storage APIs stay under `/api/storage/social-posts/*`.
 - The proxy must continue supporting `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, and `HEAD`.
 - Validate upstream paths with `client/src/server/proxy-url.ts`.
-- `CHEKKU_LOCAL_USER_ID` is a temporary local identity seam. Replace it with OIDC later without changing thread-ownership semantics.
+- `CHEKKU_LOCAL_USER_ID` has been replaced by Better Auth email/password. `getUserId()` / `requireUserId()` in `client/src/server/auth.ts` resolve the authenticated user from the Better Auth session cookie; `resourceId` (Memory thread ownership) equals `session.user.id`. Thread-ownership semantics are unchanged from the `CHEKKU_LOCAL_USER_ID` era.
+- Better Auth lives in the `client` workspace only. The required client env vars are `BETTER_AUTH_SECRET` (32+ random chars), `BETTER_AUTH_URL` (Next.js origin), and `AUTH_DATABASE_URL` (points at the `chekku_auth` database on the shared Postgres instance). All three stay server-side and never enter the client bundle. The agent server is untouched and never imports Better Auth or reads `chekku_auth`.
+- Per-user stored-agent ownership is deferred to a later phase. Threads and reports are already scoped per user via `resourceId`; stored agents are not yet scoped per user.
 - `AGENT_SERVICE_TOKEN`, when used, is server-only.
 - `/api/storage/pm-reports` and `/api/storage/pm-reports/[reportId]` require the server identity seam and return safe bounded errors.
 - `/api/storage/competitive-analyses` and `/api/storage/competitive-analyses/[analysisId]` require the same seam and return safe bounded errors.
