@@ -1,11 +1,12 @@
 import Link from 'next/link';
 
 import { StudioNav } from '@/components/studio/studio-nav';
+import { requireUserId } from '@/server/auth';
 
 export const dynamic = 'force-dynamic';
 
 export default async function ReportsPage() {
-  const resourceId = process.env.CHEKKU_LOCAL_USER_ID || 'local-user';
+  const resourceId = await requireUserId();
 
   return (
     <div className="studio-shell">

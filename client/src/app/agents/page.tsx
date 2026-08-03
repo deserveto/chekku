@@ -1,6 +1,7 @@
 import { AgentCatalogPage } from '@/components/agents/agent-catalog-page';
+import { requireUserId } from '@/server/auth';
 
-export default function AgentsPage() {
-  const resourceId = process.env.CHEKKU_LOCAL_USER_ID || 'local-user';
+export default async function AgentsPage() {
+  const resourceId = await requireUserId();
   return <AgentCatalogPage resourceId={resourceId} />;
 }

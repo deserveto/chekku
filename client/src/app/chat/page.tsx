@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { ChatStudio } from '@/components/chat/chat-studio';
 import { resolveChatIdentity } from '@/lib/chat-route';
+import { requireUserId } from '@/server/auth';
 
 function first(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
@@ -12,7 +13,7 @@ export default async function ChatPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const query = await searchParams;
-  const resourceId = process.env.CHEKKU_LOCAL_USER_ID || 'local-user';
+  const resourceId = await requireUserId();
   const resolved = resolveChatIdentity(query, resourceId);
 
   if (

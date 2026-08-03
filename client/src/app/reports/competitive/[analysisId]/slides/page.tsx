@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 
 import { CompetitiveSlides } from '@/components/competitive-slides';
 import { StudioNav } from '@/components/studio/studio-nav';
+import { requireUserId } from '@/server/auth';
 import {
   CompetitiveAnalysisServiceError,
   getCompetitiveAnalysisForUser,
@@ -15,7 +16,7 @@ export default async function CompetitiveAnalysisSlidesPage({
 }: {
   params: Promise<{ analysisId: string }>;
 }) {
-  const resourceId = process.env.CHEKKU_LOCAL_USER_ID || 'local-user';
+  const resourceId = await requireUserId();
   const { analysisId } = await params;
   let slidesMarkdown: string | undefined;
   let errorMessage: string | undefined;

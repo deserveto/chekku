@@ -1,6 +1,7 @@
 import Link from 'next/link';
 
 import { StudioNav } from '@/components/studio/studio-nav';
+import { requireUserId } from '@/server/auth';
 import { formatSocialPostCreatedAt } from '@/server/social-post-format';
 import {
   listSocialPostsForUser,
@@ -10,7 +11,7 @@ import {
 export const dynamic = 'force-dynamic';
 
 export default async function SocialPostsPage() {
-  const resourceId = process.env.CHEKKU_LOCAL_USER_ID || 'local-user';
+  const resourceId = await requireUserId();
   let posts: Awaited<ReturnType<typeof listSocialPostsForUser>> = [];
   let errorMessage: string | undefined;
 

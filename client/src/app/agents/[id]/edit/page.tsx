@@ -1,4 +1,5 @@
 import { AgentBuilderPage } from '@/components/agents/agent-builder-page';
+import { requireUserId } from '@/server/auth';
 
 export default async function EditAgentPage({
   params,
@@ -6,7 +7,7 @@ export default async function EditAgentPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const resourceId = process.env.CHEKKU_LOCAL_USER_ID || 'local-user';
+  const resourceId = await requireUserId();
   return (
     <AgentBuilderPage
       mode="edit"
