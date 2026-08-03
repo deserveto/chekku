@@ -1,11 +1,19 @@
 import 'server-only';
+import { headers } from 'next/headers';
+import { redirect } from 'next/navigation';
+import { auth } from '@/lib/auth';
 
-/** Server-controlled identity. Replace this implementation when OIDC is added. */
 export async function getUserId(): Promise<string | null> {
-  return process.env.CHEKKU_LOCAL_USER_ID ?? 'local-user';
+  const session = await auth.api.getSession({ headers: await headers() });
+  return session?.user.id ?? null;
 }
 
-/** Optional service credential for the studio -> agent-server hop. */
+export async function requireUserId(): Promise<string> {
+  const userId = await getUserId();
+  if (!userId) redirect('/login');
+  return userId;
+}
+
 export async function getDownstreamToken(userId: string): Promise<string | null> {
   void userId;
   return process.env.AGENT_SERVICE_TOKEN || null;
