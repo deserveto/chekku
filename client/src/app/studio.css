@@ -1934,9 +1934,21 @@ body.studio-sidebar-resizing * {
   gap: 1rem;
 }
 
+.competitive-slides-shell-public {
+  min-height: 100vh;
+}
+
 .competitive-slides-toolbar {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.competitive-slides-counter {
+  font-variant-numeric: tabular-nums;
+  color: var(--studio-muted, #666);
+  margin-right: auto;
 }
 
 .competitive-slides-loading {
@@ -1945,6 +1957,14 @@ body.studio-sidebar-resizing * {
   color: var(--studio-muted, #666);
 }
 
-.competitive-slides-stage {
-  overflow: hidden;
+/* competitive-slides-stage: no layout rules here. overflow: hidden was removed
+   (it clipped every slide below the first when the browser paginated). Marp's
+   own rendered CSS handles scroll-snap during screen use and pagination during
+   print. The class remains as a ref anchor for the component. */
+
+.public-slides-context {
+  text-align: center;
+  color: var(--studio-muted, #666);
+  padding: 1rem;
+  font-size: 0.875rem;
 }
