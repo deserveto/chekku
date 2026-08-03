@@ -1453,3 +1453,25 @@ describe('setup-env.sh', () => {
     });
   });
 });
+
+describe('scripts/db-migrate.sh', () => {
+  it('fails closed with a fixed message when AUTH_DATABASE_URL is empty and never invokes the CLI', () => {
+    const root = fixture({ setupEnv: false });
+    writeFileSync(
+      resolve(root, 'client/.env.local'),
+      'AUTH_DATABASE_URL=\nBETTER_AUTH_SECRET=anything\n',
+    );
+    const markerFile = resolve(root, 'mock-log', 'npx-invoked');
+    executable(
+      resolve(root, 'bin/npx'),
+      `touch "$MOCK_LOG/npx-invoked"\nexit 0`,
+    );
+    const result = run(root, [resolve(sourceRoot, 'scripts/db-migrate.sh')], {
+      CHEKKU_CLIENT_ENV: resolve(root, 'client/.env.local'),
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toMatch(/AUTH_DATABASE_URL|npm run setup/i);
+    expect(existsSync(markerFile)).toBe(false);
+  });
+});
