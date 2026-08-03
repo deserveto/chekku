@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
+import { BrandMark } from '@/components/ui/brand-mark';
 import { authClient } from '@/lib/auth-client';
 
 function VerifyEmailContent() {
@@ -31,42 +32,65 @@ function VerifyEmailContent() {
 
   if (verified) {
     return (
-      <main>
-        <h1>Email verified</h1>
-        <p>Your email is verified. You can sign in now.</p>
-        <p>
-          <Link href="/login">Sign in</Link>
-        </p>
+      <main className="auth-shell">
+        <div className="auth-card">
+          <div className="auth-brand">
+            <BrandMark />
+            <p className="auth-eyebrow">Verified</p>
+            <h1 className="auth-title">Email confirmed</h1>
+          </div>
+          <p className="auth-subtitle">
+            Your email is verified. You can sign in now.
+          </p>
+          <p className="auth-foot">
+            <Link href="/login">Sign in</Link>
+          </p>
+        </div>
       </main>
     );
   }
 
   return (
-    <main>
-      <h1>Check your email</h1>
-      <p>
-        We sent a verification link when you signed up. Click it to verify your
-        account.
-      </p>
-      <form onSubmit={onResend}>
-        <label>
-          Resend to
-          <input
-            type="email"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            required
-          />
-        </label>
-        <button type="submit" disabled={pending}>
-          {pending ? 'Sending…' : 'Resend verification'}
-        </button>
-        {sent ? <p>If that account exists, a new link is on its way.</p> : null}
-        {error ? <p role="alert">{error}</p> : null}
-      </form>
-      <p>
-        <Link href="/login">Back to sign in</Link>
-      </p>
+    <main className="auth-shell">
+      <div className="auth-card">
+        <div className="auth-brand">
+          <BrandMark />
+          <p className="auth-eyebrow">Verify email</p>
+          <h1 className="auth-title">Check your email</h1>
+        </div>
+        <p className="auth-subtitle">
+          We sent a verification link when you signed up. Click it to verify
+          your account.
+        </p>
+        <form className="auth-form" onSubmit={onResend}>
+          <label className="studio-field">
+            <span>Resend to</span>
+            <input
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              required
+              placeholder="you@example.com"
+            />
+          </label>
+          <button className="auth-primary" type="submit" disabled={pending}>
+            {pending ? 'Sending…' : 'Resend verification'}
+          </button>
+          {sent ? (
+            <p className="auth-alert auth-alert-success" role="status">
+              If that account exists, a new link is on its way.
+            </p>
+          ) : null}
+          {error ? (
+            <p className="auth-alert auth-alert-error" role="alert">
+              {error}
+            </p>
+          ) : null}
+        </form>
+        <p className="auth-foot">
+          <Link href="/login">Back to sign in</Link>
+        </p>
+      </div>
     </main>
   );
 }
