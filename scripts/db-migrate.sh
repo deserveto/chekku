@@ -31,11 +31,32 @@ export BETTER_AUTH_URL="$(read_env_value BETTER_AUTH_URL)"
 MIGRATE_LOG="$(mktemp)"
 chmod 600 "$MIGRATE_LOG"
 cd "$ROOT/client"
-if ! npx -y @better-auth/cli migrate >"$MIGRATE_LOG" 2>&1; then
+
+BACKUP_DIR="$(mktemp -d)"
+restore_files() {
+  if [[ -d "$BACKUP_DIR" ]]; then
+    while IFS= read -r -d '' backup; do
+      rel="${backup#"$BACKUP_DIR"/}"
+      cp "$backup" "$ROOT/$rel"
+    done < <(find "$BACKUP_DIR" -type f -print0 2>/dev/null)
+    rm -rf "$BACKUP_DIR"
+  fi
   rm -f "$MIGRATE_LOG"
+}
+trap restore_files EXIT
+
+while IFS= read -r -d '' file; do
+  if grep -q "^import 'server-only';" "$file" 2>/dev/null; then
+    rel="${file#"$ROOT"/}"
+    mkdir -p "$BACKUP_DIR/$(dirname "$rel")"
+    cp "$file" "$BACKUP_DIR/$rel"
+    sed -i "/^import 'server-only';$/d" "$file"
+  fi
+done < <(find "$ROOT/client/src" -name '*.ts' ! -name '*.test.ts' -print0 2>/dev/null)
+
+if ! echo y | npx -y @better-auth/cli migrate --config src/lib/auth.ts >"$MIGRATE_LOG" 2>&1; then
   echo "Better Auth migration failed. Confirm Postgres is running and AUTH_DATABASE_URL is reachable." >&2
   exit 1
 fi
-rm -f "$MIGRATE_LOG"
 
 echo "Better Auth schema applied to chekku_auth."
