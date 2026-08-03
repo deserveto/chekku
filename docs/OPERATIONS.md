@@ -100,16 +100,21 @@ The weekly workflow creates posts in the `DRAFT` status. To approve one for visu
 
 ### `client/.env.local`
 
+Mirrors `client/.env.example`; `npm run setup` generates `BETTER_AUTH_SECRET` and
+wires `AUTH_DATABASE_URL` to the generated `POSTGRES_PASSWORD` (see
+[Authentication](#authentication) below). `AGENT_SERVICE_TOKEN` is optional and
+remains server-side.
+
 ```dotenv
 AGENT_URL=http://localhost:4111
 NEXT_PUBLIC_APP_URL=http://localhost:3000
-BETTER_AUTH_SECRET=replace-with-32+-random-chars
+AGENT_SERVICE_TOKEN=
+BETTER_AUTH_SECRET=
 BETTER_AUTH_URL=http://localhost:3000
 AUTH_DATABASE_URL=postgresql://chekku:chekku@localhost:5432/chekku_auth
-AGENT_SERVICE_TOKEN=
+RESEND_API_KEY=
+RESEND_FROM_EMAIL=Chekku <onboarding@resend.dev>
 ```
-
-`AGENT_SERVICE_TOKEN` is optional and remains server-side.
 
 ### Authentication
 
