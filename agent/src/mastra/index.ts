@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { Mastra } from '@mastra/core/mastra';
 import { MastraEditor } from '@mastra/editor';
-import { LibSQLStore } from '@mastra/libsql';
+import { PostgresStore } from '@mastra/pg';
 import { PinoLogger } from '@mastra/loggers';
 import { env } from '../config/env.js';
 import { requestIdInjector, requestLogger } from '../config/middleware.js';
@@ -25,12 +25,9 @@ import { modelsRoute } from './routes/models.js';
 import { storedAgentTools } from './tools/registry.js';
 import { weeklySocialDrafts } from './workflows/weekly-social-drafts.js';
 
-const storage = new LibSQLStore({
+const storage = new PostgresStore({
   id: 'chekku-storage',
-  url: env.DATABASE_URL,
-  ...(env.DATABASE_AUTH_TOKEN
-    ? { authToken: env.DATABASE_AUTH_TOKEN }
-    : {}),
+  connectionString: env.DATABASE_URL,
 });
 
 export const mastra = new Mastra({

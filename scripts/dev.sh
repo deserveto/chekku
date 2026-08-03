@@ -175,6 +175,7 @@ ensure_service_ready() {
 
   case "$service" in
     garage) required_port=3900 ;;
+    postgres) required_port=5432 ;;
     searxng) required_port=8888 ;;
     *) echo "Unsupported development service." >&2; exit 1 ;;
   esac
@@ -273,10 +274,15 @@ ensure_service_ready searxng SearXNG "${CHEKKU_SEARXNG_PORTS:-8888}"
 
 printf 'SearXNG ready\n  base URL: %s\n' "$SEARXNG_BASE_URL"
 
+ensure_service_ready postgres Postgres "${CHEKKU_POSTGRES_PORTS:-5432}"
+
+printf 'Postgres ready\n  database: chekku_agent\n'
+
 garage_app_cleanup='for garage_name in ${!GARAGE_@}; do case "$garage_name" in GARAGE_ENDPOINT|GARAGE_REGION|GARAGE_BUCKET|GARAGE_ACCESS_KEY_ID|GARAGE_SECRET_ACCESS_KEY) ;; *) unset "$garage_name" ;; esac; done'
 searxng_agent_cleanup='for searxng_name in ${!SEARXNG_@}; do case "$searxng_name" in SEARXNG_BASE_URL|SEARXNG_API_KEY) ;; *) unset "$searxng_name" ;; esac; done'
 searxng_client_cleanup='for searxng_name in ${!SEARXNG_@}; do unset "$searxng_name"; done'
 web_reader_client_cleanup='unset WEB_READER_API_KEY'
+postgres_cleanup='unset POSTGRES_PASSWORD'
 
 if [[ "${CHEKKU_NO_TMUX:-0}" != 1 ]] && command -v tmux >/dev/null 2>&1; then
   root_hash="$(node - "$ROOT" <<'NODE'
@@ -286,11 +292,11 @@ NODE
 )"
   session_name="chekku-dev-$root_hash"
   if ! tmux has-session -t "$session_name" 2>/dev/null; then
-    if ! tmux new-session -d -s "$session_name" -c "$ROOT" "set -a && source storage/.env.local && source searxng/.env.local && set +a && $garage_app_cleanup && $searxng_agent_cleanup && exec npm run dev:agent"; then
+    if ! tmux new-session -d -s "$session_name" -c "$ROOT" "set -a && source storage/.env.local && source searxng/.env.local && set +a && $garage_app_cleanup && $searxng_agent_cleanup && $postgres_cleanup && exec npm run dev:agent"; then
       echo "Could not create tmux session '$session_name'." >&2
       exit 1
     fi
-    if ! tmux split-window -h -t "$session_name" -c "$ROOT" "set -a && source storage/.env.local && source searxng/.env.local && set +a && $garage_app_cleanup && $searxng_client_cleanup && $web_reader_client_cleanup && exec npm run dev:client" ||
+    if ! tmux split-window -h -t "$session_name" -c "$ROOT" "set -a && source storage/.env.local && source searxng/.env.local && set +a && $garage_app_cleanup && $searxng_client_cleanup && $web_reader_client_cleanup && $postgres_cleanup && exec npm run dev:client" ||
       ! tmux select-layout -t "$session_name" even-horizontal; then
       tmux kill-session -t "$session_name" 2>/dev/null || true
       echo "Could not configure tmux session '$session_name'; partial session removed." >&2
@@ -345,6 +351,7 @@ set -m
 (
   eval "$garage_app_cleanup"
   eval "$searxng_agent_cleanup"
+  eval "$postgres_cleanup"
   exec npm run dev:agent
 ) &
 AGENT_PID=$!
@@ -352,6 +359,7 @@ AGENT_PID=$!
   eval "$garage_app_cleanup"
   eval "$searxng_client_cleanup"
   eval "$web_reader_client_cleanup"
+  eval "$postgres_cleanup"
   exec npm run dev:client
 ) &
 CLIENT_PID=$!

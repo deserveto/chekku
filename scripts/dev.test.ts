@@ -54,6 +54,7 @@ const storageSecretKeyNames = new Set([
   'GARAGE_RPC_SECRET',
   'GARAGE_ADMIN_TOKEN',
   'GARAGE_METRICS_TOKEN',
+  'POSTGRES_PASSWORD',
 ]);
 const searxngSecretKeyNames = new Set([
   'SEARXNG_SECRET',
@@ -111,10 +112,14 @@ if [[ "$1" == compose ]] && [[ "$*" == *" ps -q garage" ]]; then
 elif [[ "$1" == compose ]] && [[ "$*" == *" ps -q searxng" ]]; then
   docker_command=ps
   docker_service=searxng
+elif [[ "$1" == compose ]] && [[ "$*" == *" ps -q postgres" ]]; then
+  docker_command=ps
+  docker_service=postgres
 elif [[ "$1" == inspect ]]; then
   case "\${*: -1}" in
     garage-id) docker_service=garage ;;
     searxng-id) docker_service=searxng ;;
+    postgres-id) docker_service=postgres ;;
   esac
 fi
 if [[ "\${HANG_DOCKER_COMMAND:-}" == "$docker_command" ]] &&
@@ -138,6 +143,10 @@ if [[ "$1" == compose ]]; then
   fi
   if [[ "$*" == *" ps -q searxng" ]]; then
     if [[ "\${SEARXNG_RUNNING:-1}" == 1 ]]; then printf 'searxng-id\\n'; fi
+    exit 0
+  fi
+  if [[ "$*" == *" ps -q postgres" ]]; then
+    if [[ "\${POSTGRES_RUNNING:-1}" == 1 ]]; then printf 'postgres-id\\n'; fi
     exit 0
   fi
   if [[ "$*" == *" up "* ]]; then
@@ -214,13 +223,13 @@ const { parse } = require('dotenv');
 
 const values = { ...process.env, ...parse(readFileSync('agent/.env.development')) };
 const lines = Object.entries(values)
-  .filter(([name]) => /^(?:GARAGE|SEARXNG)_/.test(name) || name === 'WEB_READER_API_KEY')
+  .filter(([name]) => /^(?:GARAGE|SEARXNG)_/.test(name) || name === 'WEB_READER_API_KEY' || name === 'POSTGRES_PASSWORD')
   .sort(([left], [right]) => left.localeCompare(right))
   .map(([name, value]) => name + '=' + value);
 writeFileSync(process.argv[2], lines.join('\\n') + '\\n');
 NODE
 else
-  env | grep -E '^(GARAGE|SEARXNG)_|^WEB_READER_API_KEY=' | sort > "$MOCK_LOG/env-$role"
+  env | grep -E '^(GARAGE|SEARXNG)_|^(WEB_READER_API_KEY|POSTGRES_PASSWORD)=' | sort > "$MOCK_LOG/env-$role"
 fi
 touch "$MOCK_LOG/ready-$role"
 for _ in {1..100}; do
@@ -340,20 +349,25 @@ describe('development launcher', () => {
     const configIndex = successCalls.findIndex((call) => call.includes('config --quiet'));
     const garagePsIndex = successCalls.findIndex((call) => call.includes('ps -q garage'));
     const searxngPsIndex = successCalls.findIndex((call) => call.includes('ps -q searxng'));
+    const postgresPsIndex = successCalls.findIndex((call) => call.includes('ps -q postgres'));
     const garageUpIndex = successCalls.findIndex((call) => call.includes(' up ') && call.endsWith('garage'));
     const searxngUpIndex = successCalls.findIndex((call) => call.includes(' up ') && call.endsWith('searxng'));
+    const postgresUpIndex = successCalls.findIndex((call) => call.includes(' up ') && call.endsWith('postgres'));
 
     expect(success.status, success.stderr).toBe(0);
     expect(configIndex).toBeGreaterThan(-1);
-    for (const serviceIndex of [garagePsIndex, searxngPsIndex, garageUpIndex, searxngUpIndex]) {
+    for (const serviceIndex of [garagePsIndex, searxngPsIndex, postgresPsIndex, garageUpIndex, searxngUpIndex, postgresUpIndex]) {
       expect(configIndex).toBeLessThan(serviceIndex);
     }
     expect(successCalls).toContain('compose --env-file storage/.env.local ps -q garage');
     expect(successCalls).toContain('compose --env-file storage/.env.local ps -q searxng');
+    expect(successCalls).toContain('compose --env-file storage/.env.local ps -q postgres');
     expect(successCalls.join('\n')).toMatch(/compose .* up -d .*garage/);
     expect(successCalls.join('\n')).toMatch(/compose .* up -d .*searxng/);
+    expect(successCalls.join('\n')).toMatch(/compose .* up -d .*postgres/);
     expect(success.stdout).toContain('Garage ready');
     expect(success.stdout).toContain('SearXNG ready');
+    expect(success.stdout).toContain('Postgres ready');
 
     const failingRoot = fixture();
     const secret = 'must-not-appear-in-output';
@@ -529,19 +543,19 @@ describe('development launcher', () => {
     expect(existsSync(resolve(root, 'mock-log/ready-dev_client'))).toBe(false);
   });
 
-  it('does not launch either application until both services are healthy', () => {
+  it('does not launch either application until all services are healthy', () => {
     const root = fixture({ captureNpmEnv: true });
     const result = runDev(root, {
       CHEKKU_NO_TMUX: '1',
       CHEKKU_READY_INTERVAL_SECONDS: '1',
-      SEARXNG_HEALTH_ON_SECOND: '1',
+      POSTGRES_HEALTH_ON_SECOND: '1',
     });
     const timeline = readFileSync(resolve(root, 'mock-log/timeline'), 'utf8').trim().split('\n');
-    const healthyIndex = timeline.lastIndexOf('inspect searxng healthy');
+    const healthyIndex = timeline.lastIndexOf('inspect postgres healthy');
     const firstNpmIndex = timeline.findIndex((line) => line.startsWith('npm '));
 
     expect(result.status, result.stderr).toBe(0);
-    expect(timeline).toContain('inspect searxng starting');
+    expect(timeline).toContain('inspect postgres starting');
     expect(healthyIndex).toBeGreaterThan(-1);
     expect(firstNpmIndex).toBeGreaterThan(healthyIndex);
   });
@@ -692,7 +706,7 @@ describe('development launcher', () => {
     ];
     const storageValues = parse(readFileSync(resolve(root, 'storage/.env.local')));
     const searxngValues = parse(readFileSync(resolve(root, 'searxng/.env.local')));
-    const expectedValues = {
+    const expectedValues: Record<string, string> = {
       ...storageValues,
       ...searxngValues,
       WEB_READER_API_KEY: 'must-reach-agent-only',
@@ -709,6 +723,9 @@ describe('development launcher', () => {
         const separator = line.indexOf('=');
         expect(line.slice(separator + 1)).toBe(expectedValues[line.slice(0, separator)]);
       }
+      // POSTGRES_PASSWORD is a container-side secret embedded in DATABASE_URL;
+      // it must not survive into either dev process (regression for PR #19 review).
+      expect(lines.some((line) => line.startsWith('POSTGRES_PASSWORD='))).toBe(false);
     }
   });
 
@@ -759,12 +776,15 @@ describe('development launcher', () => {
     expect(starts[0]).toContain('up -d --force-recreate garage');
     expect(starts[1]).toContain('up -d searxng');
     expect(starts[1]).not.toContain('--force-recreate');
-    expect(starts[2]).toContain('up -d garage');
+    expect(starts[2]).toContain('up -d postgres');
     expect(starts[2]).not.toContain('--force-recreate');
-    expect(starts[3]).toContain('up -d searxng');
+    expect(starts[3]).toContain('up -d garage');
     expect(starts[3]).not.toContain('--force-recreate');
-    expect(starts[4]).toContain('up -d --force-recreate garage');
-    expect(starts[5]).toContain('up -d searxng');
+    expect(starts[4]).toContain('up -d searxng');
+    expect(starts[5]).toContain('up -d postgres');
+    expect(starts[6]).toContain('up -d --force-recreate garage');
+    expect(starts[7]).toContain('up -d searxng');
+    expect(starts[8]).toContain('up -d postgres');
   }, 30_000);
 
   it('removes partially-created tmux session after pane failure', () => {
@@ -962,6 +982,7 @@ describe('setup-env.sh', () => {
       expect(values.GARAGE_RPC_SECRET).toMatch(/^[0-9a-f]{64}$/);
       expect(values.GARAGE_ADMIN_TOKEN).toMatch(/^[A-Za-z0-9_-]{43}$/);
       expect(values.GARAGE_METRICS_TOKEN).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(values.POSTGRES_PASSWORD).toMatch(/^[A-Za-z0-9_-]{43}$/);
 
       // Second run is a no-op.
       const second = runSetup(root);
@@ -999,6 +1020,7 @@ describe('setup-env.sh', () => {
       expect(afterValues.GARAGE_SECRET_ACCESS_KEY).toBe(beforeValues.GARAGE_SECRET_ACCESS_KEY);
       expect(afterValues.GARAGE_ACCESS_KEY_ID).toBe(beforeValues.GARAGE_ACCESS_KEY_ID);
       expect(afterValues.GARAGE_METRICS_TOKEN).toBe(beforeValues.GARAGE_METRICS_TOKEN);
+      expect(afterValues.POSTGRES_PASSWORD).toBe(beforeValues.POSTGRES_PASSWORD);
     });
 
     it('preserves user-customized GARAGE_BUCKET when regenerating after another key becomes invalid', () => {
@@ -1084,7 +1106,7 @@ describe('setup-env.sh', () => {
   });
 
   describe('agent/.env.development rendering', () => {
-    it('writes exactly the five Garage app keys and 2 SearXNG app keys, never service secrets', () => {
+    it('writes the Garage and SearXNG app keys plus DATABASE_URL, never service secrets', () => {
       const root = fixture();
       const result = runSetup(root);
       const devPath = resolve(root, 'agent/.env.development');
@@ -1102,6 +1124,9 @@ describe('setup-env.sh', () => {
       expect(values.GARAGE_SECRET_ACCESS_KEY).toBe(storageValues.GARAGE_SECRET_ACCESS_KEY);
       expect(values.SEARXNG_BASE_URL).toBe('http://127.0.0.1:8888');
       expect(values.SEARXNG_API_KEY).toBe('');
+      expect(values.DATABASE_URL).toBe(
+        `postgresql://chekku:${storageValues.POSTGRES_PASSWORD}@127.0.0.1:5432/chekku_agent`,
+      );
 
       const secretNames = ['GARAGE_RPC_SECRET', 'GARAGE_ADMIN_TOKEN', 'GARAGE_METRICS_TOKEN', 'SEARXNG_SECRET', 'SEARXNG_CONFIG_HASH'];
       for (const name of secretNames) {
@@ -1143,6 +1168,18 @@ describe('setup-env.sh', () => {
       const values = parse(readFileSync(resolve(root, 'agent/.env.development'), 'utf8'));
       expect(values.SEARXNG_BASE_URL).toBe('http://127.0.0.1:8888');
       expect(values.SEARXNG_API_KEY).toBe('user-bearer-token');
+    });
+
+    it('preserves a non-empty user-set DATABASE_URL from agent/.env into agent/.env.development', () => {
+      const root = fixture();
+      writeFileSync(
+        resolve(root, 'agent/.env'),
+        [validAgentEnv.trimEnd(), 'DATABASE_URL=postgresql://custom:5433/customdb', ''].join('\n'),
+      );
+      const result = runSetup(root);
+      expect(result.status, result.stderr).toBe(0);
+      const values = parse(readFileSync(resolve(root, 'agent/.env.development'), 'utf8'));
+      expect(values.DATABASE_URL).toBe('postgresql://custom:5433/customdb');
     });
 
     it('regenerates a clean development env from the example when agent/.env is removed between runs', () => {

@@ -34,8 +34,8 @@
     "vitest": "^4.1.0"
   },
   "overrides": {
-    "@mastra/core": "1.50.0",
-    "@mastra/libsql": "1.15.1",
+    "@mastra/core": "1.50.1",
+    "@mastra/pg": "1.15.0",
     "zod": "3.25.76"
   }
 }

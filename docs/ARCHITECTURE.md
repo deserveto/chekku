@@ -2,7 +2,7 @@
 
 ## Overview
 
-Chekku contains three npm workspaces: a Next.js client, a Mastra agent server, and the shared `@chekku/storage` package. The system is local-first, uses LibSQL for agent and conversation persistence, offers Garage-backed generic agent object storage plus weekly and competitive PM report persistence, connects to one server-owned OpenAI-compatible model endpoint, provides bounded web search through a server-owned SearXNG endpoint, and reads chosen public pages through hosted Jina Reader.
+Chekku contains three npm workspaces: a Next.js client, a Mastra agent server, and the shared `@chekku/storage` package. The system is local-first, uses Postgres for agent and conversation persistence, offers Garage-backed generic agent object storage plus weekly and competitive PM report persistence, connects to one server-owned OpenAI-compatible model endpoint, provides bounded web search through a server-owned SearXNG endpoint, and reads chosen public pages through hosted Jina Reader.
 
 ```text
 ┌────────────────────────────────────────────┐
@@ -31,7 +31,7 @@ Chekku contains three npm workspaces: a Next.js client, a Mastra agent server, a
 │ - social-media-strategist-agent            │        │
 │ - visual-content-agent                     │        │
 │                                            │        │
-│ Memory + LibSQLStore                       │        │
+│ Memory + PostgresStore                      │        │
 │ Calculator + current-time + email tools    │        │
 │ Garage + SearXNG + Web Reader MCP          │        │
 │ Chat SDK + Telegram adapter                │        │
@@ -79,7 +79,7 @@ PM competitive analysis
 - `garageMcpServer` for generic agent-isolated object storage;
 - `searxngMcpServer` for fixed read-only web search by selected stored agents;
 - `webReaderMcpServer` for fixed read-only hosted page reading by selected stored agents;
-- `LibSQLStore`;
+- `PostgresStore` (`@mastra/pg`);
 - `MastraEditor` with database storage;
 - `OpenAICompatibleGateway`;
 - structured logging and request middleware;
@@ -173,7 +173,7 @@ When an older stored model no longer matches the current registry, the client mi
 
 Workflows are registered on the `Mastra` instance through its `workflows` field and live in `agent/src/mastra/workflows/`. Declaring a `schedule` on a workflow auto-promotes it to the evented execution engine; the built-in scheduler reads the `schedule` field on boot and fires the run on the configured cron — no separate registration call.
 
-The scheduler runs on the long-lived `mastra` host process (`mastra dev` / `mastra start`), so scheduled fires work without extra setup. Evented runs require a storage adapter that supports concurrent updates; Chekku uses `LibSQLStore`, which satisfies this.
+The scheduler runs on the long-lived `mastra` host process (`mastra dev` / `mastra start`), so scheduled fires work without extra setup. Evented runs require a storage adapter that supports concurrent updates; Chekku uses `PostgresStore`, which satisfies this.
 
 `weekly-social-drafts` fires every Monday at 09:00 Asia/Jakarta and drafts 2–3 Instagram posts per run. Each fire resolves 2 base topics from SearXNG trending research (`trending-research.ts` → the existing `search_web` tool, snippet-only), filters results to a credible-source whitelist (`CREDIBLE_HOST_PATTERNS` — Indonesian + international news sources, rejects blogspam and social-media hosts) plus a homepage/category filter (rejects `bbc.com/`, `bbc.com/indonesia`, requires article paths), enriches each chosen topic with the hosted Web Reader's page markdown when `WEB_READER_API_KEY` is configured (single-page read per topic via the existing `read_web_page` tool, bounded parallel fetch, per-topic failure falls back to snippet only), fills any remaining base slot from the deterministic evergreen-pillar rotation, then appends one awareness-day bonus from `selectBonusAwarenessDayForWeek` when the week contains a holiday. Awareness-day candidates come from two merged sources: the Public Holiday Indonesia API (`agent/src/mastra/calendar/public-holidays.ts`, fetches Idul Fitri, Idul Adha, 1 Muharram, Isra Mi'raj, Maulid Nabi, Nyepi, Paskah, Waisak, Natal, etc. with their Gregorian dates and Hijri year labels) and the fixed-date `SPECIAL_DAYS` calendar (covers observance days that are not national holidays, like Hari Kartini or Hari Guru Nasional). When both sources have an entry on the same date, the API wins because it is authoritative and usually carries the Hijri year. The API response is cached per year on disk so a single fire does not re-fetch 30+ years of data and an offline API does not block the workflow; if the API is unconfigured or unreachable, the selector falls back to fixed-date `SPECIAL_DAYS` only. Trending results whose title or snippet overlaps the chosen awareness day are skipped so the bonus and a base slot do not duplicate the same theme. When SearXNG is not configured or every research query fails, the workflow degrades to 2 evergreen pillars with no awareness bonus and records a `researchNote`. Each draft is produced through a two-step layered flow (per the canonical-content-unit contract). Step 1 calls `socialMediaSupervisorAgent.generate(prompt)` carrying the `[weekly-social-drafts]` system marker; the supervisor's own routing instructions run (they are NOT overridden) and it delegates straight to the Content Writer. The canonical mode is carried in `requestContext` via `SOCIAL_DRAFT_MODE_KEY` (`agent/src/agents/social-media-content-writer.ts`), not via the Mastra `.generate({ instructions })` option, because that option would override the supervisor's routing and make it draft the unit itself. The Content Writer emits a platform-agnostic Canonical Content Unit (`buildCanonicalInstructions`). Step 2 calls `socialMediaContentWriter.generate(prompt)` directly with repurpose mode pinned in `requestContext` (`buildRepurposeInstructions`) to derive the final Instagram caption. The `instagram-writer` role carries the brand identity ("R — Your Gentle AI Companion", tagline "AI Human-Centered Intelligence", sign-off "Hormat kami, Keluarga Besar PT Rafiq Space Intelligence") and `buildRepurposePrompt` dispatches the caption format by topic kind (the format split lives in the repurpose layer; canonical generation stays platform-agnostic): trending topics get a Folkative-style news caption (10-15 word visual headline for the image + 1-2 paragraph casual conversational caption + subtle CTA + emoji, no brand stamps, no "Poin-poin" bullets, no formal sign-off); awareness days and evergreen pillars get the structured greeting-card copy (header → title → canonical date line — for Islamic holidays, the Hijri year from the API; for civic days, the Indonesian long-form Gregorian date; for trending/evergreen, omitted → opening → optional religious/cultural verse with attribution → "Poin-poin" brand-value bullets with `**[Value]:**` elaboration format → tagline → sign-off). Title templates for greeting-card path: `Selamat {day}` for special days, themed headline for evergreen. Page-markdown context injected into the prompt is hard-capped at 3000 chars and labeled as untrusted evidence — never instructions — so prompt injection in upstream pages cannot escalate. Each draft is persisted through the existing Garage MCP `create_text_object` tool with `agentId` pinned to `social-media-agent`, and emailed as a review link to `SOCIAL_DRAFT_REVIEW_EMAIL`. Email delivery failure is recorded without failing the run, so drafts remain saved. Research never modifies voice, storage, the canonical post id / key layout, or notification.
 
@@ -257,15 +257,15 @@ This normalization applies to both `doGenerate` and `doStream`.
 
 ## Storage
 
-`LibSQLStore` is the only persistence layer. It stores:
+`PostgresStore` is the only persistence layer. It stores:
 
 - stored-agent definitions and versions;
 - Mastra Memory threads and messages;
 - other Mastra-managed state.
 
-The default URL is `file:./mastra.db`. The actual file location depends on the working directory used to launch the agent workspace.
+The default URL is `postgresql://chekku:postgres@localhost:5432/chekku_agent`. The centralized Postgres instance lives in `compose.yaml` (database `chekku_agent`); the same instance hosts `chekku_auth` for Better Auth. `scripts/setup-env.sh` generates `POSTGRES_PASSWORD` and injects it into `DATABASE_URL` in `agent/.env.development`.
 
-`@chekku/storage` is a separate generic object-storage boundary, not a replacement for LibSQL. It defines create, replace, get, existence, delete, bounded-list, and binary object operations and implements them through Garage's S3-compatible API. The binary methods (`createBytes`, `replaceBytes`, `getBytes`) are optional on the `ObjectStorage` interface so existing text-only implementations keep typechecking unchanged; the Garage adapter, the lazy adapter, and the namespaced wrapper all implement them. `asBinaryObjectStorage` narrows a store to its binary capability at consumption sites and throws a fixed actionable error when a store lacks it. Binary reads are bounded to 16 MiB and reuse the same error-sanitization path as text operations. Application configuration uses only:
+`@chekku/storage` is a separate generic object-storage boundary, not a replacement for Postgres. It defines create, replace, get, existence, delete, bounded-list, and binary object operations and implements them through Garage's S3-compatible API. The binary methods (`createBytes`, `replaceBytes`, `getBytes`) are optional on the `ObjectStorage` interface so existing text-only implementations keep typechecking unchanged; the Garage adapter, the lazy adapter, and the namespaced wrapper all implement them. `asBinaryObjectStorage` narrows a store to its binary capability at consumption sites and throws a fixed actionable error when a store lacks it. Binary reads are bounded to 16 MiB and reuse the same error-sanitization path as text operations. Application configuration uses only:
 
 ```text
 GARAGE_ENDPOINT
