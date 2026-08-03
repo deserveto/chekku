@@ -113,15 +113,16 @@ AGENT_SERVICE_TOKEN=
 
 ### Authentication
 
-Chekku resolves identity from a Better Auth email/password session instead of a local development seam. The auth database (`chekku_auth`) is provisioned alongside `chekku_agent` by `scripts/postgres/init-databases.sh`; the Better Auth schema is applied by `npx @better-auth/cli migrate` (run from `client/` with `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, and `AUTH_DATABASE_URL` in the shell or `client/.env.local`).
+Chekku resolves identity from a Better Auth email/password session instead of a local development seam. The auth database (`chekku_auth`) is provisioned alongside `chekku_agent` by `scripts/postgres/init-databases.sh`.
 
-Required client env vars:
+`npm run setup` generates `BETTER_AUTH_SECRET` (a 32+ char random value) and writes `AUTH_DATABASE_URL` into `client/.env.local` using the same generated `POSTGRES_PASSWORD` used by the agent's `DATABASE_URL`. You do not type the secret or the password by hand.
 
-```dotenv
-BETTER_AUTH_SECRET=replace-with-32+-random-chars
-BETTER_AUTH_URL=http://localhost:3000
-AUTH_DATABASE_URL=postgresql://chekku:chekku@localhost:5432/chekku_auth
-```
+After setup, apply the Better Auth schema once Postgres is running:
+
+    docker compose up -d postgres
+    npm run db:migrate
+
+`npm run db:migrate` runs `@better-auth/cli migrate` against `AUTH_DATABASE_URL` and is safe to re-run.
 
 Flow:
 
@@ -129,6 +130,8 @@ Flow:
 2. Verify the email. In production with `RESEND_API_KEY` set, the link is delivered through Resend. In local dev without `RESEND_API_KEY`, the verification URL is logged to the server console.
 3. Sign in at `/login`. Better Auth rejects unverified accounts and resends the verification email on attempt.
 4. After verification and sign-in, the session cookie identifies the user. `getUserId()` / `requireUserId()` in `client/src/server/auth.ts` resolve `session.user.id` server-side; unauthenticated requests hit `/login` (or 403 on storage APIs).
+
+**Production:** inject `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `AUTH_DATABASE_URL`, and (for real email delivery) `RESEND_API_KEY` / `RESEND_FROM_EMAIL` via the hosting platform's secret or env configuration — not via committed files. Set `BETTER_AUTH_URL` to the real **HTTPS** origin so Better Auth issues `secure` session cookies. Run `npm run db:migrate` as a deploy release step.
 
 ## Health and model checks
 
