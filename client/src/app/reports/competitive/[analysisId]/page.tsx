@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import { MarkdownMessage } from '@/components/markdown-message';
+import { ShareLinkButton } from '@/components/share-link-button';
 import { StudioNav } from '@/components/studio/studio-nav';
 import {
   CompetitiveAnalysisServiceError,
@@ -75,6 +76,7 @@ export default async function CompetitiveAnalysisDetailPage({
                 View slides
               </Link>
             ) : null}
+            <ShareLinkButton analysisId={analysis.analysisId} />
             <Link className="studio-button" href="/reports/competitive">Back to analyses</Link>
           </div>
         </header>

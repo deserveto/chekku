@@ -19,6 +19,10 @@ vi.mock('@/components/competitive-slides', () => ({
   CompetitiveSlides: ({ slidesMarkdown, analysisId }: { slidesMarkdown: string; analysisId: string }) =>
     `SLIDES:${analysisId}:${slidesMarkdown.slice(0, 6)}`,
 }));
+vi.mock('@/components/share-link-button', () => ({
+  ShareLinkButton: ({ analysisId }: { analysisId: string }) =>
+    `SHARE_BUTTON:${analysisId}`,
+}));
 vi.mock('@/server/competitive-analyses', () => {
   class CompetitiveAnalysisServiceError extends Error {
     constructor(
@@ -190,6 +194,16 @@ describe('competitive analysis detail page', () => {
     }));
 
     expect(markup).not.toContain('View slides');
+  });
+
+  it('renders ShareLinkButton in the header when analysis loads', async () => {
+    mocks.getAnalysis.mockResolvedValue(analysis);
+
+    const markup = renderToStaticMarkup(await CompetitiveAnalysisDetailPage({
+      params: Promise.resolve({ analysisId }),
+    }));
+
+    expect(markup).toContain(`SHARE_BUTTON:${analysisId}`);
   });
 });
 
