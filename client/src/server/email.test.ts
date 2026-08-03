@@ -69,4 +69,36 @@ describe('sendVerificationEmail', () => {
       sendVerificationEmail({ to: 'u@e.test', url: 'https://app.test/v' }),
     ).rejects.toThrow('Failed to send verification email.');
   });
+
+  it('throws a fixed message without leaking the endpoint when fetch rejects', async () => {
+    vi.stubEnv('RESEND_API_KEY', 'rk_test');
+    vi.stubEnv('RESEND_FROM_EMAIL', 'no-reply@chekku.test');
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockRejectedValue(
+        new TypeError('fetch failed', { cause: 'api.resend.com' }),
+      );
+    globalThis.fetch = fetchMock;
+
+    const { sendVerificationEmail } = await import('./email');
+    await expect(
+      sendVerificationEmail({ to: 'u@e.test', url: 'https://app.test/v' }),
+    ).rejects.toThrow('Failed to send verification email.');
+    await expect(
+      sendVerificationEmail({ to: 'u@e.test', url: 'https://app.test/v' }),
+    ).rejects.not.toThrow(/api\.resend\.com/);
+  });
+
+  it('throws a fixed message and skips fetch when RESEND_FROM_EMAIL is unset', async () => {
+    vi.stubEnv('RESEND_API_KEY', 'rk_test');
+    vi.stubEnv('RESEND_FROM_EMAIL', '');
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const { sendVerificationEmail } = await import('./email');
+    await expect(
+      sendVerificationEmail({ to: 'u@e.test', url: 'https://app.test/v' }),
+    ).rejects.toThrow('Failed to send verification email.');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

@@ -16,23 +16,27 @@ export async function sendVerificationEmail({
   }
   const from = process.env.RESEND_FROM_EMAIL;
   if (!from) {
-    console.log(`[auth] verification email (RESEND_FROM_EMAIL unset): ${url}`);
-    return;
+    throw new Error('Failed to send verification email.');
   }
 
-  const response = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      from,
-      to: [to],
-      subject: 'Verify your Chekku email',
-      html: `<p>Verify your email by clicking <a href="${url}">this link</a>.</p><p>${url}</p>`,
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from,
+        to: [to],
+        subject: 'Verify your Chekku email',
+        html: `<p>Verify your email by clicking <a href="${url}">this link</a>.</p><p>${url}</p>`,
+      }),
+    });
+  } catch {
+    throw new Error('Failed to send verification email.');
+  }
 
   if (!response.ok) {
     throw new Error('Failed to send verification email.');
