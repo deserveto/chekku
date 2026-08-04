@@ -32,7 +32,7 @@ const ERRORS = {
   unavailable: 'Web Reader is unavailable. Try again later.',
   format: 'Web Reader returned an unsupported format.',
   tooLarge: 'Web Reader returned too much data.',
-  invalid: 'Web Reader returned an invalid response.',
+  invalid: 'Web Reader returned an invalid response for this URL. The page may be JavaScript-rendered or bot-protected. Try a different URL for this product.',
 } as const;
 
 type AbortSource = 'cancelled' | 'timeout';

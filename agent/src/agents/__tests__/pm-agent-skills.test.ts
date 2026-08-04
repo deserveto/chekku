@@ -80,6 +80,8 @@ describe('PM Agent skills', () => {
     expect(competitiveAnalysisInstructions).toContain('Reading an imperfect page is better than reading nothing');
     expect(competitiveAnalysisInstructions).toContain('After every search_web call, you MUST call read_web_page at least once before calling search_web again');
     expect(competitiveAnalysisInstructions).toContain('Do not declare a product unevidenced until you have attempted at least one read_web_page call for it');
+    expect(competitiveAnalysisInstructions).toContain('If read_web_page returns "invalid response", "timeout", or "unavailable"');
+    expect(competitiveAnalysisInstructions).toContain('Modern SPA sites (React/Vue apps) frequently fail the reader');
     expect(competitiveAnalysisInstructions).toContain('Prioritize reading over searching');
   });
 

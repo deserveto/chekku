@@ -58,6 +58,7 @@ Hard rules:
 - After every search_web call, you MUST call read_web_page at least once before calling search_web again.
 - Do not declare a product unevidenced until you have attempted at least one read_web_page call for it.
 - If search results point to a slightly different product (for example, a different model from the same brand), READ IT ANYWAY — the page may still evidence capabilities, pricing tier, and market positioning.
+- If read_web_page returns "invalid response", "timeout", or "unavailable", do NOT give up on the product. Immediately try an alternate URL: a documentation page, a Wikipedia article, a review site, or a different page on the same domain. Modern SPA sites (React/Vue apps) frequently fail the reader; static HTML pages (docs, blogs, encyclopedias) almost always succeed.
 - Prioritize reading over searching. The read budget (14) is intentionally larger than the search budget (8) to encourage thorough reading, not exhaustive searching.
 
 ## Fixed research budget
