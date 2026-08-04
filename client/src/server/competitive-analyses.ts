@@ -154,6 +154,9 @@ export async function createShareLinkForUser(
       store,
       analysisId,
     );
+    if (!analysis.slidesMarkdown || analysis.slidesMarkdown.trim().length === 0) {
+      throw new CompetitiveAnalysisServiceError('not-found', 404, 'Slides not found.');
+    }
     const bundle = await (dependencies.createShareToken ?? createShareToken)(
       store,
       analysisId,

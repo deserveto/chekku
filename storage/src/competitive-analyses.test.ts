@@ -72,6 +72,13 @@ function validInput(store: ObjectStorage) {
   };
 }
 
+function seedShareableSlides(objects: Map<string, string>): void {
+  objects.set(
+    `agents/cG0tYWdlbnQ/competitive-analyses/${analysisId}/slides.md`,
+    slidesMarkdown,
+  );
+}
+
 describe('competitive analysis storage', () => {
   it('generates canonical IDs and derives canonical relative keys', () => {
     expect(createCompetitiveAnalysisId(new Date('2026-07-23T12:00:00.000Z'))).toMatch(
@@ -526,9 +533,20 @@ describe('competitive analysis storage', () => {
   });
 
   describe('share token', () => {
-    it('createShareToken is idempotent and returns the same token on repeated calls', async () => {
-      const { storage } = createMemoryStorage();
+    it('createShareToken rejects analyses without slides.md', async () => {
+      const { objects, storage } = createMemoryStorage();
       const store = createCompetitiveAnalysisStorage(storage);
+
+      await expect(createShareToken(store, analysisId, 'GPT')).rejects.toMatchObject({
+        code: 'not-found',
+      });
+      expect([...objects.keys()].some((key) => key.endsWith('/share-token.json'))).toBe(false);
+    });
+
+    it('createShareToken is idempotent and returns the same token on repeated calls', async () => {
+      const { objects, storage } = createMemoryStorage();
+      const store = createCompetitiveAnalysisStorage(storage);
+      seedShareableSlides(objects);
 
       const first = await createShareToken(store, analysisId, 'GPT');
       const second = await createShareToken(store, analysisId, 'GPT');
@@ -538,9 +556,59 @@ describe('competitive analysis storage', () => {
       expect(first.token).toMatch(/^[0-9a-f]{32}$/);
     });
 
+    it('createShareToken serializes concurrent creation when storage overwrites', async () => {
+      const { objects, storage } = createMemoryStorage();
+      seedShareableSlides(objects);
+      let tokenCreateAttempts = 0;
+      const racingStorage: ObjectStorage = {
+        ...storage,
+        async createText(key, value, contentType) {
+          if (!key.endsWith('/share-token.json')) {
+            return storage.createText(key, value, contentType);
+          }
+          tokenCreateAttempts += 1;
+          await Promise.resolve();
+          objects.set(key, value);
+        },
+      };
+      const store = createCompetitiveAnalysisStorage(racingStorage);
+
+      const [first, second] = await Promise.all([
+        createShareToken(store, analysisId, 'GPT'),
+        createShareToken(store, analysisId, 'GPT'),
+      ]);
+
+      expect(second).toEqual(first);
+      expect(tokenCreateAttempts).toBe(1);
+    });
+
+    it('createShareToken returns the persisted winner after an already-exists race', async () => {
+      const { objects, storage } = createMemoryStorage();
+      seedShareableSlides(objects);
+      const winner = {
+        token: 'a'.repeat(32),
+        createdAt: '2026-07-29T10:00:00.000Z',
+        anchorProduct: 'GPT',
+      };
+      const racingStorage: ObjectStorage = {
+        ...storage,
+        async createText(key, value, contentType) {
+          if (!key.endsWith('/share-token.json')) {
+            return storage.createText(key, value, contentType);
+          }
+          objects.set(key, JSON.stringify(winner));
+          throw new ObjectStorageError('already-exists', 'Concurrent token creation lost.');
+        },
+      };
+      const store = createCompetitiveAnalysisStorage(racingStorage);
+
+      await expect(createShareToken(store, analysisId, 'GPT')).resolves.toEqual(winner);
+    });
+
     it('createShareToken persists share-token.json with token + createdAt + anchorProduct', async () => {
       const { objects, storage } = createMemoryStorage();
       const store = createCompetitiveAnalysisStorage(storage);
+      seedShareableSlides(objects);
 
       const bundle = await createShareToken(store, analysisId, 'GPT',
         () => new Date('2026-07-29T10:00:00.000Z'));
@@ -556,8 +624,9 @@ describe('competitive analysis storage', () => {
     });
 
     it('createShareToken rejects anchorProduct mismatch on repeated call', async () => {
-      const { storage } = createMemoryStorage();
+      const { objects, storage } = createMemoryStorage();
       const store = createCompetitiveAnalysisStorage(storage);
+      seedShareableSlides(objects);
       await createShareToken(store, analysisId, 'GPT');
 
       await expect(createShareToken(store, analysisId, 'Claude')).rejects.toThrow(
@@ -604,8 +673,9 @@ describe('competitive analysis storage', () => {
     });
 
     it('getShareableSlides returns undefined for mismatched token', async () => {
-      const { storage } = createMemoryStorage();
+      const { objects, storage } = createMemoryStorage();
       const store = createCompetitiveAnalysisStorage(storage);
+      seedShareableSlides(objects);
       const bundle = await createShareToken(store, analysisId, 'GPT');
 
       await expect(getShareableSlides(store, analysisId, '0'.repeat(32))).resolves.toBeUndefined();
@@ -613,8 +683,9 @@ describe('competitive analysis storage', () => {
     });
 
     it('getShareableSlides returns undefined for malformed token input', async () => {
-      const { storage } = createMemoryStorage();
+      const { objects, storage } = createMemoryStorage();
       const store = createCompetitiveAnalysisStorage(storage);
+      seedShareableSlides(objects);
       await createShareToken(store, analysisId, 'GPT');
 
       await expect(getShareableSlides(store, analysisId, 'short')).resolves.toBeUndefined();
@@ -644,11 +715,12 @@ describe('competitive analysis storage', () => {
           return storage.getText(key);
         },
       };
-      const store = createCompetitiveAnalysisStorage(failingStorage);
-      await saveCompetitiveAnalysis({ ...validInput(store), slidesMarkdown: '# Deck\n' });
-      const bundle = await createShareToken(store, analysisId, 'GPT');
+      const healthyStore = createCompetitiveAnalysisStorage(storage);
+      await saveCompetitiveAnalysis({ ...validInput(healthyStore), slidesMarkdown: '# Deck\n' });
+      const bundle = await createShareToken(healthyStore, analysisId, 'GPT');
+      const failingStore = createCompetitiveAnalysisStorage(failingStorage);
 
-      await expect(getShareableSlides(store, analysisId, bundle.token)).rejects.toThrow('slides outage');
+      await expect(getShareableSlides(failingStore, analysisId, bundle.token)).rejects.toThrow('slides outage');
     });
   });
 });

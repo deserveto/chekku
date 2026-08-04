@@ -1,16 +1,23 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 interface ShareLinkButtonProps {
   analysisId: string;
+  initiallyShared?: boolean;
 }
 
-export function ShareLinkButton({ analysisId }: ShareLinkButtonProps) {
-  const [state, setState] = useState<'idle' | 'shared' | 'error'>('idle');
+export function ShareLinkButton({ analysisId, initiallyShared = false }: ShareLinkButtonProps) {
+  const [state, setState] = useState<'idle' | 'pending' | 'shared' | 'error'>(
+    initiallyShared ? 'shared' : 'idle',
+  );
   const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const isCreatingRef = useRef(false);
 
   const handleCreate = async () => {
+    if (isCreatingRef.current) return;
+    isCreatingRef.current = true;
+    setState('pending');
     try {
       const response = await fetch(
         `/api/storage/competitive-analyses/${encodeURIComponent(analysisId)}/share`,
@@ -29,6 +36,8 @@ export function ShareLinkButton({ analysisId }: ShareLinkButtonProps) {
       }
     } catch {
       setState('error');
+    } finally {
+      isCreatingRef.current = false;
     }
   };
 
@@ -50,10 +59,22 @@ export function ShareLinkButton({ analysisId }: ShareLinkButtonProps) {
     );
   }
 
-  if (state === 'shared' && shareUrl) {
+  if (state === 'shared') {
     return (
-      <button type="button" className="studio-button" onClick={handleCopy}>
+      <button
+        type="button"
+        className="studio-button"
+        onClick={shareUrl ? handleCopy : handleCreate}
+      >
         Copy share link
+      </button>
+    );
+  }
+
+  if (state === 'pending') {
+    return (
+      <button type="button" className="studio-button" disabled>
+        Creating share link...
       </button>
     );
   }

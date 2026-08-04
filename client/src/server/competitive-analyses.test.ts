@@ -344,6 +344,17 @@ describe('share link lifecycle', () => {
     expect(result.url).toBe(`/public/slides/${analysisId}?t=abcdef0123456789abcdef0123456789`);
   });
 
+  it('createShareLinkForUser rejects analyses without slides before creating a token', async () => {
+    const createShareToken = vi.fn();
+
+    await expect(createShareLinkForUser(analysisId, {
+      getServerUserId: async () => 'user-1',
+      getAnalysis: async () => ({ ...analysis, slidesMarkdown: undefined }),
+      createShareToken,
+    })).rejects.toMatchObject({ code: 'not-found', status: 404 });
+    expect(createShareToken).not.toHaveBeenCalled();
+  });
+
   it('createShareLinkForUser maps storage not-found to service not-found', async () => {
     const getAnalysis = vi.fn(async () => {
       throw new ObjectStorageError('not-found', 'missing');
