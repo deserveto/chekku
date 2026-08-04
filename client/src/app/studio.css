@@ -1927,22 +1927,40 @@ body.studio-sidebar-resizing * {
   }
 }
 
+/* Competitive slides page (bare wrapper — no studio-shell chrome) */
+.competitive-slides-page {
+  min-height: 100dvh;
+}
+
+.competitive-slides-page-back {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 100;
+}
+
+.competitive-slides-page-error {
+  padding: 3rem 2rem;
+}
+
 /* Competitive slides stage */
 .competitive-slides-shell {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  height: 100dvh;
 }
 
 .competitive-slides-shell-public {
-  min-height: 100vh;
+  min-height: 100dvh;
 }
 
 .competitive-slides-toolbar {
+  flex-shrink: 0;
   display: flex;
   justify-content: flex-end;
   align-items: center;
   gap: 0.75rem;
+  padding: 8px 16px;
 }
 
 .competitive-slides-counter {
@@ -1957,24 +1975,19 @@ body.studio-sidebar-resizing * {
   color: var(--studio-muted, #666);
 }
 
-/* competitive-slides-stage: scroll container so each Marp slide (100vh tall)
-   snaps into view as the user scrolls or presses arrow keys. Without this,
-   the stage either clips (fullscreen) or pushes scroll to an ancestor with
-   unexpected behavior. Marp's own CSS sets scroll-snap-align on sections;
-   we set the scroll-snap-type here and re-anchor snap points to the SVG
-   wrapper (the direct child of the scroll container). */
+/* The stage is the ONLY scroll container. No nested studio-main wrapper.
+   flex:1 + min-height:0 lets it shrink within the shell and scroll internally. */
 .competitive-slides-stage {
-  height: 100dvh;
-  width: 100%;
+  flex: 1;
+  min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
-  scroll-snap-type: y mandatory;
+  scroll-snap-type: y proximity;
   scroll-behavior: smooth;
 }
 
 .competitive-slides-stage svg[data-marpit-svg] {
   scroll-snap-align: start;
-  scroll-snap-stop: always;
 }
 
 .public-slides-context {

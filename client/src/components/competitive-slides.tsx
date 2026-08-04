@@ -25,8 +25,20 @@ const SCOPED_PRINT_STYLE = `
 @media print {
   .competitive-slides-toolbar,
   .competitive-slides-counter,
+  .competitive-slides-page-back,
   .public-slides-context {
     display: none !important;
+  }
+  .competitive-slides-shell,
+  .competitive-slides-shell-public {
+    height: auto !important;
+    display: block !important;
+  }
+  .competitive-slides-stage {
+    height: auto !important;
+    overflow: visible !important;
+    scroll-snap-type: none !important;
+    flex: none !important;
   }
 }
 `;
