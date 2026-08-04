@@ -653,6 +653,7 @@ In-container wiring is fixed by Compose and differs from local development:
 - SearXNG is reached at `http://searxng:8080` (the container's internal port), not the loopback `8888` used in development.
 - Only the client publishes a port, and only on loopback (`127.0.0.1:3000`). Put a reverse proxy (Caddy/nginx) in front for TLS and public exposure; override the binding with `docker-compose.override.yaml` if a different host binding is required (that file is gitignored).
 - The QA Web Agent works in production because the agent image installs system Chromium for `playwright-core`. The QA Android Agent (Maestro) stays host/device-only: `MAESTRO_ENABLED` is forced to `false` in the agent container.
+- `NEXT_PUBLIC_APP_URL` is a **build-time** value for the client image. Next.js inlines `NEXT_PUBLIC_*` into the browser bundle during `next build`, so `scripts/prod.sh` forwards it from `client/.env.local` to the builder stage as a `build.args` entry. Before building for a real domain, set `NEXT_PUBLIC_APP_URL=https://studio.example.com` in `client/.env.local` and rebuild (`npm run prod:sh`); overriding it at runtime will not reach the already-built browser bundle. This mirrors the host-`prod` gotcha documented above.
 
 Readiness timeout defaults to 60 seconds and is configurable via `CHEKKU_READY_TIMEOUT_SECONDS` (1–600). The launcher reports each service as it becomes healthy (`Garage ready`, `SearXNG ready`, `Postgres ready`, `Agent ready`, `Client ready`) and aborts with a bounded message if any service fails to become healthy.
 

@@ -136,6 +136,11 @@ services:
     build:
       context: .
       dockerfile: client/Dockerfile
+      # NEXT_PUBLIC_APP_URL is inlined by `next build`, so it must reach the
+      # builder stage as an arg (the runtime `environment:` below is not enough
+      # for client-bundle values). Operator sets it in client/.env.local.
+      args:
+        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
     restart: unless-stopped
     depends_on:
       agent:

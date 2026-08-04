@@ -333,6 +333,44 @@ describe("production launcher subcommands", () => {
   });
 });
 
+describe("production launcher secret-validation scoping", () => {
+  // Regression for the issue where unconditional `require_env` at the top of
+  // prod.sh blocked `down`/`build` when an LLM_* value was empty. Runtime
+  // secrets are only required to START containers, so teardown and image
+  // build must succeed with an incomplete agent env.
+  function fixtureWithEmptyLlmKey(): string {
+    const root = fixture();
+    writeFileSync(
+      resolve(root, "agent/.env"),
+      validAgentEnv.replace(`LLM_API_KEY=${LLM_API_KEY}`, "LLM_API_KEY="),
+    );
+    return root;
+  }
+
+  it("build does not require LLM_* runtime secrets", () => {
+    const root = fixtureWithEmptyLlmKey();
+    const result = runProd(root, ["build"]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(existsSync(resolve(root, "mock-log/build"))).toBe(true);
+  });
+
+  it("down does not require LLM_* runtime secrets (can tear down a partial stack)", () => {
+    const root = fixtureWithEmptyLlmKey();
+    const result = runProd(root, ["down"]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(existsSync(resolve(root, "mock-log/down"))).toBe(true);
+  });
+
+  it("up still fails closed on an empty required runtime secret", () => {
+    const root = fixtureWithEmptyLlmKey();
+    const result = runProd(root);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("LLM_API_KEY is empty");
+    // up must not have started.
+    expect(existsSync(resolve(root, "mock-log/up"))).toBe(false);
+  });
+});
+
 describe("production launcher secret hygiene", () => {
   it("never prints service-only or application secrets to stdout or stderr", () => {
     const root = fixture();

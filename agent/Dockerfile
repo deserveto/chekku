@@ -13,8 +13,8 @@
 # `zod`, `hono`, etc.) as bare imports. The runtime stage therefore needs the
 # production `node_modules`. The `storage/` workspace is copied too so the
 # build-time and runtime layouts match regardless of how Mastra's bundler
-# evolves, and WORKDIR stays `/app` for consistent `.env` and project-root
-# resolution.
+# evolves. The runtime stage's final WORKDIR is `/app/agent` so the relative
+# `CMD ["node", ".mastra/output/index.mjs"]` resolves against the built output.
 
 # ===== Stage 1: builder =====
 FROM node:22-bookworm-slim AS builder

@@ -31,6 +31,11 @@ RUN npm ci
 # `transpilePackages` and standalone file tracing.
 COPY client/ client/
 COPY storage/ storage/
+# NEXT_PUBLIC_* are inlined by `next build`, not read at runtime. Pass the
+# public origin in as a build arg so the browser bundle (mastra-client.ts)
+# targets the right URL instead of baking in the localhost fallback.
+ARG NEXT_PUBLIC_APP_URL=http://localhost:3000
+ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
 RUN npm run build --workspace client
 
 # ===== Stage 2: runtime =====

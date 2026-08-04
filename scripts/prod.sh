@@ -84,13 +84,6 @@ require_env() {
   fi
 }
 
-require_env POSTGRES_PASSWORD "$STORAGE_ENV_FILE"
-require_env GARAGE_ACCESS_KEY_ID "$STORAGE_ENV_FILE"
-require_env GARAGE_SECRET_ACCESS_KEY "$STORAGE_ENV_FILE"
-require_env LLM_BASE_URL "$AGENT_ENV_FILE"
-require_env LLM_API_KEY "$AGENT_ENV_FILE"
-require_env LLM_DEFAULT_MODEL "$AGENT_ENV_FILE"
-
 # ----- Compose invocation ---------------------------------------------------
 # `--env-file storage/.env.local` is passed for parity with scripts/dev.sh and
 # keeps the infra services' ${VAR:?} interpolation resolving. Application values
@@ -116,6 +109,16 @@ if [[ "$ACTION" == build ]]; then
 fi
 
 # ACTION == up: build (if needed) and bring the whole stack up.
+# Runtime secrets are only required to START containers — `build` only needs
+# source + npm deps and `down` only calls `docker compose down`, so these
+# checks live here instead of blocking teardown/rebuild on a partial env.
+require_env POSTGRES_PASSWORD "$STORAGE_ENV_FILE"
+require_env GARAGE_ACCESS_KEY_ID "$STORAGE_ENV_FILE"
+require_env GARAGE_SECRET_ACCESS_KEY "$STORAGE_ENV_FILE"
+require_env LLM_BASE_URL "$AGENT_ENV_FILE"
+require_env LLM_API_KEY "$AGENT_ENV_FILE"
+require_env LLM_DEFAULT_MODEL "$AGENT_ENV_FILE"
+
 echo "Starting production stack (build if needed)..."
 "${COMPOSE[@]}" up -d --build
 
@@ -177,7 +180,7 @@ wait_healthy() {
     service_id="$(run_with_timeout "$((deadline - SECONDS < 1 ? 1 : deadline - SECONDS))" "${COMPOSE[@]}" ps -q "$service")" || true
     service_id="${service_id//$'\r'/}"
     if [[ -n "$service_id" ]]; then
-      health_status="$(run_with_timeout 5 docker inspect --format '{{.State.Health.Status}}' "$service_id")" || true
+      health_status="$(run_with_timeout "$((deadline - SECONDS < 1 ? 1 : deadline - SECONDS))" docker inspect --format '{{.State.Health.Status}}' "$service_id")" || true
       health_status="${health_status//$'\r'/}"
       if [[ "$health_status" == healthy ]]; then
         printf '%s ready\n' "$display"
