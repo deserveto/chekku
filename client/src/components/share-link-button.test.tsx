@@ -49,7 +49,7 @@ describe('ShareLinkButton', () => {
       '/api/storage/competitive-analyses/pca_20260723120000_deadbeef/share',
       expect.objectContaining({ method: 'POST' }),
     );
-    expect(writeText).toHaveBeenCalledWith('/public/slides/pca_x?t=abc');
+    expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/public/slides/pca_x?t=abc`);
     expect(container.querySelector('button')?.textContent).toContain('Copy share link');
   });
 

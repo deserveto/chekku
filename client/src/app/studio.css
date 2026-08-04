@@ -1957,10 +1957,25 @@ body.studio-sidebar-resizing * {
   color: var(--studio-muted, #666);
 }
 
-/* competitive-slides-stage: no layout rules here. overflow: hidden was removed
-   (it clipped every slide below the first when the browser paginated). Marp's
-   own rendered CSS handles scroll-snap during screen use and pagination during
-   print. The class remains as a ref anchor for the component. */
+/* competitive-slides-stage: scroll container so each Marp slide (100vh tall)
+   snaps into view as the user scrolls or presses arrow keys. Without this,
+   the stage either clips (fullscreen) or pushes scroll to an ancestor with
+   unexpected behavior. Marp's own CSS sets scroll-snap-align on sections;
+   we set the scroll-snap-type here and re-anchor snap points to the SVG
+   wrapper (the direct child of the scroll container). */
+.competitive-slides-stage {
+  height: 100dvh;
+  width: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scroll-snap-type: y mandatory;
+  scroll-behavior: smooth;
+}
+
+.competitive-slides-stage svg[data-marpit-svg] {
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+}
 
 .public-slides-context {
   text-align: center;

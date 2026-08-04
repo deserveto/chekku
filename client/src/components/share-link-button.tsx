@@ -21,10 +21,11 @@ export function ShareLinkButton({ analysisId }: ShareLinkButtonProps) {
         return;
       }
       const { url } = (await response.json()) as { url: string };
-      setShareUrl(url);
+      const absoluteUrl = `${window.location.origin}${url}`;
+      setShareUrl(absoluteUrl);
       setState('shared');
       if (navigator.clipboard) {
-        await navigator.clipboard.writeText(url);
+        await navigator.clipboard.writeText(absoluteUrl);
       }
     } catch {
       setState('error');
