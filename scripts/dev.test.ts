@@ -1493,4 +1493,27 @@ describe('scripts/db-migrate.sh', () => {
     expect(result.stdout + result.stderr).not.toContain('secret-pw-123');
     expect(result.stdout + result.stderr).toMatch(/Better Auth migration failed/i);
   });
+
+  it('does not mutate source files (server-only stripping must be non-destructive)', () => {
+    const root = fixture({ setupEnv: false });
+    writeFileSync(
+      resolve(root, 'client/.env.local'),
+      'AUTH_DATABASE_URL=postgresql://chekku:pw@127.0.0.1:5432/chekku_auth\nBETTER_AUTH_SECRET=anything\n',
+    );
+    mkdirSync(resolve(root, 'client/src/lib'), { recursive: true });
+    const authPath = resolve(root, 'client/src/lib/auth.ts');
+    const original = "import 'server-only';\nexport const x = 1;\n";
+    writeFileSync(authPath, original);
+    executable(
+      resolve(root, 'bin/npx'),
+      `exit 0\n`,
+    );
+    const result = run(root, [resolve(sourceRoot, 'scripts/db-migrate.sh')], {
+      CHEKKU_CLIENT_ENV: resolve(root, 'client/.env.local'),
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(authPath, 'utf8')).toBe(original);
+    expect(readFileSync(authPath, 'utf8')).toContain("import 'server-only';");
+  });
 });

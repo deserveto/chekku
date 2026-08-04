@@ -39,6 +39,16 @@ export async function sendVerificationEmail({
   }
 
   if (!response.ok) {
+    cancelBody(response.body);
     throw new Error('Failed to send verification email.');
+  }
+}
+
+function cancelBody(body: ReadableStream<Uint8Array> | null): void {
+  if (!body || body.locked) return;
+  try {
+    void body.cancel().catch(() => undefined);
+  } catch {
+    // Cleanup must not replace the fixed client error.
   }
 }

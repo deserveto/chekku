@@ -138,6 +138,12 @@ Flow:
 
 **Production:** inject `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `AUTH_DATABASE_URL`, and (for real email delivery) `RESEND_API_KEY` / `RESEND_FROM_EMAIL` via the hosting platform's secret or env configuration — not via committed files. Set `BETTER_AUTH_URL` to the real **HTTPS** origin so Better Auth issues `secure` session cookies. Run `npm run db:migrate` as a deploy release step.
 
+#### Rate limiting
+
+Signup, sign-in, and verification-email resend are throttled in-process at 5 requests / 60s per scope. By default the limiter does **not** trust `x-forwarded-for` (it is attacker-controlled when the deployment is not behind a trusted reverse proxy that overwrites the header); every anonymous client shares one bucket per scope, which keeps the cap enforced but is stricter than ideal in dev.
+
+Set `RATE_LIMIT_TRUST_PROXY=true` in `client/.env.local` only when Chekku sits behind a trusted proxy that supplies a verifiable client IP in `x-forwarded-for` (e.g. most managed Node hosts, Cloudflare, or an nginx config that sets the header to `$remote_addr`). Without that guarantee, leave it unset. The limiter is in-memory per process and intended for single-instance v1 deployments; distributed rate limiting is deferred.
+
 ## Health and model checks
 
 ```bash

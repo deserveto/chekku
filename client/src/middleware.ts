@@ -22,6 +22,17 @@ export async function middleware(request: NextRequest) {
         });
       }
     }
+    if (pathname.endsWith('/sign-in/email')) {
+      const result = consumeRateLimit('signin', clientIp(request));
+      if (!result.allowed) {
+        return new NextResponse('Too many requests.', {
+          status: 429,
+          headers: {
+            'retry-after': String(Math.ceil(result.retryAfterMs / 1000)),
+          },
+        });
+      }
+    }
     if (pathname.endsWith('/send-verification-email')) {
       const result = consumeRateLimit('resend', clientIp(request));
       if (!result.allowed) {

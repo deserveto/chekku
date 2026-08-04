@@ -70,6 +70,27 @@ describe('sendVerificationEmail', () => {
     ).rejects.toThrow('Failed to send verification email.');
   });
 
+  it('cancels the response body when Resend rejects to avoid leaking the undici connection', async () => {
+    vi.stubEnv('RESEND_API_KEY', 'rk_test');
+    vi.stubEnv('RESEND_FROM_EMAIL', 'no-reply@chekku.test');
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('boom'));
+      },
+    });
+    const cancelSpy = vi.spyOn(body, 'cancel');
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(body, { status: 500 }));
+    globalThis.fetch = fetchMock;
+
+    const { sendVerificationEmail } = await import('./email');
+    await expect(
+      sendVerificationEmail({ to: 'u@e.test', url: 'https://app.test/v' }),
+    ).rejects.toThrow('Failed to send verification email.');
+    expect(cancelSpy).toHaveBeenCalled();
+  });
+
   it('throws a fixed message without leaking the endpoint when fetch rejects', async () => {
     vi.stubEnv('RESEND_API_KEY', 'rk_test');
     vi.stubEnv('RESEND_FROM_EMAIL', 'no-reply@chekku.test');

@@ -28,31 +28,23 @@ export AUTH_DATABASE_URL
 export BETTER_AUTH_SECRET="$(read_env_value BETTER_AUTH_SECRET)"
 export BETTER_AUTH_URL="$(read_env_value BETTER_AUTH_URL)"
 
+# The Better Auth CLI imports client/src/lib/auth.ts, which contains
+# `import 'server-only'`. That package resolves to empty.js under the
+# `react-server` export condition and to a module that throws otherwise.
+# Rather than mutating source files (which a SIGKILL between sed and restore
+# would leave permanently stripped), pass the condition through NODE_OPTIONS
+# so the CLI subprocess resolves server-only to its empty shim. This is
+# inherited by any child node process npx spawns.
+export NODE_OPTIONS="${NODE_OPTIONS:-} --conditions react-server"
+
 MIGRATE_LOG="$(mktemp)"
 chmod 600 "$MIGRATE_LOG"
 cd "$ROOT/client"
 
-BACKUP_DIR="$(mktemp -d)"
-restore_files() {
-  if [[ -d "$BACKUP_DIR" ]]; then
-    while IFS= read -r -d '' backup; do
-      rel="${backup#"$BACKUP_DIR"/}"
-      cp "$backup" "$ROOT/$rel"
-    done < <(find "$BACKUP_DIR" -type f -print0 2>/dev/null)
-    rm -rf "$BACKUP_DIR"
-  fi
+cleanup() {
   rm -f "$MIGRATE_LOG"
 }
-trap restore_files EXIT
-
-while IFS= read -r -d '' file; do
-  if grep -q "^import 'server-only';" "$file" 2>/dev/null; then
-    rel="${file#"$ROOT"/}"
-    mkdir -p "$BACKUP_DIR/$(dirname "$rel")"
-    cp "$file" "$BACKUP_DIR/$rel"
-    sed -i "/^import 'server-only';$/d" "$file"
-  fi
-done < <(find "$ROOT/client/src" -name '*.ts' ! -name '*.test.ts' -print0 2>/dev/null)
+trap cleanup EXIT
 
 if ! echo y | npx -y @better-auth/cli migrate --config src/lib/auth.ts >"$MIGRATE_LOG" 2>&1; then
   echo "Better Auth migration failed. Confirm Postgres is running and AUTH_DATABASE_URL is reachable." >&2

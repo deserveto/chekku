@@ -253,6 +253,7 @@ Local file: `client/.env.local`
 | `RESEND_API_KEY` | No | empty | Resend API key for auth verification emails. When unset, verification URLs log to the server console. |
 | `RESEND_FROM_EMAIL` | No | `Chekku <onboarding@resend.dev>` | Sender for auth emails. Use a Resend-verified domain in prod. |
 | `AGENT_SERVICE_TOKEN` | No | empty | Optional server-to-server bearer token. |
+| `RATE_LIMIT_TRUST_PROXY` | No | empty | Set to `true` only when Chekku sits behind a trusted reverse proxy that supplies a verifiable client IP in `x-forwarded-for`. When unset, signup/sign-in/resend share one in-process bucket per scope to prevent XFF spoofing from bypassing the throttle. |
 
 ## Commands
 
