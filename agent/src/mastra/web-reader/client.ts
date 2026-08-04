@@ -185,7 +185,7 @@ function truncateUtf8(value: string, maxBytes: number): string {
 function normalizeEnvelope(payload: unknown, requestedUrl: string): WebReaderOutput {
   if (!isPlainObject(payload)
     || payload.code !== 200
-    || payload.status !== 20000
+    || (payload.status !== 200 && payload.status !== 20000)
     || !isPlainObject(payload.data)) {
     throw new WebReaderClientError('invalid');
   }
