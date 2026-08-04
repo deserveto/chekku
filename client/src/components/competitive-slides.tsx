@@ -55,6 +55,8 @@ export function CompetitiveSlides({
   const [position, setPosition] = useState<SlidePosition>({ current: 1, total: 0 });
   const [isFullscreen, setIsFullscreen] = useState(false);
   const stageRef = useRef<HTMLDivElement>(null);
+  const keyboardPositionRef = useRef(0);
+  const pendingKeyboardPositionRef = useRef<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -82,24 +84,48 @@ export function CompetitiveSlides({
     if (!stage) return;
 
     const slides = Array.from(stage.querySelectorAll<Element>('svg[data-marpit-svg]'));
+    keyboardPositionRef.current = 0;
+    pendingKeyboardPositionRef.current = null;
     setPosition({ current: 1, total: slides.length });
 
     if (slides.length === 0) return;
 
+    let active = true;
     const observer = new IntersectionObserver(
       (entries) => {
+        if (!active) return;
         const visible = entries
           .filter((entry) => entry.isIntersecting)
           .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
         if (!visible) return;
         const index = slides.indexOf(visible.target);
-        if (index >= 0) setPosition({ current: index + 1, total: slides.length });
+        if (index >= 0) {
+          if (pendingKeyboardPositionRef.current === null) {
+            keyboardPositionRef.current = index;
+            setPosition({ current: index + 1, total: slides.length });
+          } else if (pendingKeyboardPositionRef.current === index) {
+            setPosition({ current: index + 1, total: slides.length });
+          }
+        }
       },
       { threshold: [0.5, 0.75], root: stage },
     );
     slides.forEach((slide) => observer.observe(slide));
 
-    return () => observer.disconnect();
+    const clearPendingKeyboardPosition = () => {
+      pendingKeyboardPositionRef.current = null;
+    };
+    stage.addEventListener('wheel', clearPendingKeyboardPosition, { passive: true });
+    stage.addEventListener('touchstart', clearPendingKeyboardPosition, { passive: true });
+    stage.addEventListener('pointerdown', clearPendingKeyboardPosition);
+
+    return () => {
+      active = false;
+      observer.disconnect();
+      stage.removeEventListener('wheel', clearPendingKeyboardPosition);
+      stage.removeEventListener('touchstart', clearPendingKeyboardPosition);
+      stage.removeEventListener('pointerdown', clearPendingKeyboardPosition);
+    };
   }, [rendered]);
 
   useEffect(() => {
@@ -110,15 +136,17 @@ export function CompetitiveSlides({
       if (!stage) return;
       const slides = Array.from(stage.querySelectorAll<Element>('svg[data-marpit-svg]'));
       if (slides.length === 0) return;
-      const current = position.current - 1;
       const targetIndex = event.key === 'ArrowRight'
-        ? Math.min(current + 1, slides.length - 1)
-        : Math.max(current - 1, 0);
+        ? Math.min(keyboardPositionRef.current + 1, slides.length - 1)
+        : Math.max(keyboardPositionRef.current - 1, 0);
+      keyboardPositionRef.current = targetIndex;
+      pendingKeyboardPositionRef.current = targetIndex;
+      setPosition({ current: targetIndex + 1, total: slides.length });
       slides[targetIndex]?.scrollIntoView({ behavior: 'smooth' });
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [rendered, position]);
+  }, [rendered]);
 
   useEffect(() => {
     const handler = () => setIsFullscreen(Boolean(document.fullscreenElement));
