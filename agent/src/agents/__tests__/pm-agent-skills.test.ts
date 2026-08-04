@@ -73,6 +73,16 @@ describe('PM Agent skills', () => {
     expect(competitiveAnalysisInstructions).toContain('user-supplied seed competitors mandatory');
   });
 
+  it('enforces mandatory search-then-read workflow', () => {
+    expect(competitiveAnalysisInstructions).toContain('## Research workflow (MANDATORY sequence)');
+    expect(competitiveAnalysisInstructions).toContain('MUST NOT call search_web more than twice in a row without calling read_web_page in between');
+    expect(competitiveAnalysisInstructions).toContain('IMMEDIATELY call read_web_page on at least 2 URLs from the search results');
+    expect(competitiveAnalysisInstructions).toContain('Reading an imperfect page is better than reading nothing');
+    expect(competitiveAnalysisInstructions).toContain('After every search_web call, you MUST call read_web_page at least once before calling search_web again');
+    expect(competitiveAnalysisInstructions).toContain('Do not declare a product unevidenced until you have attempted at least one read_web_page call for it');
+    expect(competitiveAnalysisInstructions).toContain('Prioritize reading over searching');
+  });
+
   it('defines primary evidence, matrix states, and untrusted-content isolation', () => {
     expect(competitiveAnalysisInstructions).toContain('one successfully read official or primary product page');
     expect(competitiveAnalysisInstructions).toContain('Search snippets support discovery only');
