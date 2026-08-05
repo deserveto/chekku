@@ -38,6 +38,18 @@ export interface CompetitiveAnalysisReadResult {
   metadata: CompetitiveAnalysisMetadata;
 }
 
+export interface ShareTokenBundle {
+  token: string;
+  createdAt: string;
+  anchorProduct: string;
+}
+
+export interface ShareableSlidesPayload {
+  anchorProduct: string;
+  createdAt: string;
+  slidesMarkdown: string;
+}
+
 const ANALYSIS_ID_RE = /^pca_[0-9]{14}_[0-9a-f]{8}$/;
 const MAX_MARKDOWN_BYTES = 262_144;
 const MAX_NAME_BYTES = 256;
@@ -61,6 +73,7 @@ export function competitiveAnalysisKeysFor(analysisId: string) {
     requestObjectKey: `${base}/request.md`,
     analysisObjectKey: `${base}/analysis.md`,
     slidesObjectKey: `${base}/slides.md`,
+    shareTokenObjectKey: `${base}/share-token.json`,
     metadataObjectKey: `${base}/metadata.json`,
   };
 }
@@ -278,4 +291,152 @@ export async function getCompetitiveAnalysis(
   }
 
   return { analysisId, requestMarkdown, analysisMarkdown, slidesMarkdown, metadata: parsed };
+}
+
+function timingSafeEqualHex(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
+function parseShareTokenBundle(raw: unknown): ShareTokenBundle | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const value = raw as Record<string, unknown>;
+  if (typeof value.token !== 'string' || typeof value.createdAt !== 'string'
+    || typeof value.anchorProduct !== 'string') {
+    return undefined;
+  }
+  if (!/^[0-9a-f]{32}$/.test(value.token)) return undefined;
+  if (value.createdAt.length === 0 || value.createdAt.length > MAX_CREATED_AT_BYTES) return undefined;
+  return {
+    token: value.token,
+    createdAt: value.createdAt,
+    anchorProduct: value.anchorProduct,
+  };
+}
+
+// Garage v2.3 cannot make the existence check and create atomic. Serialize the
+// full read-create sequence per analysis within this process; external writers
+// remain subject to the documented cross-process limitation.
+const shareTokenCreationTails = new Map<string, Promise<void>>();
+
+async function serializeShareTokenCreation<T>(
+  analysisId: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previous = shareTokenCreationTails.get(analysisId) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => { release = resolve; });
+  shareTokenCreationTails.set(analysisId, current);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (shareTokenCreationTails.get(analysisId) === current) {
+      shareTokenCreationTails.delete(analysisId);
+    }
+  }
+}
+
+export async function createShareToken(
+  store: ObjectStorage,
+  analysisId: string,
+  anchorProduct: string,
+  now: () => Date = () => new Date(),
+): Promise<ShareTokenBundle> {
+  return serializeShareTokenCreation(analysisId, async () => {
+    const objectKeys = competitiveAnalysisKeysFor(analysisId);
+    const normalizedAnchor = normalizeBoundedText(anchorProduct, 'anchorProduct', MAX_NAME_BYTES);
+    const slidesMarkdown = await store.getText(objectKeys.slidesObjectKey);
+    if (slidesMarkdown.trim().length === 0) {
+      throw new ObjectStorageError('not-found', 'Competitive analysis slides are missing.');
+    }
+    let existing: ShareTokenBundle | undefined;
+    try {
+      const raw = await store.getText(objectKeys.shareTokenObjectKey);
+      existing = parseShareTokenBundle(JSON.parse(raw));
+    } catch (error) {
+      if (!(error instanceof ObjectStorageError) || error.code !== 'not-found') {
+        throw error;
+      }
+      existing = undefined;
+    }
+    if (existing) {
+      if (existing.anchorProduct !== normalizedAnchor) {
+        throw new Error('share-token anchorProduct mismatch');
+      }
+      return existing;
+    }
+    const bundle: ShareTokenBundle = {
+      token: randomBytes(16).toString('hex'),
+      createdAt: now().toISOString(),
+      anchorProduct: normalizedAnchor,
+    };
+    try {
+      await store.createText(
+        objectKeys.shareTokenObjectKey,
+        JSON.stringify(bundle, null, 2),
+        'application/json',
+      );
+    } catch (error) {
+      if (error instanceof ObjectStorageError && error.code === 'already-exists') {
+        const winner = await getShareToken(store, analysisId);
+        if (!winner) throw error;
+        if (winner.anchorProduct !== normalizedAnchor) {
+          throw new Error('share-token anchorProduct mismatch');
+        }
+        return winner;
+      }
+      throw error;
+    }
+    return bundle;
+  });
+}
+
+export async function getShareToken(
+  store: ObjectStorage,
+  analysisId: string,
+): Promise<ShareTokenBundle | undefined> {
+  const objectKeys = competitiveAnalysisKeysFor(analysisId);
+  let raw: string;
+  try {
+    raw = await store.getText(objectKeys.shareTokenObjectKey);
+  } catch (error) {
+    if (error instanceof ObjectStorageError && error.code === 'not-found') return undefined;
+    throw error;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  return parseShareTokenBundle(parsed);
+}
+
+export async function getShareableSlides(
+  store: ObjectStorage,
+  analysisId: string,
+  token: string,
+): Promise<ShareableSlidesPayload | undefined> {
+  if (typeof token !== 'string' || !/^[0-9a-f]{32}$/.test(token)) return undefined;
+  const bundle = await getShareToken(store, analysisId);
+  if (!bundle) return undefined;
+  if (!timingSafeEqualHex(bundle.token, token)) return undefined;
+  const objectKeys = competitiveAnalysisKeysFor(analysisId);
+  try {
+    const slidesMarkdown = await store.getText(objectKeys.slidesObjectKey);
+    return {
+      anchorProduct: bundle.anchorProduct,
+      createdAt: bundle.createdAt,
+      slidesMarkdown,
+    };
+  } catch (error) {
+    if (error instanceof ObjectStorageError && error.code === 'not-found') return undefined;
+    throw error;
+  }
 }

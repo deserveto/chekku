@@ -340,7 +340,15 @@ Competitive chat lists return deterministic `analysesMarkdown` unchanged. Empty 
 
 ### Competitive analysis slides
 
-Every completed `/competitive-analysis` run produces a `slides.md` Marp deck saved alongside the analysis. Open it at `/reports/competitive/<pca-id>/slides`. The deck renders client-side through `@marp-team/marp-core`; the route is server-rendered behind the same identity seam as the rest of `/reports/*`. Use the Print button to save as PDF via the browser; no server-side rendering, no PPTX, no public sharing in v1. Legacy analyses saved before this feature have no `slides.md` and the route returns 404 — re-run `/competitive-analysis` to produce one.
+Every completed `/competitive-analysis` run produces a `slides.md` Marp deck saved alongside the analysis. Open it at `/reports/competitive/<pca-id>/slides`. The deck renders client-side through `@marp-team/marp-core`; the route is server-rendered behind the same identity seam as the rest of `/reports/*`. The viewer exposes a Fullscreen toggle, a `N / M` slide counter that updates via IntersectionObserver, and a Print button that triggers browser print-to-PDF. No server-side rendering, no PPTX. Legacy analyses saved before this feature have no `slides.md` and the route returns 404 — re-run `/competitive-analysis` to produce one.
+
+### Shareable slides
+
+Each competitive analysis can be shared publicly via a token-gated link. From the detail page (`/reports/competitive/<pca-id>`), click `Create share link` to mint a 32-char hex token persisted as `share-token.json` alongside the analysis. The returned URL `/public/slides/<pca-id>?t=<token>` is unauthenticated and renders the deck through the same `CompetitiveSlides` component in public mode (no toolbar, no app chrome, footer with anchor product + created date).
+
+The share token is the only credential gating public access; anyone with the URL can view the deck. Tokens are NOT rotated by repeated `Create share link` clicks (idempotent) and DO NOT expire (v1.1). Revocation is deferred to v2. All public-route failures collapse to 404 (missing analysis, wrong token, missing slides, storage outage) so observers cannot learn whether an analysis exists.
+
+The public seam reads ONLY `share-token.json` and `slides.md` — never `analysis.md`, `request.md`, or `metadata.json`. Tokens are 128 bits of entropy (`crypto.randomBytes(16).toString('hex')`) and compared in constant time. Token-in-URL leakage via Referer headers, browser history, and server logs is acceptable for this use case (decks are non-sensitive competitive analysis); document and warn the user at share-create time.
 
 ## Browser operation
 

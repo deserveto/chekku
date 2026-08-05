@@ -35,12 +35,17 @@ export {
   competitiveAnalysisKeysFor,
   createCompetitiveAnalysisId,
   createCompetitiveAnalysisStorage,
+  createShareToken,
   getCompetitiveAnalysis,
+  getShareableSlides,
+  getShareToken,
   listCompetitiveAnalyses,
   saveCompetitiveAnalysis,
   type CompetitiveAnalysisMetadata,
   type CompetitiveAnalysisReadResult,
   type SaveCompetitiveAnalysisInput,
+  type ShareableSlidesPayload,
+  type ShareTokenBundle,
 } from './competitive-analyses.ts';
 export {
   SOCIAL_MEDIA_AGENT_ID,

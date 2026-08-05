@@ -332,6 +332,8 @@ IDs use `pca_YYYYMMDDHHMMSS_<8 lowercase hex>` and enforce `^pca_[0-9]{14}_[0-9a
 
 The competitive analysis record includes a `slides.md` Marp deck produced by the same agent run. The deck renders in-app at `/reports/competitive/<analysisId>/slides` through a client component that lazy-imports `@marp-team/marp-core`; the route is server-rendered behind the local identity seam, with browser print providing PDF export. No Chromium runs on the server in v1.
 
+The same `slides.md` Marp deck is also reachable at the unauthenticated public route `/public/slides/<analysisId>?t=<token>`. Share tokens are 32-char hex strings generated on demand by an authenticated POST route; the token plus a minimal context bundle (`anchorProduct`, `createdAt`) is persisted as `share-token.json` alongside the analysis. The public server seam reads only `share-token.json` and `slides.md` — never `analysis.md`, `request.md`, or `metadata.json`. All public-route failures collapse to 404 to avoid leaking analysis existence.
+
 Competitive list output adds presentation-only `analysisUrl` and deterministic `analysesMarkdown` with Analysis, Created, Anchor, Competitors, and Sources columns. These fields never enter metadata, save/view output, or repository types. Empty output is exactly `No saved competitive analyses found.`
 
 ## Social post storage

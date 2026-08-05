@@ -2,10 +2,12 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import { MarkdownMessage } from '@/components/markdown-message';
+import { ShareLinkButton } from '@/components/share-link-button';
 import { StudioNav } from '@/components/studio/studio-nav';
 import {
   CompetitiveAnalysisServiceError,
   getCompetitiveAnalysisForUser,
+  getShareTokenForUser,
 } from '@/server/competitive-analyses';
 
 export const dynamic = 'force-dynamic';
@@ -19,9 +21,17 @@ export default async function CompetitiveAnalysisDetailPage({
   const { analysisId } = await params;
   let analysis: Awaited<ReturnType<typeof getCompetitiveAnalysisForUser>> | undefined;
   let errorMessage: string | undefined;
+  let initiallyShared = false;
 
   try {
     analysis = await getCompetitiveAnalysisForUser(analysisId);
+    if (analysis.slidesMarkdown && analysis.slidesMarkdown.trim().length > 0) {
+      try {
+        initiallyShared = (await getShareTokenForUser(analysisId)).shared;
+      } catch (error) {
+        if (!(error instanceof CompetitiveAnalysisServiceError)) throw error;
+      }
+    }
   } catch (error) {
     if (
       error instanceof CompetitiveAnalysisServiceError
@@ -68,12 +78,18 @@ export default async function CompetitiveAnalysisDetailPage({
           </div>
           <div className="studio-report-header-actions">
             {analysis.slidesMarkdown && analysis.slidesMarkdown.trim().length > 0 ? (
-              <Link
-                className="studio-button"
-                href={`/reports/competitive/${encodeURIComponent(analysis.analysisId)}/slides`}
-              >
-                View slides
-              </Link>
+              <>
+                <Link
+                  className="studio-button"
+                  href={`/reports/competitive/${encodeURIComponent(analysis.analysisId)}/slides`}
+                >
+                  View slides
+                </Link>
+                <ShareLinkButton
+                  analysisId={analysis.analysisId}
+                  initiallyShared={initiallyShared}
+                />
+              </>
             ) : null}
             <Link className="studio-button" href="/reports/competitive">Back to analyses</Link>
           </div>

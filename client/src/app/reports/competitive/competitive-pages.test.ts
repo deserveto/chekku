@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   getAnalysis: vi.fn(),
+  getShareStatus: vi.fn(),
   listAnalyses: vi.fn(),
   notFound: vi.fn(() => {
     throw new Error('NEXT_NOT_FOUND');
@@ -19,6 +20,12 @@ vi.mock('@/components/competitive-slides', () => ({
   CompetitiveSlides: ({ slidesMarkdown, analysisId }: { slidesMarkdown: string; analysisId: string }) =>
     `SLIDES:${analysisId}:${slidesMarkdown.slice(0, 6)}`,
 }));
+vi.mock('@/components/share-link-button', () => ({
+  ShareLinkButton: ({ analysisId, initiallyShared }: {
+    analysisId: string;
+    initiallyShared?: boolean;
+  }) => `SHARE_BUTTON:${analysisId}:${String(initiallyShared)}`,
+}));
 vi.mock('@/server/competitive-analyses', () => {
   class CompetitiveAnalysisServiceError extends Error {
     constructor(
@@ -32,6 +39,7 @@ vi.mock('@/server/competitive-analyses', () => {
 
   return {
     getCompetitiveAnalysisForUser: mocks.getAnalysis,
+    getShareTokenForUser: mocks.getShareStatus,
     listCompetitiveAnalysesForUser: mocks.listAnalyses,
     CompetitiveAnalysisServiceError,
   };
@@ -75,6 +83,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.listAnalyses.mockResolvedValue([metadata]);
   mocks.getAnalysis.mockResolvedValue(analysis);
+  mocks.getShareStatus.mockResolvedValue({ shared: false });
 });
 
 describe('competitive analyses list page', () => {
@@ -182,7 +191,7 @@ describe('competitive analysis detail page', () => {
     expect(markup).toContain(`/reports/competitive/${analysisId}/slides`);
   });
 
-  it('hides the View slides button when slidesMarkdown is missing (legacy)', async () => {
+  it('hides slide and share controls when slidesMarkdown is missing (legacy)', async () => {
     mocks.getAnalysis.mockResolvedValue({ ...analysis, slidesMarkdown: undefined });
 
     const markup = renderToStaticMarkup(await CompetitiveAnalysisDetailPage({
@@ -190,6 +199,29 @@ describe('competitive analysis detail page', () => {
     }));
 
     expect(markup).not.toContain('View slides');
+    expect(markup).not.toContain(`SHARE_BUTTON:${analysisId}`);
+    expect(mocks.getShareStatus).not.toHaveBeenCalled();
+  });
+
+  it('renders ShareLinkButton in the header when analysis loads', async () => {
+    mocks.getAnalysis.mockResolvedValue(analysisWithSlides);
+
+    const markup = renderToStaticMarkup(await CompetitiveAnalysisDetailPage({
+      params: Promise.resolve({ analysisId }),
+    }));
+
+    expect(markup).toContain(`SHARE_BUTTON:${analysisId}:false`);
+  });
+
+  it('renders an existing share token as Copy share link state', async () => {
+    mocks.getAnalysis.mockResolvedValue(analysisWithSlides);
+    mocks.getShareStatus.mockResolvedValue({ shared: true });
+
+    const markup = renderToStaticMarkup(await CompetitiveAnalysisDetailPage({
+      params: Promise.resolve({ analysisId }),
+    }));
+
+    expect(markup).toContain(`SHARE_BUTTON:${analysisId}:true`);
   });
 });
 
