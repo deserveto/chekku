@@ -373,6 +373,107 @@ NODE
   fi
 }
 
+render_client_env() {
+  if [[ ! -f "$CLIENT_ENV_FILE" ]]; then
+    return 0
+  fi
+
+  local tmp
+  tmp="$(mktemp "${CLIENT_ENV_FILE}.tmp.XXXXXX")"
+  chmod 600 "$tmp"
+
+  set -a
+  # shellcheck disable=SC1090
+  source "$STORAGE_ENV_FILE"
+  set +a
+
+  node - "$CLIENT_ENV_FILE" "$AGENT_ENV_FILE" "$tmp" <<'NODE'
+const { readFileSync, writeFileSync } = require('node:fs');
+const { parse } = require('dotenv');
+const { randomBytes } = require('node:crypto');
+
+const [clientPath, agentPath, outputPath] = process.argv.slice(2);
+const PLACEHOLDER_AUTH_DB = 'postgresql://chekku:chekku@localhost:5432/chekku_auth';
+const postgresPassword = process.env.POSTGRES_PASSWORD;
+if (!postgresPassword) throw new Error('Missing POSTGRES_PASSWORD in storage/.env.local');
+
+const clientExisting = parse(readFileSync(clientPath, 'utf8'));
+let agentExisting = {};
+try {
+  agentExisting = parse(readFileSync(agentPath, 'utf8'));
+} catch {
+  agentExisting = {};
+}
+
+const pickOwned = (name, fallback) => {
+  const value = clientExisting[name];
+  return typeof value === 'string' && value !== '' ? value : fallback;
+};
+const pickMirrored = (name) => {
+  const value = agentExisting[name];
+  return typeof value === 'string' ? value : '';
+};
+
+const secret = pickOwned('BETTER_AUTH_SECRET', randomBytes(32).toString('base64url'));
+const userAuthDb = clientExisting.AUTH_DATABASE_URL;
+const authDbUrl =
+  typeof userAuthDb === 'string' && userAuthDb !== '' && userAuthDb !== PLACEHOLDER_AUTH_DB
+    ? userAuthDb
+    : `postgresql://chekku:${postgresPassword}@127.0.0.1:5432/chekku_auth`;
+const betterAuthUrl = pickOwned('BETTER_AUTH_URL', 'http://localhost:3000');
+const resendKey = pickMirrored('RESEND_API_KEY');
+const resendFrom = pickMirrored('RESEND_FROM_EMAIL');
+
+const updates = {
+  BETTER_AUTH_SECRET: secret,
+  AUTH_DATABASE_URL: authDbUrl,
+  BETTER_AUTH_URL: betterAuthUrl,
+  RESEND_API_KEY: resendKey,
+  RESEND_FROM_EMAIL: resendFrom,
+};
+
+const serialize = (name, value) => {
+  if (/[\r\n]/.test(value)) throw new Error(`${name} must not contain CR or LF`);
+  const candidates = [
+    value,
+    `'${value}'`,
+    `'${value.replaceAll("'", "\\'")}'`,
+    `"${value}"`,
+    `"${value.replaceAll('"', '\\"')}"`,
+  ];
+  const candidate = candidates.find((item) => (parse(`${name}=${item}`)[name] ?? '') === value);
+  if (candidate === undefined) throw new Error(`${name} cannot be represented safely`);
+  return `${name}=${candidate}`;
+};
+
+const source = readFileSync(clientPath, 'utf8');
+const eol = source.includes('\r\n') ? '\r\n' : '\n';
+const lines = source.split(/\r?\n/);
+if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+const handled = new Set();
+const assignment = (line) => line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+for (let i = 0; i < lines.length; i += 1) {
+  const match = assignment(lines[i]);
+  if (match && Object.prototype.hasOwnProperty.call(updates, match[1])) {
+    lines[i] = serialize(match[1], updates[match[1]]);
+    handled.add(match[1]);
+  }
+}
+for (const name of Object.keys(updates)) {
+  if (!handled.has(name)) lines.push(serialize(name, updates[name]));
+}
+writeFileSync(outputPath, `${lines.join(eol)}${eol}`, { mode: 0o600 });
+NODE
+  chmod 600 "$tmp"
+  if [[ -f "$CLIENT_ENV_FILE" ]] && cmp -s "$tmp" "$CLIENT_ENV_FILE"; then
+    rm "$tmp"
+    chmod 600 "$CLIENT_ENV_FILE"
+  else
+    mv -f "$tmp" "$CLIENT_ENV_FILE"
+    chmod 600 "$CLIENT_ENV_FILE"
+  fi
+}
+
 write_env_value() {
   local source_env="$1"
   local name="$2"
@@ -497,6 +598,7 @@ run_prompts || {
 }
 
 render_agent_dev_env
+render_client_env
 
 print_summary() {
   local required_missing
@@ -519,6 +621,7 @@ NODE
   echo ""
   echo "Files updated from your input:"
   echo "  - agent/.env"
+  echo "  - client/.env.local"
   echo ""
 
   if [[ -n "$required_missing" ]]; then
@@ -538,6 +641,9 @@ NODE
   echo "  - LLM_IMAGE_MODEL      (visual-content-agent generate_image)"
   echo ""
   echo "Rerun npm run setup after editing agent/.env."
+  echo ""
+  echo "Apply the auth schema once Postgres is running:"
+  echo "  docker compose up -d postgres && npm run db:migrate"
   echo ""
   echo "Next step: npm run dev:sh"
 }

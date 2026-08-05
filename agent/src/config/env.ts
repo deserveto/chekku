@@ -59,7 +59,6 @@ const envSchema = z.object({
   PUBLIC_HOLIDAY_CACHE_DIR: z.string().default('src/mastra/calendar/.cache'),
 
   CHEKKU_DEFAULT_AGENT_ID: z.string().default('main-agent'),
-  CHEKKU_LOCAL_USER_ID: z.string().default('local-user'),
   BROWSER_HEADLESS: z.enum(['true', 'false']).default('true'),
 
   MAESTRO_ENABLED: z.enum(['true', 'false']).default('false'),

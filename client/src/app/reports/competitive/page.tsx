@@ -1,6 +1,7 @@
 import Link from 'next/link';
 
 import { StudioNav } from '@/components/studio/studio-nav';
+import { requireUserId } from '@/server/auth';
 import {
   CompetitiveAnalysisServiceError,
   listCompetitiveAnalysesForUser,
@@ -10,7 +11,7 @@ import { formatPmReportCreatedAt } from '@/server/pm-report-format';
 export const dynamic = 'force-dynamic';
 
 export default async function CompetitiveAnalysesPage() {
-  const resourceId = process.env.CHEKKU_LOCAL_USER_ID || 'local-user';
+  const resourceId = await requireUserId();
   let analyses: Awaited<ReturnType<typeof listCompetitiveAnalysesForUser>> = [];
   let errorMessage: string | undefined;
 

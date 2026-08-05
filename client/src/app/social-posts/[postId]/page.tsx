@@ -5,6 +5,7 @@ import ApproveButton from './ApproveButton';
 import { MarkdownMessage } from '@/components/markdown-message';
 import { StudioNav } from '@/components/studio/studio-nav';
 import { splitPostMarkdown } from '@/lib/post-markdown';
+import { requireUserId } from '@/server/auth';
 import {
   getSocialPostForUser,
   SocialPostServiceError,
@@ -17,7 +18,7 @@ export default async function SocialPostDetailPage({
 }: {
   params: Promise<{ postId: string }>;
 }) {
-  const resourceId = process.env.CHEKKU_LOCAL_USER_ID || 'local-user';
+  const resourceId = await requireUserId();
   const { postId } = await params;
   let post: Awaited<ReturnType<typeof getSocialPostForUser>> | undefined;
   let errorMessage: string | undefined;

@@ -1,6 +1,7 @@
 import Link from 'next/link';
 
 import { StudioNav } from '@/components/studio/studio-nav';
+import { requireUserId } from '@/server/auth';
 import { formatPmReportCreatedAt } from '@/server/pm-report-format';
 import {
   listPmReportsForUser,
@@ -10,7 +11,7 @@ import {
 export const dynamic = 'force-dynamic';
 
 export default async function WeeklyReportsPage() {
-  const resourceId = process.env.CHEKKU_LOCAL_USER_ID || 'local-user';
+  const resourceId = await requireUserId();
   let reports: Awaited<ReturnType<typeof listPmReportsForUser>> = [];
   let errorMessage: string | undefined;
 

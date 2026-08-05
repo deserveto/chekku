@@ -11,6 +11,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('server-only', () => ({}));
+vi.mock('@/server/auth', () => ({
+  requireUserId: async () => 'local-user',
+  getUserId: async () => 'local-user',
+}));
 vi.mock('next/navigation', () => ({ notFound: mocks.notFound }));
 vi.mock('@/components/markdown-message', () => ({
   MarkdownMessage: ({ content }: { content: string }) => content,

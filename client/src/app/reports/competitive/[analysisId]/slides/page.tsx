@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import { CompetitiveSlides } from '@/components/competitive-slides';
+import { requireUserId } from '@/server/auth';
 import {
   CompetitiveAnalysisServiceError,
   getCompetitiveAnalysisForUser,
@@ -14,6 +15,9 @@ export default async function CompetitiveAnalysisSlidesPage({
 }: {
   params: Promise<{ analysisId: string }>;
 }) {
+  // The deck renders full-bleed without StudioNav, so this call is only the auth
+  // gate: unauthenticated visitors redirect to /login instead of reaching slides.
+  await requireUserId();
   const { analysisId } = await params;
   let slidesMarkdown: string | undefined;
   let errorMessage: string | undefined;

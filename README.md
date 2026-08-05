@@ -164,7 +164,15 @@ Run `npm ci` from the repository root after the initial clone and after every `g
 npm run setup
 ```
 
-This copies `.env.example` files into place, auto-generates local Garage and SearXNG secrets, and prompts for required values like `LLM_API_KEY`. Optional integrations (Telegram, Resend, Maestro, Web Reader) can be left empty and edited into `agent/.env` later; rerun `npm run setup` after editing so local Mastra receives the changes.
+This copies `.env.example` files into place, auto-generates local Garage and SearXNG secrets, generates `BETTER_AUTH_SECRET` and wires `AUTH_DATABASE_URL` into `client/.env.local`, and prompts for required values like `LLM_API_KEY`. Optional integrations (Telegram, Resend, Maestro, Web Reader) can be left empty and edited into `agent/.env` later; rerun `npm run setup` after editing so local Mastra receives the changes.
+
+Once Postgres is running (via `npm run dev:sh` or `docker compose up -d postgres`), apply the Better Auth schema once:
+
+```bash
+npm run db:migrate
+```
+
+`npm run db:migrate` runs `@better-auth/cli migrate` against `AUTH_DATABASE_URL` and is safe to re-run.
 
 Never expose `LLM_API_KEY` through a `NEXT_PUBLIC_*` variable or commit `agent/.env`.
 
@@ -215,7 +223,6 @@ Local file: `agent/.env`
 | `LLM_IMAGE_MODEL` | No | empty | Fixed image model invoked by the Visual Content Agent's `generate_image` tool (e.g. `gemini-3.1-flash-image`). Empty/unset → tool fails closed. |
 | `LLM_IMAGE_ENDPOINT_PATH` | No | `/images/generations` | Narrowly-scoped path under `LLM_BASE_URL` for image generation. |
 | `CHEKKU_DEFAULT_AGENT_ID` | No | `main-agent` | Default agent for new sessions. |
-| `CHEKKU_LOCAL_USER_ID` | No | `local-user` | Development identity and Memory resource ID. |
 | `BROWSER_HEADLESS` | No | `true` | Run the QA browser without a visible window. |
 | `SEARXNG_BASE_URL` | Conditional | empty | Server-owned SearXNG base URL. `npm run dev:sh` supplies `http://127.0.0.1:8888`; set it explicitly for an external service. |
 | `SEARXNG_API_KEY` | No | empty | Optional server-only bearer token for an authenticated external SearXNG reverse proxy. |
@@ -241,14 +248,20 @@ Local file: `client/.env.local`
 | --- | --- | --- | --- |
 | `AGENT_URL` | No | `http://localhost:4111` | Server-only upstream used by the Next.js proxy. |
 | `NEXT_PUBLIC_APP_URL` | No | `http://localhost:3000` | Browser-visible Next.js origin used by the Mastra client. |
-| `CHEKKU_LOCAL_USER_ID` | No | `local-user` | Temporary local identity until OIDC is added. |
+| `BETTER_AUTH_SECRET` | Yes | generated | Better Auth session-signing secret. `npm run setup` generates a 32+ char random value into `client/.env.local`. |
+| `BETTER_AUTH_URL` | Yes | `http://localhost:3000` | Canonical Next.js origin used by Better Auth. Set to the real HTTPS origin in prod so Better Auth issues `secure` cookies. |
+| `AUTH_DATABASE_URL` | Yes | auto-wired | Postgres connection string for the `chekku_auth` database. `npm run setup` wires it using the generated `POSTGRES_PASSWORD`. |
+| `RESEND_API_KEY` | No | empty | Resend API key for auth verification emails. When unset, verification URLs log to the server console. |
+| `RESEND_FROM_EMAIL` | No | `Chekku <onboarding@resend.dev>` | Sender for auth emails. Use a Resend-verified domain in prod. |
 | `AGENT_SERVICE_TOKEN` | No | empty | Optional server-to-server bearer token. |
+| `RATE_LIMIT_TRUST_PROXY` | No | empty | Set to `true` only when Chekku sits behind a trusted reverse proxy that supplies a verifiable client IP in `x-forwarded-for`. When unset, signup/sign-in/resend share one in-process bucket per scope to prevent XFF spoofing from bypassing the throttle. |
 
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
-| `npm run setup` | Copy env examples, generate local Garage/SearXNG secrets, prompt for required values. |
+| `npm run setup` | Copy env examples, generate local Garage/SearXNG secrets + Better Auth env, prompt for required values. |
+| `npm run db:migrate` | Apply the Better Auth schema to `chekku_auth`. Requires Postgres running; safe to re-run. |
 | `npm run dev:sh` | Provision local Garage and SearXNG, then start agent and client workspaces. |
 | `npm run dev` | Start agent and client workspaces without provisioning local services. |
 | `npm run dev:agent` | Start only the Mastra server. |
@@ -520,7 +533,7 @@ The next `npm run dev:sh` recreates the container and re-runs the init script. T
 - Local SearXNG service credentials stay in ignored generated `searxng/.env.local`; they are not application configuration and must not be copied into tracked environment examples, logs, or tickets.
 - Keep `.env`, local databases, logs, and browser artifacts out of commits.
 - No tool requires approval; browser, mobile, Garage, and email actions all run directly.
-- `CHEKKU_LOCAL_USER_ID` is a development seam, not production authentication.
+- Identity resolves from the Better Auth session: sign up at `/signup`, verify via email, sign in at `/login`.
 
 ## Documentation
 

@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { ResizableSidebar } from '@/components/studio/resizable-sidebar';
 import { BrandMark } from '@/components/ui/brand-mark';
+import { authClient } from '@/lib/auth-client';
 import { buildChatHref } from '@/lib/chat-route';
 import { createOwnedThreadId } from '@/lib/thread-id';
 import { MAIN_AGENT_ID } from '@/lib/types';
@@ -11,10 +12,16 @@ import { MAIN_AGENT_ID } from '@/lib/types';
 export function StudioNav({ resourceId }: { resourceId: string }) {
   const pathname = usePathname();
   const router = useRouter();
+  const { data: session } = authClient.useSession();
 
   const startChat = () => {
     const threadId = createOwnedThreadId(MAIN_AGENT_ID, resourceId);
     router.push(buildChatHref(MAIN_AGENT_ID, threadId));
+  };
+
+  const signOut = async () => {
+    await authClient.signOut();
+    router.push('/login');
   };
 
   return (
@@ -97,6 +104,25 @@ export function StudioNav({ resourceId }: { resourceId: string }) {
           </nav>
 
           <div className="studio-nav-spacer" />
+
+          {session?.user?.email ? (
+            <div className="studio-user-card">
+              <span aria-hidden="true">{session.user.email.charAt(0).toUpperCase()}</span>
+              <div className="studio-sidebar-copy">
+                <strong>{session.user.email}</strong>
+                <small>Signed in</small>
+              </div>
+              <button
+                type="button"
+                className="studio-icon-button"
+                onClick={signOut}
+                aria-label="Sign out"
+                title={collapsed ? 'Sign out' : undefined}
+              >
+                <span aria-hidden="true">⏻</span>
+              </button>
+            </div>
+          ) : null}
         </>
       )}
     </ResizableSidebar>

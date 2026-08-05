@@ -100,14 +100,49 @@ The weekly workflow creates posts in the `DRAFT` status. To approve one for visu
 
 ### `client/.env.local`
 
+Mirrors `client/.env.example`; `npm run setup` generates `BETTER_AUTH_SECRET` and
+wires `AUTH_DATABASE_URL` to the generated `POSTGRES_PASSWORD` (see
+[Authentication](#authentication) below). `AGENT_SERVICE_TOKEN` is optional and
+remains server-side.
+
 ```dotenv
 AGENT_URL=http://localhost:4111
 NEXT_PUBLIC_APP_URL=http://localhost:3000
-CHEKKU_LOCAL_USER_ID=local-user
 AGENT_SERVICE_TOKEN=
+BETTER_AUTH_SECRET=
+BETTER_AUTH_URL=http://localhost:3000
+AUTH_DATABASE_URL=postgresql://chekku:chekku@localhost:5432/chekku_auth
+RESEND_API_KEY=
+RESEND_FROM_EMAIL=Chekku <onboarding@resend.dev>
 ```
 
-`AGENT_SERVICE_TOKEN` is optional and remains server-side.
+### Authentication
+
+Chekku resolves identity from a Better Auth email/password session instead of a local development seam. The auth database (`chekku_auth`) is provisioned alongside `chekku_agent` by `scripts/postgres/init-databases.sh`.
+
+`npm run setup` generates `BETTER_AUTH_SECRET` (a 32+ char random value) and writes `AUTH_DATABASE_URL` into `client/.env.local` using the same generated `POSTGRES_PASSWORD` used by the agent's `DATABASE_URL`. You do not type the secret or the password by hand.
+
+After setup, apply the Better Auth schema once Postgres is running:
+
+    docker compose up -d postgres
+    npm run db:migrate
+
+`npm run db:migrate` runs `@better-auth/cli migrate` against `AUTH_DATABASE_URL` and is safe to re-run.
+
+Flow:
+
+1. Sign up at `/signup` with email and password. Better Auth creates the user (unverified) and sends a verification email.
+2. Verify the email. In production with `RESEND_API_KEY` set, the link is delivered through Resend. In local dev without `RESEND_API_KEY`, the verification URL is logged to the server console.
+3. Sign in at `/login`. Better Auth rejects unverified accounts and resends the verification email on attempt.
+4. After verification and sign-in, the session cookie identifies the user. `getUserId()` / `requireUserId()` in `client/src/server/auth.ts` resolve `session.user.id` server-side; unauthenticated requests hit `/login` (or 403 on storage APIs).
+
+**Production:** inject `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `AUTH_DATABASE_URL`, and (for real email delivery) `RESEND_API_KEY` / `RESEND_FROM_EMAIL` via the hosting platform's secret or env configuration — not via committed files. Set `BETTER_AUTH_URL` to the real **HTTPS** origin so Better Auth issues `secure` session cookies. Run `npm run db:migrate` as a deploy release step.
+
+#### Rate limiting
+
+Signup, sign-in, and verification-email resend are throttled in-process at 5 requests / 60s per scope. By default the limiter does **not** trust `x-forwarded-for` (it is attacker-controlled when the deployment is not behind a trusted reverse proxy that overwrites the header); every anonymous client shares one bucket per scope, which keeps the cap enforced but is stricter than ideal in dev.
+
+Set `RATE_LIMIT_TRUST_PROXY=true` in `client/.env.local` only when Chekku sits behind a trusted proxy that supplies a verifiable client IP in `x-forwarded-for` (e.g. most managed Node hosts, Cloudflare, or an nginx config that sets the header to `$remote_addr`). Without that guarantee, leave it unset. The limiter is in-memory per process and intended for single-instance v1 deployments; distributed rate limiting is deferred.
 
 ## Health and model checks
 
@@ -309,7 +344,7 @@ Report interfaces:
 - `GET /api/storage/pm-reports` returns `{ reports }` after server identity validation.
 - `GET /api/storage/pm-reports/[reportId]` returns input, analysis, and metadata after identity and ID validation.
 
-All four report interfaces call `client/src/server/pm-reports.ts` directly in the Next.js server and use the temporary server-side `CHEKKU_LOCAL_USER_ID` seam. They do not pass through Mastra. Chat PM tool calls separately pass through `/api/agent/*` and Mastra. Browser code never contacts Garage. Missing identity returns 403; invalid IDs return 400 or page not-found; missing reports return 404; storage failures return bounded 503 responses without provider details.
+All four report interfaces call `client/src/server/pm-reports.ts` directly in the Next.js server and resolve the authenticated user from the Better Auth session cookie (server-side, via `getUserId()` / `requireUserId()`). They do not pass through Mastra. Chat PM tool calls separately pass through `/api/agent/*` and Mastra. Browser code never contacts Garage. Missing identity returns 403; invalid IDs return 400 or page not-found; missing reports return 404; storage failures return bounded 503 responses without provider details.
 
 When PM Agent lists weekly reports in chat, its code-defined list tool generates a deterministic GFM table and agent returns it unchanged. Rows contain URL-encoded relative report links, compact UTC timestamps, ratings, and statuses. Links open in a new tab with `rel="noreferrer"`. Chat and `/reports/weekly` tables are labeled keyboard-focusable regions with visible focus styles and horizontal scrolling on narrow screens. Empty lists return `No saved reports found.` exactly; invalid stored timestamps remain visible rather than breaking the list.
 
@@ -690,7 +725,6 @@ set -a; source storage/.env.local; source searxng/.env.local; set +a
 
 Before deploying beyond local development:
 
-- replace `CHEKKU_LOCAL_USER_ID` with real authentication;
 - configure a deployment secret manager;
 - set a durable Postgres `DATABASE_URL` and `POSTGRES_PASSWORD`;
 - restrict `WEB_URL` to the deployed client origin;
