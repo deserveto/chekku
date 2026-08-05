@@ -1,11 +1,14 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 
 interface CompetitiveSlidesProps {
   analysisId: string;
   slidesMarkdown: string;
+  variant?: 'authenticated' | 'public';
+  anchorProduct?: string;
+  createdAt?: string;
 }
 
 interface Rendered {
@@ -13,9 +16,47 @@ interface Rendered {
   css: string;
 }
 
-export function CompetitiveSlides({ analysisId, slidesMarkdown }: CompetitiveSlidesProps) {
+interface SlidePosition {
+  current: number;
+  total: number;
+}
+
+const SCOPED_PRINT_STYLE = `
+@media print {
+  .competitive-slides-toolbar,
+  .competitive-slides-counter,
+  .competitive-slides-page-back,
+  .public-slides-context {
+    display: none !important;
+  }
+  .competitive-slides-shell,
+  .competitive-slides-shell-public {
+    height: auto !important;
+    display: block !important;
+  }
+  .competitive-slides-stage {
+    height: auto !important;
+    overflow: visible !important;
+    scroll-snap-type: none !important;
+    flex: none !important;
+  }
+}
+`;
+
+export function CompetitiveSlides({
+  analysisId,
+  slidesMarkdown,
+  variant = 'authenticated',
+  anchorProduct,
+  createdAt,
+}: CompetitiveSlidesProps) {
   const [rendered, setRendered] = useState<Rendered | null>(null);
   const [error, setError] = useState(false);
+  const [position, setPosition] = useState<SlidePosition>({ current: 1, total: 0 });
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const keyboardPositionRef = useRef(0);
+  const pendingKeyboardPositionRef = useRef<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -39,22 +80,79 @@ export function CompetitiveSlides({ analysisId, slidesMarkdown }: CompetitiveSli
 
   useEffect(() => {
     if (!rendered) return;
+    const stage = stageRef.current;
+    if (!stage) return;
+
+    const slides = Array.from(stage.querySelectorAll<Element>('svg[data-marpit-svg]'));
+    keyboardPositionRef.current = 0;
+    pendingKeyboardPositionRef.current = null;
+    setPosition({ current: 1, total: slides.length });
+
+    if (slides.length === 0) return;
+
+    let active = true;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!active) return;
+        const visible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+        if (!visible) return;
+        const index = slides.indexOf(visible.target);
+        if (index >= 0) {
+          if (pendingKeyboardPositionRef.current === null) {
+            keyboardPositionRef.current = index;
+            setPosition({ current: index + 1, total: slides.length });
+          } else if (pendingKeyboardPositionRef.current === index) {
+            setPosition({ current: index + 1, total: slides.length });
+          }
+        }
+      },
+      { threshold: [0.5, 0.75], root: stage },
+    );
+    slides.forEach((slide) => observer.observe(slide));
+
+    const clearPendingKeyboardPosition = () => {
+      pendingKeyboardPositionRef.current = null;
+    };
+    stage.addEventListener('wheel', clearPendingKeyboardPosition, { passive: true });
+    stage.addEventListener('touchstart', clearPendingKeyboardPosition, { passive: true });
+    stage.addEventListener('pointerdown', clearPendingKeyboardPosition);
+
+    return () => {
+      active = false;
+      observer.disconnect();
+      stage.removeEventListener('wheel', clearPendingKeyboardPosition);
+      stage.removeEventListener('touchstart', clearPendingKeyboardPosition);
+      stage.removeEventListener('pointerdown', clearPendingKeyboardPosition);
+    };
+  }, [rendered]);
+
+  useEffect(() => {
+    if (!rendered) return;
     const handler = (event: KeyboardEvent) => {
       if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
-      const slides = document.querySelectorAll<Element>('.competitive-slides-stage svg[data-marpit-svg]');
+      const stage = stageRef.current;
+      if (!stage) return;
+      const slides = Array.from(stage.querySelectorAll<Element>('svg[data-marpit-svg]'));
       if (slides.length === 0) return;
-      const current = Array.from(slides).findIndex((slide) => {
-        const rect = slide.getBoundingClientRect();
-        return rect.top >= -10 && rect.bottom <= window.innerHeight + 10;
-      });
       const targetIndex = event.key === 'ArrowRight'
-        ? Math.min(current + 1, slides.length - 1)
-        : Math.max(current - 1, 0);
+        ? Math.min(keyboardPositionRef.current + 1, slides.length - 1)
+        : Math.max(keyboardPositionRef.current - 1, 0);
+      keyboardPositionRef.current = targetIndex;
+      pendingKeyboardPositionRef.current = targetIndex;
+      setPosition({ current: targetIndex + 1, total: slides.length });
       slides[targetIndex]?.scrollIntoView({ behavior: 'smooth' });
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [rendered]);
+
+  useEffect(() => {
+    const handler = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener('fullscreenchange', handler);
+    return () => document.removeEventListener('fullscreenchange', handler);
+  }, []);
 
   if (error) {
     return (
@@ -67,21 +165,63 @@ export function CompetitiveSlides({ analysisId, slidesMarkdown }: CompetitiveSli
     );
   }
 
+  const handleFullscreen = () => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    if (document.fullscreenElement) {
+      void document.exitFullscreen();
+    } else {
+      void stage.requestFullscreen();
+    }
+  };
+
+  if (variant === 'public') {
+    return (
+      <div className="competitive-slides-shell competitive-slides-shell-public">
+        <style dangerouslySetInnerHTML={{ __html: SCOPED_PRINT_STYLE }} />
+        <div className="competitive-slides-stage" ref={stageRef}>
+          {!rendered ? (
+            <p className="competitive-slides-loading">Rendering deck…</p>
+          ) : (
+            <>
+              <style dangerouslySetInnerHTML={{ __html: rendered.css }} />
+              <div dangerouslySetInnerHTML={{ __html: rendered.html }} />
+            </>
+          )}
+        </div>
+        {anchorProduct && createdAt ? (
+          <p className="public-slides-context">
+            Generated by Chekku · {anchorProduct} · {createdAt}
+          </p>
+        ) : null}
+      </div>
+    );
+  }
+
   return (
     <div className="competitive-slides-shell">
+      <style dangerouslySetInnerHTML={{ __html: SCOPED_PRINT_STYLE }} />
       <div className="competitive-slides-toolbar">
+        <span className="competitive-slides-counter" aria-live="polite">
+          {position.current} / {position.total}
+        </span>
         <button type="button" className="studio-button" onClick={() => window.print()}>
           Print
         </button>
+        <button type="button" className="studio-button" onClick={handleFullscreen}>
+          {isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+        </button>
       </div>
-      {!rendered ? (
-        <p className="competitive-slides-loading">Rendering deck…</p>
-      ) : (
-        <div className="competitive-slides-stage">
-          <style dangerouslySetInnerHTML={{ __html: rendered.css }} />
-          <div dangerouslySetInnerHTML={{ __html: rendered.html }} />
-        </div>
-      )}
+      <div className="competitive-slides-stage" ref={stageRef}>
+        {!rendered ? (
+          <p className="competitive-slides-loading">Rendering deck…</p>
+        ) : (
+          <>
+            <style dangerouslySetInnerHTML={{ __html: rendered.css }} />
+            <div dangerouslySetInnerHTML={{ __html: rendered.html }} />
+          </>
+        )}
+      </div>
     </div>
   );
 }

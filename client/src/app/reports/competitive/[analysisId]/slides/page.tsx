@@ -2,7 +2,6 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import { CompetitiveSlides } from '@/components/competitive-slides';
-import { StudioNav } from '@/components/studio/studio-nav';
 import { requireUserId } from '@/server/auth';
 import {
   CompetitiveAnalysisServiceError,
@@ -16,7 +15,9 @@ export default async function CompetitiveAnalysisSlidesPage({
 }: {
   params: Promise<{ analysisId: string }>;
 }) {
-  const resourceId = await requireUserId();
+  // The deck renders full-bleed without StudioNav, so this call is only the auth
+  // gate: unauthenticated visitors redirect to /login instead of reaching slides.
+  await requireUserId();
   const { analysisId } = await params;
   let slidesMarkdown: string | undefined;
   let errorMessage: string | undefined;
@@ -40,32 +41,28 @@ export default async function CompetitiveAnalysisSlidesPage({
     notFound();
   }
 
-  return (
-    <div className="studio-shell">
-      <StudioNav resourceId={resourceId} />
-      <main className="studio-main">
-        <header className="studio-page-header studio-report-header">
-          <div>
-            <p className="studio-eyebrow">Competitive analysis slides</p>
-            <h1>{analysisId}</h1>
-            <p>Rendered Marp deck built from the saved analysis.</p>
-          </div>
-          <Link className="studio-button" href={`/reports/competitive/${encodeURIComponent(analysisId)}`}>
-            Back to analysis
-          </Link>
-        </header>
+  if (errorMessage) {
+    return (
+      <div className="competitive-slides-page competitive-slides-page-error">
+        <div className="competitive-slides-page-back">
+          <Link className="studio-button" href="/reports/competitive">Back to analyses</Link>
+        </div>
+        <div className="studio-alert studio-alert-error" role="alert">
+          <p>Slides unavailable</p>
+          <p>{errorMessage}</p>
+        </div>
+      </div>
+    );
+  }
 
-        <section className="studio-section">
-          {errorMessage ? (
-            <div className="studio-alert studio-alert-error" role="alert">
-              <p>Slides unavailable</p>
-              <p>{errorMessage}</p>
-            </div>
-          ) : slidesMarkdown ? (
-            <CompetitiveSlides analysisId={analysisId} slidesMarkdown={slidesMarkdown} />
-          ) : null}
-        </section>
-      </main>
+  return (
+    <div className="competitive-slides-page">
+      <div className="competitive-slides-page-back">
+        <Link className="studio-button" href={`/reports/competitive/${encodeURIComponent(analysisId)}`}>
+          ← Back to analysis
+        </Link>
+      </div>
+      <CompetitiveSlides analysisId={analysisId} slidesMarkdown={slidesMarkdown!} />
     </div>
   );
 }

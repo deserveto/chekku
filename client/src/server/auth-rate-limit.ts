@@ -10,6 +10,10 @@ const MAX_BUCKETS = 10_000;
 const UNTRUSTED_IP_KEY = 'unknown';
 
 const PUBLIC_PATHS = new Set(['/login', '/signup', '/verify-email']);
+// Everything under /public is share-token gated, not session gated: the page
+// itself resolves the `?t=` token and 404s without it. Recipients of a share
+// link have no account, so the session redirect must not intercept them.
+const PUBLIC_PATH_PREFIXES = ['/public/'];
 
 export interface RateLimitResult {
   allowed: boolean;
@@ -64,13 +68,20 @@ export function resolveAuthRedirect({
   pathname: string;
   hasSession: boolean;
 }): string | null {
+  // Only the exact auth pages bounce signed-in users away. Share pages under
+  // /public stay reachable with a session so an owner can open their own link.
   if (hasSession && PUBLIC_PATHS.has(pathname)) return '/agents';
   // API routes own their auth contract: handlers enforce identity and return
   // bounded JSON errors (e.g. 403 from /api/storage/*). Redirecting them to
   // /login would return HTML to clients that call .json() on the response.
   if (pathname === '/api' || pathname.startsWith('/api/')) return null;
-  if (!hasSession && !PUBLIC_PATHS.has(pathname)) return '/login';
+  if (!hasSession && !isPublicPath(pathname)) return '/login';
   return null;
+}
+
+function isPublicPath(pathname: string): boolean {
+  if (PUBLIC_PATHS.has(pathname)) return true;
+  return PUBLIC_PATH_PREFIXES.some((prefix) => pathname.startsWith(prefix));
 }
 
 export function __resetRateLimitsForTests(): void {

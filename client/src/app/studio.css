@@ -2074,16 +2074,46 @@ body.studio-sidebar-resizing * {
   }
 }
 
+/* Competitive slides page (bare wrapper — no studio-shell chrome) */
+.competitive-slides-page {
+  min-height: 100dvh;
+}
+
+.competitive-slides-page-back {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 100;
+}
+
+.competitive-slides-page-error {
+  padding: 3rem 2rem;
+}
+
 /* Competitive slides stage */
 .competitive-slides-shell {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  height: 100dvh;
+}
+
+.competitive-slides-shell-public {
+  min-height: 100dvh;
 }
 
 .competitive-slides-toolbar {
+  flex-shrink: 0;
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 8px 16px;
+}
+
+.competitive-slides-counter {
+  font-variant-numeric: tabular-nums;
+  color: var(--studio-muted, #666);
+  margin-right: auto;
 }
 
 .competitive-slides-loading {
@@ -2092,6 +2122,24 @@ body.studio-sidebar-resizing * {
   color: var(--studio-muted, #666);
 }
 
+/* The stage is the ONLY scroll container. No nested studio-main wrapper.
+   flex:1 + min-height:0 lets it shrink within the shell and scroll internally. */
 .competitive-slides-stage {
-  overflow: hidden;
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scroll-snap-type: y proximity;
+  scroll-behavior: smooth;
+}
+
+.competitive-slides-stage svg[data-marpit-svg] {
+  scroll-snap-align: start;
+}
+
+.public-slides-context {
+  text-align: center;
+  color: var(--studio-muted, #666);
+  padding: 1rem;
+  font-size: 0.875rem;
 }

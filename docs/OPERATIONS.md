@@ -375,7 +375,15 @@ Competitive chat lists return deterministic `analysesMarkdown` unchanged. Empty 
 
 ### Competitive analysis slides
 
-Every completed `/competitive-analysis` run produces a `slides.md` Marp deck saved alongside the analysis. Open it at `/reports/competitive/<pca-id>/slides`. The deck renders client-side through `@marp-team/marp-core`; the route is server-rendered behind the same identity seam as the rest of `/reports/*`. Use the Print button to save as PDF via the browser; no server-side rendering, no PPTX, no public sharing in v1. Legacy analyses saved before this feature have no `slides.md` and the route returns 404 — re-run `/competitive-analysis` to produce one.
+Every completed `/competitive-analysis` run produces a `slides.md` Marp deck saved alongside the analysis. Open it at `/reports/competitive/<pca-id>/slides`. The deck renders client-side through `@marp-team/marp-core`; the route is server-rendered behind the same identity seam as the rest of `/reports/*`. The viewer exposes a Fullscreen toggle, a `N / M` slide counter that updates via IntersectionObserver, and a Print button that triggers browser print-to-PDF. No server-side rendering, no PPTX. Legacy analyses saved before this feature have no `slides.md` and the route returns 404 — re-run `/competitive-analysis` to produce one.
+
+### Shareable slides
+
+Each competitive analysis can be shared publicly via a token-gated link. From the detail page (`/reports/competitive/<pca-id>`), click `Create share link` to mint a 32-char hex token persisted as `share-token.json` alongside the analysis. The returned URL `/public/slides/<pca-id>?t=<token>` is unauthenticated and renders the deck through the same `CompetitiveSlides` component in public mode (no toolbar, no app chrome, footer with anchor product + created date).
+
+The share token is the only credential gating public access; anyone with the URL can view the deck. Tokens are NOT rotated by repeated `Create share link` clicks (idempotent) and DO NOT expire (v1.1). Revocation is deferred to v2. All public-route failures collapse to 404 (missing analysis, wrong token, missing slides, storage outage) so observers cannot learn whether an analysis exists.
+
+The public seam reads ONLY `share-token.json` and `slides.md` — never `analysis.md`, `request.md`, or `metadata.json`. Tokens are 128 bits of entropy (`crypto.randomBytes(16).toString('hex')`) and compared in constant time. Token-in-URL leakage via Referer headers, browser history, and server logs is acceptable for this use case (decks are non-sensitive competitive analysis); document and warn the user at share-create time.
 
 ## Browser operation
 
@@ -662,6 +670,56 @@ Environment differences from local development:
 - Server-only variables in `client/.env.local` are read at `next start` runtime, but `NEXT_PUBLIC_*` variables are inlined into the browser bundle at `next build` time, not at `next start`. `NEXT_PUBLIC_APP_URL` is consumed by `'use client'` code (`client/src/lib/mastra-client.ts`), so when build and start run on separate hosts the shipped bundle keeps the build-host origin and every `/api/agent/*` call targets the wrong place unless `NEXT_PUBLIC_APP_URL` is set to the production origin at build time.
 
 See Production notes below for the durable `DATABASE_URL`, deployed origin, and secret-manager checklist.
+
+## Containerized production
+
+`npm run prod:sh` (or `bash scripts/prod.sh`) is the recommended way to run the full Chekku stack in containers. It activates the `prod` Compose profile so Garage, SearXNG, Postgres, the agent, and the client all run as containers; nothing application-level runs on the host.
+
+```bash
+npm run setup        # generates storage/.env.local, searxng/.env.local; prompts for LLM_* in agent/.env
+npm run prod:sh      # build images, bring the stack up, wait for every service to be healthy
+```
+
+Subcommands:
+
+- `npm run prod:sh` — build (if needed), bring everything up, wait for all five services to become healthy.
+- `npm run prod:build` — build only the `agent` and `client` images.
+- `npm run prod:up` — bring the stack up without rebuilding.
+- `npm run prod:down` — stop and remove containers (named volumes are preserved).
+
+The launcher parses the four dotenv files (`client/.env.local`, `agent/.env`, `searxng/.env.local`, `storage/.env.local`) with node+dotenv — never bash `source`, which cannot parse values containing spaces or special characters (`LLM_DISPLAY_NAME=Rafiqspace LLM`, `RESEND_FROM_EMAIL=Chekku <...>`) — and exports the merged values into its shell so Compose can interpolate every `${VAR}` it needs. It then fails closed if any required value (`POSTGRES_PASSWORD`, `GARAGE_ACCESS_KEY_ID`, `GARAGE_SECRET_ACCESS_KEY`, `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_DEFAULT_MODEL`) is empty. Service-only secrets never reach the agent or client containers because their Compose `environment:` blocks do not declare them; `SEARXNG_SECRET` and `SEARXNG_CONFIG_HASH` legitimately reach the `searxng` container. The launcher never prints secret values.
+
+In-container wiring is fixed by Compose and differs from local development:
+
+- The agent binds `HOST=0.0.0.0`; its port `4111` is not published to the host. The client reaches it at `AGENT_URL=http://agent:4111` over the Compose default network.
+- `DATABASE_URL` is constructed as `postgresql://chekku:${POSTGRES_PASSWORD}@postgres:5432/chekku_agent` (service name `postgres`, not `127.0.0.1`).
+- SearXNG is reached at `http://searxng:8080` (the container's internal port), not the loopback `8888` used in development.
+- Only the client publishes a port, and only on loopback (`127.0.0.1:3000`). Put a reverse proxy (Caddy/nginx) in front for TLS and public exposure; override the binding with `docker-compose.override.yaml` if a different host binding is required (that file is gitignored).
+- The QA Web Agent works in production because the agent image installs system Chromium for `playwright-core`. The QA Android Agent (Maestro) stays host/device-only: `MAESTRO_ENABLED` is forced to `false` in the agent container.
+- `NEXT_PUBLIC_APP_URL` is a **build-time** value for the client image. Next.js inlines `NEXT_PUBLIC_*` into the browser bundle during `next build`, so `scripts/prod.sh` forwards it from `client/.env.local` to the builder stage as a `build.args` entry. Before building for a real domain, set `NEXT_PUBLIC_APP_URL=https://studio.example.com` in `client/.env.local` and rebuild (`npm run prod:sh`); overriding it at runtime will not reach the already-built browser bundle. This mirrors the host-`prod` gotcha documented above.
+
+Readiness timeout defaults to 60 seconds and is configurable via `CHEKKU_READY_TIMEOUT_SECONDS` (1–600). The launcher reports each service as it becomes healthy (`Garage ready`, `SearXNG ready`, `Postgres ready`, `Agent ready`, `Client ready`) and aborts with a bounded message if any service fails to become healthy.
+
+### Containerized production troubleshooting
+
+Direct `docker compose` invocations (for `ps`, `logs`, `exec`, etc.) need `SEARXNG_SECRET` and `SEARXNG_CONFIG_HASH`, which live in `searxng/.env.local` rather than `storage/.env.local`. Source both files into the shell once per session, then the `--env-file` flag is no longer needed:
+
+```bash
+set -a; source storage/.env.local; source searxng/.env.local; set +a
+```
+
+`npm run prod:sh` / `prod:up` / `prod:down` do not need this step — `scripts/prod.sh` parses every env file internally.
+
+- **`Production Compose configuration is invalid`** — inspect `compose.yaml` and the local env files; rerun `npm run setup` if a file is missing.
+- **`... is empty in ...`** — fill the named value in the named file (e.g. `LLM_API_KEY` in `agent/.env`) and rerun `npm run prod:sh`.
+- **`Agent did not become healthy within ... seconds`** — inspect logs without printing secrets: `docker compose --profile prod logs agent` (after sourcing the env files as above). Confirm `HOST=0.0.0.0`, a reachable `DATABASE_URL`, and valid `LLM_*` values.
+- **Client cannot reach the agent** — confirm the client container's `AGENT_URL=http://agent:4111` and that the agent container is healthy (`docker compose --profile prod ps`).
+- **`next build` fails on `/_global-error` prerendering inside the container** — the builder stage must NOT set `NODE_ENV=development`; `next build` needs the default production `NODE_ENV`. `npm ci` installs devDependencies regardless of `NODE_ENV`, so the builder leaves it unset.
+- **Reset production data** — same Postgres volume reset as development, but scoped to the prod profile:
+  ```bash
+  npm run prod:down
+  docker volume rm chekku_postgres-data
+  ```
 
 ## Production notes
 

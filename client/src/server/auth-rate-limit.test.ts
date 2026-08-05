@@ -139,6 +139,26 @@ describe('resolveAuthRedirect', () => {
     ).toBeNull();
   });
 
+  it('lets share-token pages under /public through without a session', async () => {
+    const { resolveAuthRedirect } = await import('./auth-rate-limit');
+    expect(
+      resolveAuthRedirect({
+        pathname: '/public/slides/pca_20260723120000_deadbeef',
+        hasSession: false,
+      }),
+    ).toBeNull();
+  });
+
+  it('keeps /public reachable for signed-in users so owners can open their own links', async () => {
+    const { resolveAuthRedirect } = await import('./auth-rate-limit');
+    expect(
+      resolveAuthRedirect({
+        pathname: '/public/slides/pca_20260723120000_deadbeef',
+        hasSession: true,
+      }),
+    ).toBeNull();
+  });
+
   it('does not treat sibling /api/ paths like /api/authorize as public auth routes', async () => {
     // Regression: previously used bare startsWith('/api/auth'), which would
     // also match /api/authorize. API routes now short-circuit to null above,

@@ -43,6 +43,7 @@ const reportDetailPage = readOptionalSource('../app/reports/[reportId]/page.tsx'
 const competitiveAnalysisListPage = readOptionalSource('../app/reports/competitive/page.tsx');
 const competitiveAnalysisDetailPage = readOptionalSource('../app/reports/competitive/[analysisId]/page.tsx');
 const competitiveAnalysisSlidesPage = readOptionalSource('../app/reports/competitive/[analysisId]/slides/page.tsx');
+const publicSlidesPage = readOptionalSource('../app/public/slides/[analysisId]/page.tsx');
 
 describe('requested UI structure', () => {
   it('lets each sidebar place its collapse control in the brand row', () => {
@@ -174,5 +175,16 @@ describe('requested UI structure', () => {
     expect(competitiveAnalysisSlidesPage).toContain("from '@/components/competitive-slides'");
     expect(competitiveAnalysisSlidesPage).toContain("from '@/server/competitive-analyses'");
     expect(competitiveAnalysisSlidesPage).not.toContain('from \'@chekku/storage\'');
+  });
+
+  it('renders the public slides route as unauthenticated, never touches Garage directly, and reads only via getPublicSlides', () => {
+    expect(publicSlidesPage).toContain("export const dynamic = 'force-dynamic'");
+    expect(publicSlidesPage).not.toContain("'use client'");
+    expect(publicSlidesPage).toContain("from '@/components/competitive-slides'");
+    expect(publicSlidesPage).toContain("from '@/server/competitive-analyses'");
+    expect(publicSlidesPage).toContain('getPublicSlides');
+    expect(publicSlidesPage).not.toContain('from \'@chekku/storage\'');
+    expect(publicSlidesPage).not.toContain('getCompetitiveAnalysisForUser');
+    expect(publicSlidesPage).not.toContain('requireIdentity');
   });
 });

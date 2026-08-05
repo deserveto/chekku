@@ -35,8 +35,12 @@ import { GET as getAnalysisRoute } from '../app/api/storage/competitive-analyses
 import { GET as listAnalysesRoute } from '../app/api/storage/competitive-analyses/route';
 import {
   CompetitiveAnalysisServiceError,
+  createShareLinkForUser,
   getCompetitiveAnalysisForUser,
+  getPublicSlides,
+  getShareTokenForUser,
   listCompetitiveAnalysesForUser,
+  type PublicSlidesPayload,
 } from './competitive-analyses';
 
 const analysisId = 'pca_20260723120000_deadbeef';
@@ -299,5 +303,173 @@ describe('competitive analysis API routes', () => {
     expect(response.status).toBe(500);
     expect(JSON.parse(body)).toEqual({ error: { code: 'internal-error', message } });
     expect(body).not.toContain(providerDetail);
+  });
+});
+
+describe('share link lifecycle', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getUserId.mockResolvedValue('user-1');
+    mocks.rootStoreFactory.mockReturnValue(createRootStore());
+  });
+
+  it('createShareLinkForUser requires identity', async () => {
+    await expect(createShareLinkForUser(analysisId, {
+      getServerUserId: async () => null,
+    })).rejects.toMatchObject({ code: 'forbidden', status: 403 });
+  });
+
+  it('createShareLinkForUser rejects invalid analysis id', async () => {
+    await expect(createShareLinkForUser('pca_legacy', {
+      getServerUserId: async () => 'user-1',
+    })).rejects.toMatchObject({ code: 'invalid-analysis-id', status: 400 });
+  });
+
+  it('createShareLinkForUser returns url after analysis read + token create', async () => {
+    const getAnalysis = vi.fn(async () => analysis);
+    const createShareToken = vi.fn(async () => ({
+      token: 'abcdef0123456789abcdef0123456789',
+      createdAt: '2026-07-29T10:00:00.000Z',
+      anchorProduct: 'GPT',
+    }));
+
+    const result = await createShareLinkForUser(analysisId, {
+      getServerUserId: async () => 'user-1',
+      getAnalysis,
+      createShareToken,
+    });
+
+    expect(getAnalysis).toHaveBeenCalledOnce();
+    expect(createShareToken).toHaveBeenCalledWith(expect.anything(), analysisId, 'GPT');
+    expect(result.url).toBe(`/public/slides/${analysisId}?t=abcdef0123456789abcdef0123456789`);
+  });
+
+  it('createShareLinkForUser rejects analyses without slides before creating a token', async () => {
+    const createShareToken = vi.fn();
+
+    await expect(createShareLinkForUser(analysisId, {
+      getServerUserId: async () => 'user-1',
+      getAnalysis: async () => ({ ...analysis, slidesMarkdown: undefined }),
+      createShareToken,
+    })).rejects.toMatchObject({ code: 'not-found', status: 404 });
+    expect(createShareToken).not.toHaveBeenCalled();
+  });
+
+  it('createShareLinkForUser maps storage not-found to service not-found', async () => {
+    const getAnalysis = vi.fn(async () => {
+      throw new ObjectStorageError('not-found', 'missing');
+    });
+
+    await expect(createShareLinkForUser(analysisId, {
+      getServerUserId: async () => 'user-1',
+      getAnalysis,
+    })).rejects.toMatchObject({ code: 'not-found', status: 404 });
+  });
+});
+
+describe('getShareTokenForUser status check', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getUserId.mockResolvedValue('user-1');
+    mocks.rootStoreFactory.mockReturnValue(createRootStore());
+  });
+
+  it('returns shared=false when no token exists', async () => {
+    const getShareToken = vi.fn(async () => undefined);
+    await expect(getShareTokenForUser(analysisId, {
+      getServerUserId: async () => 'user-1',
+      getShareToken,
+    })).resolves.toEqual({ shared: false });
+  });
+
+  it('returns shared=true when token exists', async () => {
+    const getShareToken = vi.fn(async () => ({
+      token: 'a'.repeat(32),
+      createdAt: '2026-07-29T10:00:00.000Z',
+      anchorProduct: 'GPT',
+    }));
+    await expect(getShareTokenForUser(analysisId, {
+      getServerUserId: async () => 'user-1',
+      getShareToken,
+    })).resolves.toEqual({ shared: true });
+  });
+});
+
+describe('getPublicSlides', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getUserId.mockResolvedValue('user-1');
+    mocks.rootStoreFactory.mockReturnValue(createRootStore());
+  });
+
+  it('does NOT require identity', async () => {
+    const getShareableSlides = vi.fn(async () => undefined);
+    await expect(getPublicSlides(analysisId, 'a'.repeat(32), {
+      getServerUserId: async () => null,
+      getShareableSlides,
+    })).rejects.toMatchObject({ code: 'not-found', status: 404 });
+    expect(getShareableSlides).toHaveBeenCalledOnce();
+  });
+
+  it('throws not-found for invalid analysis id', async () => {
+    await expect(getPublicSlides('pca_legacy', 'a'.repeat(32))).rejects.toMatchObject({
+      code: 'not-found',
+      status: 404,
+    });
+  });
+
+  it('throws not-found for empty token', async () => {
+    await expect(getPublicSlides(analysisId, '')).rejects.toMatchObject({
+      code: 'not-found',
+      status: 404,
+    });
+  });
+
+  it('throws not-found when payload is undefined (token mismatch or missing)', async () => {
+    const getShareableSlides = vi.fn(async () => undefined);
+    await expect(getPublicSlides(analysisId, 'a'.repeat(32), {
+      getShareableSlides,
+    })).rejects.toMatchObject({ code: 'not-found', status: 404 });
+  });
+
+  it('maps storage not-found to service not-found', async () => {
+    const getShareableSlides = vi.fn(async () => {
+      throw new ObjectStorageError('not-found', 'missing');
+    });
+    await expect(getPublicSlides(analysisId, 'a'.repeat(32), {
+      getShareableSlides,
+    })).rejects.toMatchObject({ code: 'not-found', status: 404 });
+  });
+
+  it('maps storage-unavailable class errors to not-found (no leak)', async () => {
+    const providerDetail = 'private endpoint request-id=secret';
+    const getShareableSlides = vi.fn(async () => {
+      throw new ObjectStorageError('unavailable', providerDetail);
+    });
+    let failure: unknown;
+    try {
+      await getPublicSlides(analysisId, 'a'.repeat(32), { getShareableSlides });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({ code: 'not-found', status: 404 });
+    expect(String(failure)).not.toContain(providerDetail);
+  });
+
+  it('returns payload when token validates', async () => {
+    const getShareableSlides = vi.fn(async () => ({
+      anchorProduct: 'GPT',
+      createdAt: '2026-07-29T10:00:00.000Z',
+      slidesMarkdown: '# Deck',
+    }));
+    const result: PublicSlidesPayload = await getPublicSlides(analysisId, 'a'.repeat(32), {
+      getShareableSlides,
+    });
+    expect(result).toMatchObject({
+      analysisId,
+      anchorProduct: 'GPT',
+      createdAt: '2026-07-29T10:00:00.000Z',
+      slidesMarkdown: '# Deck',
+    });
   });
 });

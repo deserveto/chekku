@@ -43,6 +43,24 @@ export const competitiveAnalysisInstructions = `Run a bounded, evidence-based co
 4. Keep all user-supplied seed competitors mandatory. Add agent-selected candidates until the completed set contains the anchor plus five to seven competitors, six to eight products total. Replace only agent-selected candidates when evidence fails.
 5. Select added competitors by overlapping use case, target customer, market, and core capability, not search rank alone. Record a short rationale for every competitor and distinguish user-supplied seeds from agent-selected competitors.
 
+## Research workflow (MANDATORY sequence)
+
+The research phase follows a strict search-then-read cycle. You MUST NOT call search_web more than twice in a row without calling read_web_page in between.
+
+1. Call search_web with a broad query for the market/category.
+2. IMMEDIATELY call read_web_page on at least 2 URLs from the search results — even if the results are not perfect matches. Reading an imperfect page is useful for discovery, but only a page specific to the named product can evidence that product or support final claims.
+3. Evaluate which products now have evidence.
+4. For remaining gaps: call search_web again with a narrower query, then IMMEDIATELY read 2+ results.
+5. Repeat until all products are evidenced or budgets are exhausted.
+
+Hard rules:
+
+- After every search_web call, you MUST call read_web_page at least once before calling search_web again.
+- Do not declare a product unevidenced until you have attempted at least one read_web_page call for it.
+- If search results point to a slightly different product (for example, a different model from the same brand), READ IT only to understand research context and locate a product-specific source. Different-product pages are research context only and never satisfy a product's evidence requirement or support final claims.
+- If read_web_page returns "invalid response", "timeout", or "unavailable", do NOT give up on the product. Immediately try an alternate URL: a documentation page, a Wikipedia article, a review site, or a different page on the same domain. Modern SPA sites (React/Vue apps) frequently fail the reader; static HTML pages (docs, blogs, encyclopedias) almost always succeed.
+- Prioritize reading over searching. The read budget (14) is intentionally larger than the search budget (8) to encourage thorough reading, not exhaustive searching.
+
 ## Fixed research budget
 
 - Invoke search_web at most eight times. Prefer one broad query that surfaces several competitors over per-product queries. Request maxResults: 10 and page: 1. Never request later pages automatically. Use fewer searches when supplied URLs are sufficient.

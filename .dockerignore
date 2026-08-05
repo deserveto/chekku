@@ -1,0 +1,76 @@
+# Dependencies (installed inside the builder stage)
+**/node_modules
+
+# Build output and caches (regenerated inside the builder)
+**/.next
+**/.mastra
+**/.turbo
+**/.cache
+**/dist
+**/out
+**/build
+**/coverage
+**/*.tsbuildinfo
+
+# Environment and secrets — never enter the build context
+**/.env
+**/.env.*
+!**/.env.example
+storage/.env.local
+searxng/.env.local
+agent/.env.development
+
+# Generated Garage and SearXNG local state
+storage/.garage/
+storage/.garage-data/
+storage/.garage-meta/
+agent/src/mastra/public/
+agent/src/mastra/calendar/.cache/
+
+# Local databases
+mastra.db
+mastra.db-*
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/*.sqlite
+**/*.sqlite3
+
+# Test and browser artifacts
+playwright-report/
+test-results/
+.nyc_output/
+**/*.log
+artifacts/
+
+# Local tooling, editors, and OS metadata
+.vscode/
+.idea/
+**/*.swp
+**/*.swo
+.playwright-mcp/
+.agents/
+.codex/
+.superpowers/sdd/
+.DS_Store
+Thumbs.db
+
+# VCS and docs (not needed to build images)
+.git/
+.gitignore
+.gitattributes
+.github/
+docs/
+
+# Chekku reconstruction artifacts
+.chekku-*-backup-*/
+*.patch
+*.zip
+
+# Local-only scratch files
+PROMPT.md
+DESIGN.md
+TASKS.md
+agent/test-client.js
+/after-fix-screenshot.png
+/webapp-screenshot.png

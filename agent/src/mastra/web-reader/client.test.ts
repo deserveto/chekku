@@ -207,7 +207,7 @@ describe('Jina Reader client', () => {
     }));
     const client = createJinaReaderClient({ apiKey: 'token', fetch });
     await expect(client.read('https://example.com/'))
-      .rejects.toThrow('Web Reader returned an invalid response.');
+      .rejects.toThrow('Web Reader returned an invalid response');
   });
 
   it('maps fatal UTF-8 to a fixed invalid-response error', async () => {
@@ -216,7 +216,7 @@ describe('Jina Reader client', () => {
     }));
     const client = createJinaReaderClient({ apiKey: 'token', fetch });
     await expect(client.read('https://example.com/'))
-      .rejects.toThrow('Web Reader returned an invalid response.');
+      .rejects.toThrow('Web Reader returned an invalid response');
   });
 
   it('rejects a missing response body', async () => {
@@ -225,7 +225,7 @@ describe('Jina Reader client', () => {
     }));
     const client = createJinaReaderClient({ apiKey: 'token', fetch });
     await expect(client.read('https://example.com/'))
-      .rejects.toThrow('Web Reader returned an invalid response.');
+      .rejects.toThrow('Web Reader returned an invalid response');
   });
 
   it('cancels a streamed response above 2 MiB', async () => {
@@ -412,7 +412,7 @@ describe('Jina Reader client', () => {
     });
 
     await expect(client.read('https://example.com/'))
-      .rejects.toThrow('Web Reader returned an invalid response.');
+      .rejects.toThrow('Web Reader returned an invalid response');
     expect(body.locked).toBe(false);
   });
 
@@ -658,7 +658,7 @@ describe('Jina Reader client', () => {
     const client = createJinaReaderClient({ apiKey: 'token', fetch });
 
     await expect(client.read('https://example.com/'))
-      .rejects.toThrow('Web Reader returned an invalid response.');
+      .rejects.toThrow('Web Reader returned an invalid response');
   });
 
   it.each([
@@ -675,7 +675,7 @@ describe('Jina Reader client', () => {
     const client = createJinaReaderClient({ apiKey: 'token', fetch });
 
     await expect(client.read('https://example.com/'))
-      .rejects.toThrow('Web Reader returned an invalid response.');
+      .rejects.toThrow('Web Reader returned an invalid response');
   });
 
   it('omits every provider-only and unknown field', async () => {
