@@ -262,15 +262,32 @@ Local file: `client/.env.local`
 | `npm run start` | Start the built Mastra and Next.js servers together. Requires a prior `npm run build`. |
 | `npm run start:agent` | Start only the built Mastra server. |
 | `npm run start:client` | Start only the built Next.js client. |
-| `npm run prod` | Build, then start both servers. Does not provision local Garage or SearXNG; production must reach them as external services. |
+| `npm run prod` | Build, then start both servers on the host. Does not provision local Garage or SearXNG; production must reach them as external services. |
+| `npm run prod:sh` | Build the agent and client images and run the whole stack (Garage, SearXNG, Postgres, agent, client) in containers via the `prod` Compose profile. Recommended for production. |
+| `npm run prod:build` | Build only the `agent` and `client` container images. |
+| `npm run prod:up` | Bring the containerized stack up without rebuilding. |
+| `npm run prod:down` | Stop and remove production containers (named volumes are preserved). |
 
 The client uses system font stacks, so `next build` does not download fonts from Google. Mastra production builds still install the generated server bundle dependencies and therefore require access to the configured npm registry.
+
+## Production deployment
+
+For production, run the full stack inside containers so the host only needs Docker and a reverse proxy. The agent and client services in `compose.yaml` are gated behind the `prod` profile, so development (which runs the agent and client as host processes via `npm run dev:sh`) is unaffected.
+
+```bash
+npm ci
+npm run setup        # generates storage/.env.local + searxng/.env.local; prompts for LLM_* in agent/.env
+npm run prod:sh      # build images, bring the stack up, wait for every service to be healthy
+```
+
+Put a reverse proxy (Caddy or nginx) in front of the client's loopback port (`127.0.0.1:3000`) for TLS and public exposure. The agent's port `4111` is intentionally not published; the client reaches it over the Compose network at `http://agent:4111`. In-container wiring differs from local development: `DATABASE_URL` uses the `postgres` service hostname, SearXNG is reached at `http://searxng:8080`, and the agent binds `HOST=0.0.0.0`. The agent image bundles system Chromium so the QA Web Agent works in production; the QA Android Agent (Maestro) stays host/device-only. See `docs/OPERATIONS.md` for the full containerized-production guide, troubleshooting, and the secret-manager checklist.
 
 ## Repository layout
 
 ```text
 .
 ├── agent/                  # Mastra server and agent runtime
+│   ├── Dockerfile          # multi-stage production image (bundles Chromium for QA Web)
 │   └── src/
 │       ├── agents/         # main, PM, QA Web, Social Media, Strategist, and Visual Content agents
 │       ├── config/         # environment and middleware
@@ -285,13 +302,14 @@ The client uses system font stacks, so `next build` does not download fonts from
 │       │   └── tools/      # stored-agent, PM, search, reading, and image-generation tools
 │       └── providers/      # model configuration helpers
 ├── client/                 # Next.js studio
+│   ├── Dockerfile          # multi-stage production image (Next.js standalone output)
 │   └── src/
 │       ├── app/            # routes and same-origin proxy
 │       ├── components/     # agent catalog, builder, chat, shared UI
 │       ├── lib/            # Mastra client, models, agents, threads
 │       └── server/         # auth seam, proxy validation, payload helpers
 ├── storage/                # generic Garage/S3 storage plus PM report repository
-├── scripts/                # local Garage/SearXNG environment and development launchers
+├── scripts/                # local env generation, dev launcher (dev.sh), prod launcher (prod.sh)
 ├── searxng/                # tracked local search settings; generated state stays ignored
 ├── docs/                   # architecture, operations, cleanup history
 └── .github/workflows/      # CI

@@ -41,6 +41,10 @@ test-results/
 *.log
 artifacts/
 
+# Local production compose overrides (machine-specific bindings, TLS, etc.)
+docker-compose.override.yaml
+docker-compose.override.yml
+
 # Local tooling and editors
 .vscode/
 .idea/

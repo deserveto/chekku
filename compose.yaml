@@ -58,6 +58,121 @@ services:
       retries: 30
       start_period: 5s
 
+  # Application services are opt-in via the `prod` profile so the development
+  # launcher (scripts/dev.sh) keeps starting garage, searxng, and postgres only
+  # while the agent and client run as host processes. Production brings the
+  # whole stack up with: docker compose --profile prod up -d --build.
+  # All interpolations use `${VAR:-}` defaults so `docker compose config --quiet`
+  # (run by scripts/dev.sh) still validates without production secrets present;
+  # scripts/prod.sh is the single place that fails closed on missing values.
+  agent:
+    profiles: [prod]
+    build:
+      context: .
+      dockerfile: agent/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      garage:
+        condition: service_healthy
+      searxng:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 4111
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      MASTRA_TELEMETRY_DISABLED: ${MASTRA_TELEMETRY_DISABLED:-true}
+      WEB_URL: ${WEB_URL:-http://localhost:3000}
+      # Postgres lives on the Compose default network under service name `postgres`.
+      DATABASE_URL: postgresql://chekku:${POSTGRES_PASSWORD:-postgres}@postgres:5432/chekku_agent
+      # Single OpenAI-compatible model gateway (server-only credentials).
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_DEFAULT_MODEL: ${LLM_DEFAULT_MODEL:-}
+      LLM_DISPLAY_NAME: ${LLM_DISPLAY_NAME:-OpenAI-compatible endpoint}
+      LLM_MODELS: ${LLM_MODELS:-}
+      LLM_IMAGE_MODEL: ${LLM_IMAGE_MODEL:-}
+      LLM_IMAGE_ENDPOINT_PATH: ${LLM_IMAGE_ENDPOINT_PATH:-/images/generations}
+      # Garage object storage. The endpoint is fixed to the in-container
+      # service name (the dev-oriented 127.0.0.1:3900 from storage/.env.local
+      # must NOT reach the container). Region, bucket, and credentials come
+      # from storage/.env.local via the shell environment.
+      GARAGE_ENDPOINT: http://garage:3900
+      GARAGE_REGION: ${GARAGE_REGION:-}
+      GARAGE_BUCKET: ${GARAGE_BUCKET:-}
+      GARAGE_ACCESS_KEY_ID: ${GARAGE_ACCESS_KEY_ID:-}
+      GARAGE_SECRET_ACCESS_KEY: ${GARAGE_SECRET_ACCESS_KEY:-}
+      # SearXNG search; fixed to the in-container service (listens on 8080).
+      SEARXNG_BASE_URL: http://searxng:8080
+      SEARXNG_API_KEY: ${SEARXNG_API_KEY:-}
+      WEB_READER_API_KEY: ${WEB_READER_API_KEY:-}
+      PUBLIC_HOLIDAY_API_BASE_URL: ${PUBLIC_HOLIDAY_API_BASE_URL:-https://api-hari-libur.vercel.app/api}
+      CHEKKU_DEFAULT_AGENT_ID: ${CHEKKU_DEFAULT_AGENT_ID:-main-agent}
+      CHEKKU_LOCAL_USER_ID: ${CHEKKU_LOCAL_USER_ID:-local-user}
+      BROWSER_HEADLESS: ${BROWSER_HEADLESS:-true}
+      # Optional integrations (empty is safe; the server boots without them).
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_MODE: ${TELEGRAM_MODE:-webhook}
+      TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
+      TELEGRAM_WEBHOOK_SECRET_TOKEN: ${TELEGRAM_WEBHOOK_SECRET_TOKEN:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-Chekku <onboarding@resend.dev>}
+      SOCIAL_DRAFT_REVIEW_EMAIL: ${SOCIAL_DRAFT_REVIEW_EMAIL:-}
+      # Maestro (QA Android) stays host/device-only; never enabled in-container.
+      MAESTRO_ENABLED: "false"
+    # No published ports: the agent is reached only by the client over the
+    # Compose default network (AGENT_URL=http://agent:4111).
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4111/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 15s
+
+  client:
+    profiles: [prod]
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+      # NEXT_PUBLIC_APP_URL is inlined by `next build`, so it must reach the
+      # builder stage as an arg (the runtime `environment:` below is not enough
+      # for client-bundle values). Operator sets it in client/.env.local.
+      args:
+        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+    restart: unless-stopped
+    depends_on:
+      agent:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+      # Same-origin proxy targets the agent by its Compose service name.
+      AGENT_URL: http://agent:4111
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+      CHEKKU_LOCAL_USER_ID: ${CHEKKU_LOCAL_USER_ID:-local-user}
+      AGENT_SERVICE_TOKEN: ${AGENT_SERVICE_TOKEN:-}
+      # The Next.js server reads Garage objects for /reports/* and /social-posts/*
+      # through @chekku/storage, so it needs the same Garage credentials as agent.
+      # Endpoint is fixed to the in-container service name (see agent service).
+      GARAGE_ENDPOINT: http://garage:3900
+      GARAGE_REGION: ${GARAGE_REGION:-}
+      GARAGE_BUCKET: ${GARAGE_BUCKET:-}
+      GARAGE_ACCESS_KEY_ID: ${GARAGE_ACCESS_KEY_ID:-}
+      GARAGE_SECRET_ACCESS_KEY: ${GARAGE_SECRET_ACCESS_KEY:-}
+    ports:
+      # Loopback only; put a reverse proxy (Caddy/nginx) in front for TLS and
+      # public exposure. Change via docker-compose.override.yaml if needed.
+      - "127.0.0.1:3000:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 8s
+
 volumes:
   garage-metadata:
   garage-data:

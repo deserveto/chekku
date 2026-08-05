@@ -70,6 +70,49 @@ PM competitive analysis
   -> /reports/competitive/<pca-id>
 ```
 
+## Deployment topology
+
+Chekku has two deployment modes, kept apart by Compose profiles so neither mode touches the other's runtime:
+
+- **Development** — `scripts/dev.sh` starts only the stateful third-party services in containers (Garage, SearXNG, Postgres) and runs the agent and client as host processes (`npm run dev:agent`, `npm run dev:client`). The launcher never activates the `prod` profile, so the `agent` and `client` Compose services stay absent.
+- **Production** — `scripts/prod.sh` activates the `prod` profile and brings the whole stack up as containers: Garage, SearXNG, Postgres, `agent`, and `client`. The agent and client never run on the host.
+
+The application services in `compose.yaml` are gated behind `profiles: [prod]` and use `${VAR:-}` interpolation defaults, so the development launcher's `docker compose config --quiet` validation still passes without production secrets present. `scripts/prod.sh` is the only path that activates the profile and the only place that fails closed on missing required values.
+
+Production traffic flow:
+
+```text
+Browser
+  │
+  ▼
+Reverse proxy (Caddy/nginx, host) ── TLS, public exposure
+  │
+  ▼
+client :3000  (container, 127.0.0.1:3000 published)
+  ├── /api/agent/* same-origin proxy ──► agent:4111 (container, no published port)
+  │                                        ├── postgres:5432 (container)
+  │                                        ├── garage:3900   (container)
+  │                                        ├── searxng:8080  (container)
+  │                                        └── OpenAI-compatible endpoint (external)
+  └── /reports/* + /api/storage/* ──► @chekku/storage ──► garage:3900
+```
+
+In-container wiring invariants:
+
+- The agent binds `HOST=0.0.0.0` so it is reachable from the `client` container over the Compose default network; its port `4111` is intentionally not published to the host.
+- The client's same-origin proxy targets `AGENT_URL=http://agent:4111` (the Compose service name), not `localhost`.
+- `DATABASE_URL` is constructed with the `postgres` service hostname, not `127.0.0.1`.
+- SearXNG is reached at `http://searxng:8080` (the container's internal port), not the loopback `8888` used in development.
+
+### Image build model
+
+Both application images are multi-stage and build from the repository root (not the workspace directory) because `npm ci` must resolve the `@chekku/storage` workspace symlink and each bundler must be able to follow `storage/`:
+
+- `agent/Dockerfile` runs `npm run build --workspace agent`, then copies the emitted `agent/.mastra/output/` bundle plus production `node_modules` into a `node:22-bookworm-slim` runtime that also installs system Chromium for the QA Web Agent (`@mastra/agent-browser` depends on `playwright-core`, which does not download a browser). Mastra currently inlines `@chekku/storage` into the bundle; the `storage/` workspace is copied into the image as well so the runtime layout matches the build layout even if a future Mastra version externalizes it.
+- `client/Dockerfile` runs `npm run build --workspace client` and copies the Next.js standalone output. `client/next.config.ts` sets `output: 'standalone'`, `outputFileTracingRoot` to the repo root, and `transpilePackages: ['@chekku/storage']` so standalone file tracing follows the raw-TypeScript storage workspace and its `@aws-sdk/client-s3` dependency into `.next/standalone/`.
+
+Secrets are injected exclusively through Compose `environment:` interpolation; no secret is baked into either image. `scripts/prod.sh` parses the four dotenv files with node+dotenv (never bash `source`, which cannot parse values containing spaces or special characters). Service-only secrets (`GARAGE_RPC_SECRET`, `GARAGE_ADMIN_TOKEN`, `GARAGE_METRICS_TOKEN`, `SEARXNG_SECRET`, `SEARXNG_CONFIG_HASH`) may be present in Compose's interpolation context, but they never enter the agent or client containers because their `environment:` blocks do not declare them; `SEARXNG_SECRET` and `SEARXNG_CONFIG_HASH` legitimately reach the `searxng` container, which declares them.
+
 ## Backend composition
 
 `agent/src/mastra/index.ts` creates the single `Mastra` instance and registers:
