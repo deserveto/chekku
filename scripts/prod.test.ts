@@ -69,10 +69,14 @@ const validSearxngEnv = [
   "",
 ].join("\n");
 
+const BETTER_AUTH_SECRET = "better-auth-secret-value";
+
 const validClientEnv = [
   "AGENT_URL=http://agent:4111",
   "NEXT_PUBLIC_APP_URL=https://studio.example.test",
   "CHEKKU_LOCAL_USER_ID=local-user",
+  `BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}`,
+  "BETTER_AUTH_URL=https://studio.example.test",
   "",
 ].join("\n");
 
@@ -81,6 +85,7 @@ const secretValues = [
   GARAGE_ACCESS_KEY_ID,
   GARAGE_SECRET_ACCESS_KEY,
   LLM_API_KEY,
+  BETTER_AUTH_SECRET,
   "service-only-rpc",
   "service-only-admin",
   "service-only-metrics",
@@ -225,6 +230,20 @@ describe("production launcher prerequisites", () => {
     const result = runProd(root);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("LLM_API_KEY is empty");
+  });
+
+  it("aborts when a required Better Auth value is empty", () => {
+    const root = fixture();
+    writeFileSync(
+      resolve(root, "client/.env.local"),
+      validClientEnv.replace(
+        `BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}`,
+        "BETTER_AUTH_SECRET=",
+      ),
+    );
+    const result = runProd(root);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("BETTER_AUTH_SECRET is empty");
   });
 
   it("rejects an unknown action", () => {

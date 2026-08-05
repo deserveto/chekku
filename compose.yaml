@@ -8,7 +8,13 @@ services:
       GARAGE_DEFAULT_SECRET_KEY: ${GARAGE_SECRET_ACCESS_KEY:?Set GARAGE_SECRET_ACCESS_KEY}
       GARAGE_DEFAULT_BUCKET: ${GARAGE_BUCKET:?Set GARAGE_BUCKET}
     ports:
-      - "127.0.0.1:3900:3900"
+      # Loopback publish for the development launcher: scripts/dev.sh runs the
+      # agent and client as host processes, so they reach Garage through this
+      # binding (storage/.env.local pins GARAGE_ENDPOINT to 127.0.0.1:3900).
+      # The host port is overridable for machines where 3900 is already taken;
+      # the container port stays fixed because GARAGE_ENDPOINT inside Compose
+      # resolves to http://garage:3900.
+      - "127.0.0.1:${CHEKKU_GARAGE_HOST_PORT:-3900}:3900"
     volumes:
       - ./storage/.garage/garage.toml:/etc/garage.toml:ro
       - garage-metadata:/var/lib/garage/meta
@@ -28,7 +34,10 @@ services:
     labels:
       chekku.searxng-config-hash: ${SEARXNG_CONFIG_HASH:?Set SEARXNG_CONFIG_HASH}
     ports:
-      - "127.0.0.1:8888:8080"
+      # Loopback publish for scripts/dev.sh (searxng/.env.local pins
+      # SEARXNG_BASE_URL to 127.0.0.1:8888). Host port overridable; containers
+      # always talk to http://searxng:8080.
+      - "127.0.0.1:${CHEKKU_SEARXNG_HOST_PORT:-8888}:8080"
     volumes:
       - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
       - searxng-cache:/var/cache/searxng
@@ -47,7 +56,11 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
       POSTGRES_DB: chekku_agent
     ports:
-      - "127.0.0.1:5432:5432"
+      # Loopback publish for scripts/dev.sh and, in every environment, for
+      # scripts/db-migrate.sh — the Better Auth CLI runs on the host and reaches
+      # Postgres through AUTH_DATABASE_URL in client/.env.local. Host port
+      # overridable; containers always talk to postgres:5432.
+      - "127.0.0.1:${CHEKKU_POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - ./scripts/postgres/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
       - postgres-data:/var/lib/postgresql/data
@@ -162,16 +175,42 @@ services:
       GARAGE_BUCKET: ${GARAGE_BUCKET:-}
       GARAGE_ACCESS_KEY_ID: ${GARAGE_ACCESS_KEY_ID:-}
       GARAGE_SECRET_ACCESS_KEY: ${GARAGE_SECRET_ACCESS_KEY:-}
+      # Better Auth (email/password + email verification). The secret and the
+      # public base URL come from client/.env.local through scripts/prod.sh.
+      # BETTER_AUTH_URL must match the browser-facing origin or verification
+      # links and session cookies break.
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:3000}
+      # Fixed to the in-container service name, exactly like the agent's
+      # DATABASE_URL above. AUTH_DATABASE_URL in client/.env.local keeps its
+      # 127.0.0.1 form because scripts/db-migrate.sh runs the Better Auth CLI
+      # on the host; that value must NOT reach the container.
+      AUTH_DATABASE_URL: postgresql://chekku:${POSTGRES_PASSWORD:-postgres}@postgres:5432/chekku_auth
+      # Verification email transport. Without a key the link is only logged to
+      # this container's stdout, so nobody can finish signup.
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-Chekku <onboarding@resend.dev>}
+      # Set to "true" only behind a reverse proxy that supplies a trustworthy
+      # x-forwarded-for; otherwise all anonymous auth traffic shares one bucket.
+      RATE_LIMIT_TRUST_PROXY: ${RATE_LIMIT_TRUST_PROXY:-}
     ports:
       # Loopback only; put a reverse proxy (Caddy/nginx) in front for TLS and
-      # public exposure. Change via docker-compose.override.yaml if needed.
-      - "127.0.0.1:3000:3000"
+      # public exposure. The host port is overridable for machines where 3000 is
+      # already taken; the container port stays 3000.
+      - "127.0.0.1:${CHEKKU_CLIENT_HOST_PORT:-3000}:3000"
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"]
       interval: 5s
       timeout: 3s
       retries: 30
       start_period: 8s
+
+networks:
+  # Named explicitly instead of taking the generated `chekku_default`, so hosts
+  # running several stacks can identify this one. Every service resolves its
+  # peers by Compose service name on it.
+  default:
+    name: chekku-network
 
 volumes:
   garage-metadata:

@@ -874,7 +874,11 @@ describe('committed local runtime', () => {
 
     expect(compose).toContain('dxflrs/garage:v2.3.0');
     expect(scripts).toMatch(/GARAGE_BUCKET=.*chekku-objects/);
-    expect(compose).toContain('"127.0.0.1:3900:3900"');
+    // Loopback-bound, and defaulted to 3900 so the development launcher and the
+    // 127.0.0.1:3900 GARAGE_ENDPOINT in storage/.env.local keep working without
+    // any extra configuration. The host port is overridable only for hosts where
+    // 3900 already belongs to another stack.
+    expect(compose).toContain('"127.0.0.1:${CHEKKU_GARAGE_HOST_PORT:-3900}:3900"');
     for (const port of [3901, 3902, 3903]) expect(compose).not.toMatch(new RegExp(`^[^#]*${port}:${port}`, 'm'));
     expect(launcher).toContain('CHEKKU_GARAGE_PORTS:-3900}');
     expect(compose).toMatch(/\.\/storage\/\.garage\/garage\.toml:\/etc\/garage\.toml:ro/);
@@ -882,7 +886,7 @@ describe('committed local runtime', () => {
     expect(compose).toMatch(/garage-data:\/var\/lib\/garage\/data/);
     expect(compose).toMatch(/healthcheck:[\s\S]*retries:\s*[1-9]/);
     expect(compose).toContain('docker.io/searxng/searxng:2026.7.18-277d8469c');
-    expect(compose).toContain('"127.0.0.1:8888:8080"');
+    expect(compose).toContain('"127.0.0.1:${CHEKKU_SEARXNG_HOST_PORT:-8888}:8080"');
     expect(compose).toMatch(/\.\/searxng\/settings\.yml:\/etc\/searxng\/settings\.yml:ro/);
     expect(compose).toMatch(/searxng-cache:\/var\/cache\/searxng/);
     expect(settings).toMatch(/formats:\s*\r?\n\s*- html\s*\r?\n\s*- json/);

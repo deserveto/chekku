@@ -118,6 +118,11 @@ require_env GARAGE_SECRET_ACCESS_KEY "$STORAGE_ENV_FILE"
 require_env LLM_BASE_URL "$AGENT_ENV_FILE"
 require_env LLM_API_KEY "$AGENT_ENV_FILE"
 require_env LLM_DEFAULT_MODEL "$AGENT_ENV_FILE"
+# Better Auth guards every route through client/src/middleware.ts. Booting
+# without these produces a client that builds and serves but cannot sign anyone
+# in, so fail closed here rather than at the first login attempt.
+require_env BETTER_AUTH_SECRET "$CLIENT_ENV_FILE"
+require_env BETTER_AUTH_URL "$CLIENT_ENV_FILE"
 
 echo "Starting production stack (build if needed)..."
 "${COMPOSE[@]}" up -d --build
