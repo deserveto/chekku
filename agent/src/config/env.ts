@@ -1,19 +1,51 @@
 import { config } from 'dotenv';
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { z } from 'zod';
 
-// Load agent/.env explicitly using the module's own directory rather than
-// process.cwd(). When scripts/dev.sh runs `npm run dev:agent` inside a
-// tmux pane with cwd set to the repo root, dotenv's default cwd-based
-// lookup fails to find agent/.env — which silently drops keys like
-// WEB_READER_API_KEY. Resolving relative to import.meta.url is deterministic
-// regardless of where the process was launched from.
+// Load env files using the module's own directory rather than process.cwd().
+// When scripts/dev.sh runs `npm run dev:agent` inside a tmux pane with cwd set
+// to the repo root, dotenv's default cwd-based lookup fails to find agent/.env
+// — which silently drops keys like WEB_READER_API_KEY. Resolving relative to
+// import.meta.url is deterministic regardless of where the process was
+// launched from. `quiet: true` also suppresses dotenv v17's promotional
+// `◇ injected env (N) from path // tip: …` log line.
 const moduleDir = dirname(fileURLToPath(import.meta.url));
-// `quiet: true` suppresses dotenv v17's `◇ injected env (N) from path // tip: …`
-// promotional log line, which would otherwise pollute server startup output
-// and trip startup-silence assertions in the web-reader/searxng tests.
-config({ path: resolve(moduleDir, '../../.env'), quiet: true });
+
+// Apply dotenv files in order. Later files override earlier ones only when
+// `override` is set; missing files are skipped without error. Exported so the
+// precedence contract (the generated DATABASE_URL must win over the empty
+// placeholder in agent/.env) can be pinned by regression tests.
+export function applyEnvFiles(
+  files: ReadonlyArray<{ path: string; override?: boolean }>,
+): void {
+  for (const { path, override } of files) {
+    if (!path || !existsSync(path)) continue;
+    config({ path, quiet: true, override: override ?? false });
+  }
+}
+
+// Base user-owned secrets. No override: values already present in process.env
+// (e.g. the production container's Compose environment) are preserved.
+applyEnvFiles([{ path: resolve(moduleDir, '../../.env') }]);
+
+// Dev-only generated values. scripts/setup-env.sh writes the generated
+// DATABASE_URL (plus Garage/SearXNG coordinates) to agent/.env.development,
+// not agent/.env (which keeps an empty DATABASE_URL placeholder). The Mastra
+// dev server does not reliably load .env.development into process.env before
+// this module runs, so load it here with override so the generated
+// DATABASE_URL wins over the placeholder. Without this, env.DATABASE_URL
+// silently falls back to the schema default and PostgresStore fails auth.
+// Gated on NODE_ENV so the file is only applied for the dev server: it must
+// never override the production container env, and it must not pollute
+// process.env during the test run (vitest sets NODE_ENV=test). The file is
+// also gitignored.
+if (process.env.NODE_ENV !== 'production' && process.env.NODE_ENV !== 'test') {
+  applyEnvFiles([
+    { path: resolve(moduleDir, '../../.env.development'), override: true },
+  ]);
+}
 
 const optionalUrl = z.union([z.string().url(), z.literal('')]);
 
