@@ -57,10 +57,16 @@ COPY --from=builder /app/storage ./storage
 COPY --from=builder /app/agent/.mastra ./agent/.mastra
 COPY --from=builder /app/agent/package.json ./agent/package.json
 COPY --from=builder /app/package.json ./package.json
-# Pin playwright-core to the system Chromium, bind off loopback, and keep the
+# Pin the agent browser to the system Chromium, bind off loopback, and keep the
 # Android QA integration off (Maestro stays host/device-only).
+# BROWSER_EXECUTABLE_PATH is read by agent/src/mastra/browsers.ts and passed to
+# AgentBrowser as `executablePath`. It must NOT be expressed as
+# PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: no such Playwright variable exists, so
+# playwright-core ignored it and kept resolving its own (never downloaded)
+# browser, failing every browser tool with "Executable doesn't exist at
+# /root/.cache/ms-playwright/...".
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
-    PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium \
+    BROWSER_EXECUTABLE_PATH=/usr/bin/chromium \
     BROWSER_HEADLESS=true \
     HOST=0.0.0.0 \
     NODE_ENV=production \

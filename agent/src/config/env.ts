@@ -60,6 +60,12 @@ const envSchema = z.object({
 
   CHEKKU_DEFAULT_AGENT_ID: z.string().default('main-agent'),
   BROWSER_HEADLESS: z.enum(['true', 'false']).default('true'),
+  // Absolute path to a system browser binary. playwright-core resolves its own
+  // downloaded browser unless it is handed an explicit executablePath, and it
+  // has no environment variable for pointing at a system install — so the agent
+  // image passes its Chromium through here. Empty means "use Playwright's own
+  // download", which is what host development wants.
+  BROWSER_EXECUTABLE_PATH: z.string().default(''),
 
   MAESTRO_ENABLED: z.enum(['true', 'false']).default('false'),
   MAESTRO_COMMAND: z.string().default('maestro'),
