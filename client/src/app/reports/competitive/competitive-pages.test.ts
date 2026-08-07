@@ -102,6 +102,7 @@ describe('competitive analyses list page', () => {
     expect(markup).toContain('<h3>GPT</h3>');
     expect(markup).toContain('<dd>5</dd>');
     expect(markup).toContain('<dd>6</dd>');
+    expect(markup).toContain('aria-label="Report views"');
   });
 
   it('renders exact empty state', async () => {
@@ -182,6 +183,10 @@ describe('competitive analysis detail page', () => {
     expect(markup).toContain(`MARKDOWN:${analysis.requestMarkdown}`);
     expect(markup).toContain('&quot;anchorProduct&quot;: &quot;GPT&quot;');
     expect(markup).toContain('href="/reports/competitive"');
+    expect(markup).toContain('<h1>GPT competitive landscape</h1>');
+    expect(markup).toContain('class="studio-report-analysis');
+    expect(markup).toContain('class="studio-report-context');
+    expect(markup).not.toContain(`<h1>${analysisId}</h1>`);
   });
 
   it('renders a View slides button when slidesMarkdown is present', async () => {

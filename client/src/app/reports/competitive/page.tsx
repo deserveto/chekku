@@ -1,6 +1,7 @@
 import Link from 'next/link';
 
 import { StudioNav } from '@/components/studio/studio-nav';
+import { ReportTabs } from '@/components/reports/report-tabs';
 import { requireUserId } from '@/server/auth';
 import {
   CompetitiveAnalysisServiceError,
@@ -33,10 +34,10 @@ export default async function CompetitiveAnalysesPage() {
             <h1>Competitive analyses</h1>
             <p>Review saved product comparisons, evidence, feature matrices, and recommendations.</p>
           </div>
-          <Link className="studio-button" href="/reports">All reports</Link>
         </header>
 
         <section className="studio-section">
+          <ReportTabs active="competitive" />
           {errorMessage ? (
             <div className="studio-alert studio-alert-error" role="alert">
               {errorMessage}

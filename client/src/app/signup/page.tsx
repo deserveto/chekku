@@ -2,7 +2,9 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
-import { BrandMark } from '@/components/ui/brand-mark';
+import signupArtwork from '@/assets/auth/signup-low-poly.png';
+import verificationArtwork from '@/assets/auth/verification-low-poly.png';
+import { AuthLayout } from '@/components/auth/auth-layout';
 import { authClient } from '@/lib/auth-client';
 
 export default function SignupPage() {
@@ -33,14 +35,17 @@ export default function SignupPage() {
 
   if (done) {
     return (
-      <main className="auth-shell">
-        <div className="auth-card">
-          <div className="auth-brand">
-            <BrandMark />
-            <p className="auth-eyebrow">Almost there</p>
-            <h1 className="auth-title">Check your email</h1>
-          </div>
-          <p className="auth-subtitle">
+      <AuthLayout
+        image={verificationArtwork}
+        imageAlt="Low-poly coastal beacon sending a warm signal at dawn"
+        eyebrow="Almost there"
+        title="Check your email."
+        description="Your private agent studio is one quick verification away."
+        quote="A clear signal. A private workspace."
+      >
+        <div className="auth-result auth-verification-panel">
+          <p className="auth-verification-status">Verification email sent</p>
+          <p className="auth-description">
             We sent a verification link to <strong>{email}</strong>. Click it to
             verify your account, then sign in.
           </p>
@@ -52,18 +57,19 @@ export default function SignupPage() {
             <Link href="/login">Back to sign in</Link>
           </p>
         </div>
-      </main>
+      </AuthLayout>
     );
   }
 
   return (
-    <main className="auth-shell">
-      <div className="auth-card">
-        <div className="auth-brand">
-          <BrandMark />
-          <p className="auth-eyebrow">Create account</p>
-          <h1 className="auth-title">Join Chekku</h1>
-        </div>
+    <AuthLayout
+      image={signupArtwork}
+      imageAlt="Low-poly terraced garden rising toward a bright horizon"
+      eyebrow="Create your account"
+      title="Start with a clear workspace."
+      description="Bring your agents, tools, and conversations together in one private studio."
+      quote="Build a studio that thinks with you."
+    >
         <form className="auth-form" onSubmit={onSubmit}>
           <label className="studio-field">
             <span>Name</span>
@@ -110,7 +116,6 @@ export default function SignupPage() {
         <p className="auth-foot">
           Already have an account? <Link href="/login">Sign in</Link>
         </p>
-      </div>
-    </main>
+    </AuthLayout>
   );
 }

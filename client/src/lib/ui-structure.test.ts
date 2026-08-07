@@ -18,6 +18,9 @@ const agentCatalogSource = readFileSync(
   new URL('../components/agents/agent-catalog-page.tsx', import.meta.url),
   'utf8',
 );
+const confirmationDialog = readOptionalSource(
+  '../components/ui/confirmation-dialog.tsx',
+);
 const agentBuilder = readFileSync(
   new URL('../components/agents/agent-builder-page.tsx', import.meta.url),
   'utf8',
@@ -52,6 +55,36 @@ describe('requested UI structure', () => {
     expect(studioNav).toContain('className="studio-brand-row"');
     expect(studioNav).toContain('className="studio-sidebar-collapse"');
     expect(chatStudio).toContain('className="studio-brand-row chat-brand-row"');
+  });
+
+  it('reveals the collapsed expand control only from the logo hover or focus target', () => {
+    expect(css).toMatch(
+      /\.is-collapsed \.studio-sidebar-collapse\s*\{[^}]*opacity:\s*0/s,
+    );
+    expect(css).toMatch(
+      /\.is-collapsed \.studio-brand-row:hover \.studio-sidebar-collapse[\s\S]*opacity:\s*1/,
+    );
+    expect(css).toMatch(
+      /\.is-collapsed \.studio-brand-row:focus-within \.studio-sidebar-collapse[\s\S]*opacity:\s*1/,
+    );
+    expect(css).toMatch(
+      /\.is-collapsed \.studio-brand-row:hover \.studio-brand-mark[\s\S]*opacity:\s*0/,
+    );
+  });
+
+  it('keeps the collapsed sidebar control available on touch-only desktop layouts', () => {
+    expect(css).toMatch(
+      /@media \(hover: none\) and \(min-width: 761px\)[\s\S]*?\.is-collapsed \.studio-sidebar-collapse\s*\{[^}]*opacity:\s*1[^}]*pointer-events:\s*auto/s,
+    );
+  });
+
+  it('moves account actions into a profile-triggered popover', () => {
+    expect(studioNav).toContain('aria-expanded={accountOpen}');
+    expect(studioNav).toContain('aria-controls="studio-account-menu"');
+    expect(studioNav).not.toContain('role="menu"');
+    expect(studioNav).toContain('className="studio-account-popover"');
+    expect(studioNav).toContain('href="/settings"');
+    expect(studioNav).toContain('onClick={signOut}');
   });
 
   it('removes sidebar runtime and manage-agent footer clutter', () => {
@@ -165,8 +198,53 @@ describe('requested UI structure', () => {
     expect(types).toMatch(/RESERVED_AGENT_IDS[\s\S]*PM_AGENT_ID/);
   });
 
-  it('renders an Android glyph for qa-android-agent in the catalog', () => {
-    expect(agentCatalogSource).toContain("agent.id === 'qa-android-agent' ? '▷'");
+  it('renders reusable agent icons and offers an icon selector in the builder', () => {
+    expect(agentCatalogSource).toContain('<AgentIcon icon={agent.iconKey} />');
+    expect(agentBuilder).toContain('AGENT_ICON_IDS.map');
+    expect(agentBuilder).toContain('aria-label={`Use ${labelForAgentIcon(iconKey)} icon`}');
+  });
+
+  it('routes destructive UI actions through the shared confirmation dialog', () => {
+    expect(confirmationDialog).toContain('<dialog');
+    expect(confirmationDialog).toContain('aria-labelledby');
+    expect(chatStudio).toContain('<ConfirmationDialog');
+    expect(agentCatalogSource).toContain('<ConfirmationDialog');
+    expect(chatStudio).not.toContain('window.confirm');
+    expect(agentCatalogSource).not.toContain('window.confirm');
+    expect(chatStudio).toContain('const workspaceHeadingRef = useRef<HTMLHeadingElement>(null)');
+    expect(chatStudio).toContain('<h1 ref={workspaceHeadingRef} tabIndex={-1}>');
+    expect(chatStudio).toContain('fallbackFocusRef={workspaceHeadingRef}');
+  });
+
+  it('explicitly centers the native top-layer confirmation dialog', () => {
+    const rule = css.match(/\.studio-confirmation-dialog\s*\{([^}]*)\}/)?.[1];
+
+    expect(rule).toContain('inset: 0');
+    expect(rule).toContain('margin: auto');
+    expect(rule).toContain('max-height: calc(100dvh - 32px)');
+    expect(rule).toContain('overflow-y: auto');
+    expect(css).toMatch(/\.studio-confirmation-copy[\s\S]*overflow-wrap:\s*anywhere/);
+  });
+
+  it('separates agent preparation from guarded deletion state', () => {
+    expect(agentCatalogSource).toContain('const deleteInFlightRef = useRef(false)');
+    expect(agentCatalogSource).toContain('const [deletingAgentId, setDeletingAgentId]');
+    expect(agentCatalogSource).toContain('if (!agent || deleteInFlightRef.current) return');
+    expect(agentCatalogSource).toContain('fallbackFocusRef={registryHeadingRef}');
+  });
+
+  it('disables incidental motion and safely aligns short auth layouts', () => {
+    const reducedMotion = css.match(
+      /@media \(prefers-reduced-motion: reduce\)\s*\{([\s\S]*?)\n\}/,
+    )?.[1] ?? '';
+    expect(reducedMotion).toContain('.studio-resizable-sidebar.is-collapsed .studio-sidebar-collapse');
+    expect(reducedMotion).toContain('.studio-icon-picker button');
+    expect(reducedMotion).toContain('transition: none');
+
+    const shortAuth = css.match(
+      /@media \(max-height: 800px\) and \(min-width: 761px\)\s*\{([\s\S]*?)\n\}/,
+    )?.[1] ?? '';
+    expect(shortAuth).toMatch(/\.auth-shell\s*\{[^}]*place-content:\s*start center/s);
   });
 
   it('renders the competitive slides route through the shared client component and never touches Garage directly', () => {
