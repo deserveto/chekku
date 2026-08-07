@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-import { loadEnv } from './env.js';
+import { applyEnvFiles, loadEnv } from './env.js';
 
 describe('env config', () => {
   it('uses an empty provider-neutral Web Reader key by default', () => {
@@ -132,5 +135,48 @@ describe('env config', () => {
 
     expect(() => loadEnv({ MAESTRO_ENABLED: 'yes' })).toThrow();
     expect(() => loadEnv({ MAESTRO_TIMEOUT_MS: '0' })).toThrow();
+  });
+});
+
+describe('applyEnvFiles (dev env precedence)', () => {
+  const restore = (name: string, saved: string | undefined) => {
+    if (saved === undefined) delete process.env[name];
+    else process.env[name] = saved;
+  };
+
+  it('lets .env.development override the empty DATABASE_URL placeholder in .env', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'chekku-env-'));
+    try {
+      writeFileSync(join(dir, '.env'), 'DATABASE_URL=\nLLM_API_KEY=base\n');
+      writeFileSync(
+        join(dir, '.env.development'),
+        'DATABASE_URL=postgresql://chekku:realpw@127.0.0.1:5432/chekku_agent\n',
+      );
+      const savedDb = process.env.DATABASE_URL;
+      const savedLlm = process.env.LLM_API_KEY;
+      delete process.env.DATABASE_URL;
+      delete process.env.LLM_API_KEY;
+      try {
+        applyEnvFiles([
+          { path: join(dir, '.env') },
+          { path: join(dir, '.env.development'), override: true },
+        ]);
+        expect(process.env.DATABASE_URL).toBe(
+          'postgresql://chekku:realpw@127.0.0.1:5432/chekku_agent',
+        );
+        expect(process.env.LLM_API_KEY).toBe('base');
+      } finally {
+        restore('DATABASE_URL', savedDb);
+        restore('LLM_API_KEY', savedLlm);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('skips missing files without throwing', () => {
+    expect(() =>
+      applyEnvFiles([{ path: join(tmpdir(), `chekku-missing-${Date.now()}.env`) }]),
+    ).not.toThrow();
   });
 });
