@@ -37,6 +37,8 @@ describe('stored-agent payload', () => {
         'npx arbitrary-package',
         'API_KEY=secret',
       ],
+      iconKey: 'compass',
+      metadata: { owner: 'studio', chekku: { retained: true } },
       memoryEnabled: true,
     })).toMatchObject({
       model: { provider: 'openai-compatible', name: 'gateway/model-a' },
@@ -48,6 +50,28 @@ describe('stored-agent payload', () => {
         'web-reader': { tools: {} },
       },
       memory: { options: { lastMessages: 20 } },
+      metadata: {
+        owner: 'studio',
+        chekku: { retained: true, iconKey: 'compass' },
+      },
+    });
+  });
+
+  it('falls back to a safe icon instead of persisting an arbitrary value', () => {
+    const payload = toStoredAgentPayload({
+      id: 'demo',
+      name: 'Demo',
+      instructions: 'Help',
+      model: 'model-a',
+      tools: [],
+      agents: [],
+      mcpClients: [],
+      iconKey: '<svg onload=alert(1)>',
+      memoryEnabled: true,
+    });
+
+    expect(payload.metadata).toEqual({
+      chekku: { iconKey: 'spark' },
     });
   });
 

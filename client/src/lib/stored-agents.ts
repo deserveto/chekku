@@ -10,8 +10,10 @@ import { mastraClient } from './mastra-client';
 import { buildApiMessage } from './agents-helpers';
 import { storedAgentMigrationTarget } from './stored-agent-migration';
 import type { ModelRegistry } from './model-registry';
+import { readAgentIcon, type AgentIconId } from './agent-icons';
 import {
   MAIN_AGENT_ID,
+  RESERVED_AGENT_IDS,
   type ChekkuAgentDetail,
   type ChekkuAgentSummary,
 } from './types';
@@ -25,6 +27,8 @@ export interface AgentFormInput {
   agents?: string[];
   mcpClients: string[];
   memoryEnabled: boolean;
+  iconKey?: AgentIconId;
+  metadata?: Record<string, unknown>;
 }
 
 export class AgentApiError extends Error {
@@ -34,6 +38,15 @@ export class AgentApiError extends Error {
     super(message);
     this.name = 'AgentApiError';
     this.status = status;
+  }
+}
+
+function assertStoredAgentMutable(id: string, action: 'created' | 'edited' | 'deleted'): void {
+  if (RESERVED_AGENT_IDS.has(id)) {
+    throw new AgentApiError(
+      `${id} is code-defined and cannot be ${action}.`,
+      400,
+    );
   }
 }
 
@@ -148,6 +161,7 @@ function summarizeStored(agent: StoredAgentResponse): ChekkuAgentSummary {
     status,
     createdAt: agent.createdAt,
     updatedAt: agent.updatedAt,
+    iconKey: readAgentIcon(agent.metadata, agent.id),
   };
 }
 
@@ -166,6 +180,7 @@ function summarizeCode(agent: GetAgentResponse): ChekkuAgentSummary {
         }
       : undefined,
     status: agent.status,
+    iconKey: readAgentIcon(agent.metadata, agent.id),
   };
 }
 
@@ -199,6 +214,7 @@ export async function createStoredAgent(
   id: string,
   input: AgentFormInput,
 ): Promise<ChekkuAgentSummary> {
+  assertStoredAgentMutable(id, 'created');
   const model = input.model;
 
   const payload = toStoredAgentPayload({
@@ -220,12 +236,7 @@ export async function createStoredAgent(
 export async function getStoredAgent(
   id: string,
 ): Promise<ChekkuAgentDetail> {
-  if (id === MAIN_AGENT_ID) {
-    throw new AgentApiError(
-      'main-agent is code-defined and cannot be edited.',
-      400,
-    );
-  }
+  assertStoredAgentMutable(id, 'edited');
 
   const detail = await wrap(() =>
     mastraClient.getStoredAgent(id).details(),
@@ -240,6 +251,7 @@ export async function getStoredAgent(
     tools: readOptionIds(record.tools),
     agents: readOptionIds(record.agents),
     mcpClients: readMcpClientIds(record.mcpClients),
+    metadata: detail.metadata,
   };
 }
 
@@ -247,6 +259,7 @@ export async function updateStoredAgent(
   id: string,
   input: AgentFormInput,
 ): Promise<ChekkuAgentSummary> {
+  assertStoredAgentMutable(id, 'edited');
   const model = input.model;
 
   const fullPayload = toStoredAgentPayload({
@@ -285,16 +298,13 @@ export async function ensureStoredAgentUsesServerGateway(
     agents: detail.agents,
     mcpClients: detail.mcpClients,
     memoryEnabled: detail.memoryEnabled,
+    iconKey: detail.iconKey,
+    metadata: detail.metadata,
   });
 }
 
 export async function deleteStoredAgent(id: string): Promise<void> {
-  if (id === MAIN_AGENT_ID) {
-    throw new AgentApiError(
-      'main-agent is protected and cannot be deleted.',
-      400,
-    );
-  }
+  assertStoredAgentMutable(id, 'deleted');
 
   await wrap(() => mastraClient.getStoredAgent(id).delete());
 }
@@ -330,10 +340,11 @@ export async function listAllAgents(): Promise<ChekkuAgentSummary[]> {
     )
     .map(summarizeCode);
 
-  const storedIds = new Set(stored.map((agent) => agent.id));
+  const safeStored = stored.filter((agent) => !RESERVED_AGENT_IDS.has(agent.id));
+  const codeIds = new Set(codeAgents.map((agent) => agent.id));
   const merged = [
-    ...codeAgents.filter((agent) => !storedIds.has(agent.id)),
-    ...stored,
+    ...codeAgents,
+    ...safeStored.filter((agent) => !codeIds.has(agent.id)),
   ];
 
   const mainEntry = merged.find((agent) => agent.id === MAIN_AGENT_ID) ?? {
@@ -341,6 +352,7 @@ export async function listAllAgents(): Promise<ChekkuAgentSummary[]> {
     name: 'Chekku Assistant',
     description: 'General-purpose studio entry agent.',
     source: 'code' as const,
+    iconKey: readAgentIcon(undefined, MAIN_AGENT_ID),
   };
 
   return [

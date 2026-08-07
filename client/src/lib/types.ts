@@ -7,6 +7,10 @@ export const RESERVED_AGENT_IDS = new Set<string>([
   QA_WEB_AGENT_ID,
   QA_ANDROID_AGENT_ID,
   PM_AGENT_ID,
+  'social-media-supervisor-agent',
+  'social-media-content-writer',
+  'social-media-strategist-agent',
+  'visual-content-agent',
 ]);
 
 export type AgentSource = 'code' | 'stored';
@@ -20,6 +24,7 @@ export interface ChekkuAgentSummary {
   status?: 'draft' | 'published' | 'archived';
   createdAt?: string;
   updatedAt?: string;
+  iconKey?: import('./agent-icons').AgentIconId;
 }
 
 export interface ChekkuAgentDetail extends ChekkuAgentSummary {
@@ -28,6 +33,7 @@ export interface ChekkuAgentDetail extends ChekkuAgentSummary {
   tools: string[];
   agents: string[];
   mcpClients: string[];
+  metadata?: Record<string, unknown>;
 }
 
 export type ToolEventStatus =

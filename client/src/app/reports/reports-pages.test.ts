@@ -77,6 +77,8 @@ describe('reports landing page', () => {
     expect(markup).toContain('href="/reports/competitive"');
     expect(markup).toContain('>Competitive Analyses</h2>');
     expect(mocks.listReports).not.toHaveBeenCalled();
+    expect(markup).toContain('aria-label="Report views"');
+    expect(markup).toContain('aria-current="page"');
   });
 
   it('gives report choices visible focus styles and one mobile column', () => {
@@ -90,6 +92,14 @@ describe('reports landing page', () => {
       /\.studio-report-choice-grid[\s\S]*grid-template-columns:\s*1fr/,
     );
   });
+
+  it('uses the registry card anatomy for report choices', async () => {
+    const markup = renderToStaticMarkup(await ReportsPage());
+
+    expect(markup.match(/class="studio-agent-card studio-report-choice/g)).toHaveLength(2);
+    expect(markup).toContain('class="studio-agent-icon"');
+    expect(markup).toContain('class="studio-report-choice-body"');
+  });
 });
 
 describe('weekly reports list page', () => {
@@ -100,6 +110,7 @@ describe('weekly reports list page', () => {
     expect(markup).toContain('role="list"');
     expect(markup).toContain('aria-label="Saved PM reports"');
     expect(markup).toContain('studio-report-card');
+    expect(markup).toContain('aria-label="Report views"');
   });
 
   it('gives report cards a visible hover lift', () => {
@@ -184,5 +195,9 @@ describe('report detail page', () => {
     expect(analysisIndex).toBeGreaterThan(-1);
     expect(metadataIndex).toBeGreaterThan(analysisIndex);
     expect(inputIndex).toBeGreaterThan(metadataIndex);
+    expect(markup).toContain('<h1>Weekly risk review</h1>');
+    expect(markup).toContain('class="studio-report-analysis');
+    expect(markup).toContain('class="studio-report-context');
+    expect(markup).not.toContain(`<h1>${reportId}</h1>`);
   });
 });

@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 
 import { MarkdownMessage } from '@/components/markdown-message';
 import { StudioNav } from '@/components/studio/studio-nav';
+import { ReportTabs } from '@/components/reports/report-tabs';
 import { requireUserId } from '@/server/auth';
 import {
   getPmReportForUser,
@@ -64,33 +65,45 @@ export default async function ReportDetailPage({
         <header className="studio-page-header studio-report-header">
           <div>
             <p className="studio-eyebrow">PM report</p>
-            <h1>{report.reportId}</h1>
-            <p>Saved analysis first, followed by storage metadata and original input.</p>
+            <h1>Weekly risk review</h1>
+            <p className="studio-report-id"><code>{report.reportId}</code></p>
           </div>
           <Link className="studio-button" href="/reports">Back to reports</Link>
         </header>
 
-        <div className="studio-report-detail">
-          <section className="studio-panel studio-report-panel">
-            <h2 className="studio-eyebrow">Analysis</h2>
+        <div className="studio-report-detail-wrap">
+          <ReportTabs active="weekly" />
+          <div className="studio-report-detail">
+          <section className="studio-report-analysis studio-panel studio-report-panel">
+            <div className="studio-report-section-heading">
+              <p className="studio-eyebrow">Primary document</p>
+              <h2>Analysis</h2>
+            </div>
             <div className="studio-report-markdown markdown">
               <MarkdownMessage content={report.analysisMarkdown} />
             </div>
           </section>
 
-          <section className="studio-panel studio-report-panel">
-            <h2 className="studio-eyebrow">Metadata</h2>
+          <section className="studio-report-context studio-panel studio-report-panel">
+            <div className="studio-report-section-heading">
+              <p className="studio-eyebrow">Technical context</p>
+              <h2>Metadata</h2>
+            </div>
             <pre className="studio-report-metadata">
               {JSON.stringify(report.metadata, null, 2)}
             </pre>
           </section>
 
-          <section className="studio-panel studio-report-panel">
-            <h2 className="studio-eyebrow">Original report input</h2>
+          <section className="studio-report-context studio-panel studio-report-panel">
+            <div className="studio-report-section-heading">
+              <p className="studio-eyebrow">Source</p>
+              <h2>Original report input</h2>
+            </div>
             <div className="studio-report-markdown markdown">
               <MarkdownMessage content={report.inputMarkdown} />
             </div>
           </section>
+          </div>
         </div>
       </main>
     </div>

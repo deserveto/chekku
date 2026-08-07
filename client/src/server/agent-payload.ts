@@ -16,6 +16,8 @@ export interface AgentPayloadInput {
   agents: string[];
   mcpClients: string[];
   memoryEnabled: boolean;
+  iconKey?: AgentIconId | string;
+  metadata?: Record<string, unknown>;
 }
 
 function optionRecord(
@@ -99,11 +101,22 @@ export function toStoredAgentPayload(input: AgentPayloadInput) {
   const mcpClients = input.mcpClients.filter((value) =>
     (STUDIO_MCP_CLIENT_IDS as readonly string[]).includes(value),
   );
+  const priorChekku = input.metadata?.chekku;
+  const chekku = priorChekku && typeof priorChekku === 'object'
+    ? priorChekku as Record<string, unknown>
+    : {};
+  const iconKey = isAgentIconId(input.iconKey)
+    ? input.iconKey
+    : defaultAgentIcon(input.id);
 
   return {
     id: input.id,
     name: input.name,
     description: input.description,
+    metadata: {
+      ...input.metadata,
+      chekku: { ...chekku, iconKey },
+    },
     instructions: input.instructions,
     model: splitModelId(input.model),
     memory: {
@@ -120,3 +133,8 @@ export function toStoredAgentPayload(input: AgentPayloadInput) {
     } : {}),
   };
 }
+import {
+  defaultAgentIcon,
+  isAgentIconId,
+  type AgentIconId,
+} from '@/lib/agent-icons';
