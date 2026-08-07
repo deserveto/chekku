@@ -28,15 +28,12 @@ export AUTH_DATABASE_URL
 export BETTER_AUTH_SECRET="$(read_env_value BETTER_AUTH_SECRET)"
 export BETTER_AUTH_URL="$(read_env_value BETTER_AUTH_URL)"
 
-# The Better Auth CLI imports client/src/lib/auth.ts, which contains
-# `import 'server-only'`. That package resolves to empty.js under the
-# `react-server` export condition and to a module that throws otherwise.
-# Rather than mutating source files (which a SIGKILL between sed and restore
-# would leave permanently stripped), pass the condition through NODE_OPTIONS
-# so the CLI subprocess resolves server-only to its empty shim. This is
-# inherited by any child node process npx spawns.
-export NODE_OPTIONS="${NODE_OPTIONS:-} --conditions react-server"
-
+# The CLI loads client/src/lib/auth-migrate.ts, not auth.ts. auth.ts imports
+# `server-only` directly and again transitively through @/server/email, and the
+# CLI refuses any such config outright ("Please remove import 'server-only'
+# from your auth config file") rather than merely failing to resolve it — so
+# export conditions cannot work around it. auth-migrate.ts shares
+# buildAuthOptions with auth.ts, so the emitted schema cannot drift.
 MIGRATE_LOG="$(mktemp)"
 chmod 600 "$MIGRATE_LOG"
 cd "$ROOT/client"
@@ -46,7 +43,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if ! echo y | npx -y @better-auth/cli migrate --config src/lib/auth.ts >"$MIGRATE_LOG" 2>&1; then
+if ! echo y | npx -y @better-auth/cli migrate --config src/lib/auth-migrate.ts >"$MIGRATE_LOG" 2>&1; then
   echo "Better Auth migration failed. Confirm Postgres is running and AUTH_DATABASE_URL is reachable." >&2
   exit 1
 fi
