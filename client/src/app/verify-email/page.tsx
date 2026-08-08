@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
 import { BrandMark } from '@/components/ui/brand-mark';
 import { authClient } from '@/lib/auth-client';
+import { EMAIL_VERIFICATION_CALLBACK_URL } from '@/lib/auth-redirects';
 
 function VerifyEmailContent() {
   const search = useSearchParams();
@@ -20,7 +21,7 @@ function VerifyEmailContent() {
     setError(null);
     const { error } = await authClient.sendVerificationEmail({
       email,
-      callbackURL: '/verify-email',
+      callbackURL: EMAIL_VERIFICATION_CALLBACK_URL,
     });
     setPending(false);
     if (error) {
