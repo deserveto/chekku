@@ -233,6 +233,14 @@ describe('requested UI structure', () => {
     expect(agentCatalogSource).toContain('fallbackFocusRef={registryHeadingRef}');
   });
 
+  it('guards thread deletion against a double-confirm the same way', () => {
+    expect(chatStudio).toContain('const deleteInFlightRef = useRef(false)');
+    expect(chatStudio).toContain(
+      'if (isStreaming || !target || deleteInFlightRef.current) return',
+    );
+    expect(chatStudio).toContain('deleteInFlightRef.current = false');
+  });
+
   it('disables incidental motion and safely aligns short auth layouts', () => {
     const reducedMotion = css.match(
       /@media \(prefers-reduced-motion: reduce\)\s*\{([\s\S]*?)\n\}/,

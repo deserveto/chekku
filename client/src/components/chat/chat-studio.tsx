@@ -98,6 +98,10 @@ export function ChatStudio({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const workspaceHeadingRef = useRef<HTMLHeadingElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  // The dialog's confirm button only disables on the next render, so a fast
+  // double-click can fire onConfirm twice. A ref closes that window
+  // synchronously; `deletingThreadId` below is for rendering only.
+  const deleteInFlightRef = useRef(false);
 
   const [agents, setAgents] = useState<ChekkuAgentSummary[]>([]);
   const [threads, setThreads] = useState<StudioThread[]>([]);
@@ -238,8 +242,9 @@ export function ChatStudio({
 
   const deleteThread = async () => {
     const target = pendingDelete;
-    if (isStreaming || !target) return;
+    if (isStreaming || !target || deleteInFlightRef.current) return;
 
+    deleteInFlightRef.current = true;
     setDeletingThreadId(target.id);
     try {
       await removeThread(agentId, target.id, resourceId);
@@ -255,6 +260,7 @@ export function ChatStudio({
           : 'Could not delete the thread.',
       );
     } finally {
+      deleteInFlightRef.current = false;
       setDeletingThreadId(undefined);
       setPendingDelete(undefined);
     }
