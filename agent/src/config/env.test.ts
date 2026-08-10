@@ -144,34 +144,94 @@ describe('applyEnvFiles (dev env precedence)', () => {
     else process.env[name] = saved;
   };
 
-  it('lets .env.development override the empty DATABASE_URL placeholder in .env', () => {
+  const withTempEnvDir = (
+    files: Record<string, string>,
+    names: readonly string[],
+    assert: (dir: string) => void,
+  ) => {
     const dir = mkdtempSync(join(tmpdir(), 'chekku-env-'));
     try {
-      writeFileSync(join(dir, '.env'), 'DATABASE_URL=\nLLM_API_KEY=base\n');
-      writeFileSync(
-        join(dir, '.env.development'),
-        'DATABASE_URL=postgresql://chekku:realpw@127.0.0.1:5432/chekku_agent\n',
+      for (const [name, contents] of Object.entries(files)) {
+        writeFileSync(join(dir, name), contents);
+      }
+      const saved = names.map(
+        (name) => [name, process.env[name]] as const,
       );
-      const savedDb = process.env.DATABASE_URL;
-      const savedLlm = process.env.LLM_API_KEY;
-      delete process.env.DATABASE_URL;
-      delete process.env.LLM_API_KEY;
+      for (const name of names) delete process.env[name];
       try {
+        assert(dir);
+      } finally {
+        for (const [name, value] of saved) restore(name, value);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  it('lets .env.development fill the empty DATABASE_URL placeholder in .env', () => {
+    withTempEnvDir(
+      {
+        '.env': 'DATABASE_URL=\nLLM_API_KEY=base\n',
+        '.env.development':
+          'DATABASE_URL=postgresql://chekku:realpw@127.0.0.1:5432/chekku_agent\n',
+      },
+      ['DATABASE_URL', 'LLM_API_KEY'],
+      (dir) => {
         applyEnvFiles([
           { path: join(dir, '.env') },
-          { path: join(dir, '.env.development'), override: true },
+          { path: join(dir, '.env.development'), fillEmpty: true },
         ]);
         expect(process.env.DATABASE_URL).toBe(
           'postgresql://chekku:realpw@127.0.0.1:5432/chekku_agent',
         );
         expect(process.env.LLM_API_KEY).toBe('base');
-      } finally {
-        restore('DATABASE_URL', savedDb);
-        restore('LLM_API_KEY', savedLlm);
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+      },
+    );
+  });
+
+  // Regression: a blanket `override` here discarded a DATABASE_URL the
+  // developer had exported to point at a remote Postgres — the same
+  // silent-overwrite scripts/setup-env.sh already avoids for SEARXNG_API_KEY.
+  it('keeps a value the developer already set over the generated one', () => {
+    withTempEnvDir(
+      {
+        '.env': 'DATABASE_URL=\n',
+        '.env.development':
+          'DATABASE_URL=postgresql://chekku:realpw@127.0.0.1:5432/chekku_agent\nWEB_URL=https://staging.example.test\n',
+      },
+      ['DATABASE_URL', 'WEB_URL'],
+      (dir) => {
+        process.env.DATABASE_URL = 'postgresql://me:pw@remote.example.test:5432/db';
+        process.env.WEB_URL = 'http://localhost:3000';
+
+        applyEnvFiles([
+          { path: join(dir, '.env') },
+          { path: join(dir, '.env.development'), fillEmpty: true },
+        ]);
+
+        expect(process.env.DATABASE_URL).toBe(
+          'postgresql://me:pw@remote.example.test:5432/db',
+        );
+        expect(process.env.WEB_URL).toBe('http://localhost:3000');
+      },
+    );
+  });
+
+  it('never lets a later file overwrite a non-empty value from an earlier one', () => {
+    withTempEnvDir(
+      {
+        '.env': 'LLM_API_KEY=base\n',
+        '.env.development': 'LLM_API_KEY=generated\n',
+      },
+      ['LLM_API_KEY'],
+      (dir) => {
+        applyEnvFiles([
+          { path: join(dir, '.env') },
+          { path: join(dir, '.env.development'), fillEmpty: true },
+        ]);
+        expect(process.env.LLM_API_KEY).toBe('base');
+      },
+    );
   });
 
   it('skips missing files without throwing', () => {
