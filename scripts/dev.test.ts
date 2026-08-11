@@ -468,7 +468,10 @@ describe('development launcher', () => {
 
     expect(healthy.status, healthy.stderr).toBe(0);
     expect(Date.now() - startedAt).toBeGreaterThanOrEqual(4_000);
-    expect(Date.now() - startedAt).toBeLessThan(8_000);
+    // Git Bash process startup on Windows can add several seconds around the
+    // intentional five-second poll interval. Keep the ceiling below the
+    // configured test timeout while allowing that platform overhead.
+    expect(Date.now() - startedAt).toBeLessThan(10_000);
     expect(readFileSync(resolve(healthyRoot, 'mock-log/inspect-count-garage'), 'utf8')).toBe('2');
   }, 12_000);
 

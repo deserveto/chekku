@@ -43,6 +43,15 @@ it('renders accessible report navigation with current-page state', () => {
   expect(reportLink).toContain('aria-current="page"');
 });
 
+it('uses relevant shared icons for each primary destination', () => {
+  const markup = renderToStaticMarkup(createElement(StudioNav, { resourceId: 'user-1' }));
+
+  expect(markup.match(/class="studio-agent-icon"/g)).toHaveLength(3);
+  expect(markup).not.toContain('>◫<');
+  expect(markup).not.toContain('>▤<');
+  expect(markup).not.toContain('>▦<');
+});
+
 it.each([
   '/reports/weekly',
   '/reports/pmr_20260714120000_deadbeef',
@@ -68,11 +77,24 @@ it('keeps Studio navigation available in the compact mobile header', () => {
   expect(markup).toContain('href="/reports"');
   expect(navRule).toContain('display: flex');
   expect(navRule).not.toContain('display: none');
+  expect(mobileRules).toMatch(
+    /\.studio-nav-links a > span:first-child\s*\{[^}]*display:\s*grid/,
+  );
+  expect(mobileRules).toMatch(
+    /\.studio-nav-links \.studio-sidebar-copy\s*\{[^}]*display:\s*none !important/,
+  );
+  expect(mobileRules).not.toMatch(/\.studio-user-card\s*\{[^}]*display:\s*none/);
+  expect(mobileRules).toMatch(/\.studio-account-popover\s*\{[^}]*top:\s*calc\(100% \+ 8px\)/);
 });
 
-it('renders the signed-in email and a logout control', () => {
+it('renders the signed-in email behind an accessible account disclosure', () => {
   const markup = renderToStaticMarkup(createElement(StudioNav, { resourceId: 'user-1' }));
 
   expect(markup).toContain('owner@chekku.test');
+  expect(markup).toContain('aria-label="Account menu"');
+  expect(markup).not.toContain('role="menu"');
+  expect(markup).not.toContain('role="menuitem"');
+  expect(markup).toContain('href="/settings"');
+  expect(markup).toMatch(/settings/i);
   expect(markup).toMatch(/log out|sign out/i);
 });

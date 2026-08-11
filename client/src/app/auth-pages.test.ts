@@ -1,5 +1,8 @@
 // @vitest-environment jsdom
 
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -31,6 +34,13 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn() }),
   useSearchParams: () => navigationMocks.searchParams,
 }));
+
+// `new URL('./file', import.meta.url)` is rewritten by Vite into an asset URL
+// under the jsdom environment, so resolve these source reads from the module
+// directory instead.
+const appDir = dirname(fileURLToPath(import.meta.url));
+const studioCss = readFileSync(join(appDir, 'studio.css'), 'utf8');
+const signupSource = readFileSync(join(appDir, 'signup/page.tsx'), 'utf8');
 
 function setInputValue(input: HTMLInputElement, value: string) {
   const setter = Object.getOwnPropertyDescriptor(
@@ -86,6 +96,16 @@ describe('login page', () => {
     expect(markup).not.toContain('verification link is invalid');
     expect(markup).not.toContain('email has been verified');
   });
+
+  it('uses the premium split auth composition with dedicated welcome artwork', async () => {
+    const LoginPage = (await import('./login/page')).default;
+    const markup = renderToStaticMarkup(createElement(LoginPage));
+
+    expect(markup).toContain('class="auth-frame"');
+    expect(markup).toContain('class="auth-visual"');
+    expect(markup).toContain('Low-poly illuminated path through dark mountains');
+    expect(markup).toContain('A calmer place to run your agents.');
+  });
 });
 
 describe('signup page', () => {
@@ -122,6 +142,37 @@ describe('signup page', () => {
     expect(authMocks.signUpEmail).toHaveBeenCalledTimes(1);
     await act(async () => root.unmount());
   });
+
+  it('uses distinct new-journey artwork in the shared split composition', async () => {
+    const SignupPage = (await import('./signup/page')).default;
+    const markup = renderToStaticMarkup(createElement(SignupPage));
+
+    expect(markup).toContain('class="auth-frame"');
+    expect(markup).toContain('class="auth-visual"');
+    expect(markup).toContain('Low-poly terraced garden rising toward a bright horizon');
+    expect(markup).toContain('Build a studio that thinks with you.');
+  });
+
+  it('fits the split composition inside short desktop viewports', () => {
+    expect(studioCss).toContain('@media (max-height: 800px) and (min-width: 761px)');
+    expect(studioCss).toMatch(/max-height: 800px[\s\S]*\.auth-visual\s*\{[^}]*min-height:\s*0/);
+  });
+
+  it('keeps tall mobile signup content scrollable inside the viewport', () => {
+    expect(studioCss).toMatch(/\.auth-shell\s*\{[^}]*height:\s*100dvh[^}]*overflow-y:\s*auto/);
+  });
+
+  it('keeps the verification-success state in the shared auth composition', () => {
+    const sharedLayoutUses = signupSource.match(/<AuthLayout/g) ?? [];
+
+    expect(sharedLayoutUses).toHaveLength(2);
+    expect(signupSource).not.toContain('className="auth-card"');
+  });
+
+  it('gives the post-signup verification state its own artwork', () => {
+    expect(signupSource).toContain("verification-low-poly.png");
+    expect(signupSource).toContain('Low-poly coastal beacon sending a warm signal at dawn');
+  });
 });
 
 describe('verify-email page', () => {
@@ -153,5 +204,15 @@ describe('verify-email page', () => {
     });
     expect(authMocks.sendVerificationEmail).toHaveBeenCalledTimes(1);
     await act(async () => root.unmount());
+  });
+
+  it('uses the split auth composition and dedicated verification artwork', async () => {
+    const VerifyPage = (await import('./verify-email/page')).default;
+    const markup = renderToStaticMarkup(createElement(VerifyPage));
+
+    expect(markup).toContain('class="auth-frame"');
+    expect(markup).toContain('auth-verification-panel');
+    expect(markup).toContain('Low-poly coastal beacon sending a warm signal at dawn');
+    expect(markup).toContain('A clear signal. A private workspace.');
   });
 });

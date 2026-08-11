@@ -2,6 +2,8 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
+import { useEffect, useRef, useState } from 'react';
+import { AgentIcon } from '@/components/agents/agent-icon';
 import { ResizableSidebar } from '@/components/studio/resizable-sidebar';
 import { BrandMark } from '@/components/ui/brand-mark';
 import { authClient } from '@/lib/auth-client';
@@ -13,6 +15,32 @@ export function StudioNav({ resourceId }: { resourceId: string }) {
   const pathname = usePathname();
   const router = useRouter();
   const { data: session } = authClient.useSession();
+  const [accountOpen, setAccountOpen] = useState(false);
+  const accountRef = useRef<HTMLDivElement>(null);
+  const accountTriggerRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!accountOpen) return;
+
+    const onPointerDown = (event: PointerEvent) => {
+      if (!accountRef.current?.contains(event.target as Node)) {
+        setAccountOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setAccountOpen(false);
+        accountTriggerRef.current?.focus();
+      }
+    };
+
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [accountOpen]);
 
   const startChat = () => {
     const threadId = createOwnedThreadId(MAIN_AGENT_ID, resourceId);
@@ -20,6 +48,7 @@ export function StudioNav({ resourceId }: { resourceId: string }) {
   };
 
   const signOut = async () => {
+    setAccountOpen(false);
     await authClient.signOut();
     router.push('/login');
   };
@@ -78,7 +107,7 @@ export function StudioNav({ resourceId }: { resourceId: string }) {
               aria-label="Agents"
               title={collapsed ? 'Agents' : undefined}
             >
-              <span aria-hidden="true">◫</span>
+              <span aria-hidden="true"><AgentIcon icon="network" /></span>
               <span className="studio-sidebar-copy">Agents</span>
             </Link>
             <Link
@@ -88,7 +117,7 @@ export function StudioNav({ resourceId }: { resourceId: string }) {
               aria-label="Reports"
               title={collapsed ? 'Reports' : undefined}
             >
-              <span aria-hidden="true">▤</span>
+              <span aria-hidden="true"><AgentIcon icon="chart" /></span>
               <span className="studio-sidebar-copy">Reports</span>
             </Link>
             <Link
@@ -98,7 +127,7 @@ export function StudioNav({ resourceId }: { resourceId: string }) {
               aria-label="Social posts"
               title={collapsed ? 'Social posts' : undefined}
             >
-              <span aria-hidden="true">▦</span>
+              <span aria-hidden="true"><AgentIcon icon="pen" /></span>
               <span className="studio-sidebar-copy">Social posts</span>
             </Link>
           </nav>
@@ -106,21 +135,49 @@ export function StudioNav({ resourceId }: { resourceId: string }) {
           <div className="studio-nav-spacer" />
 
           {session?.user?.email ? (
-            <div className="studio-user-card">
-              <span aria-hidden="true">{session.user.email.charAt(0).toUpperCase()}</span>
-              <div className="studio-sidebar-copy">
-                <strong>{session.user.email}</strong>
-                <small>Signed in</small>
-              </div>
+            <div className="studio-account" ref={accountRef}>
               <button
                 type="button"
-                className="studio-icon-button"
-                onClick={signOut}
-                aria-label="Sign out"
-                title={collapsed ? 'Sign out' : undefined}
+                ref={accountTriggerRef}
+                className="studio-user-card"
+                onClick={() => setAccountOpen((open) => !open)}
+                aria-expanded={accountOpen}
+                aria-controls="studio-account-menu"
+                aria-label="Account menu"
+                title={collapsed ? 'Account menu' : undefined}
               >
-                <span aria-hidden="true">⏻</span>
+                <span className="studio-user-avatar" aria-hidden="true">
+                  {session.user.email.charAt(0).toUpperCase()}
+                </span>
+                <span className="studio-user-copy studio-sidebar-copy">
+                  <strong>{session.user.email}</strong>
+                  <small>Personal workspace</small>
+                </span>
+                <span className="studio-account-chevron studio-sidebar-copy" aria-hidden="true">⌃</span>
               </button>
+              <div
+                id="studio-account-menu"
+                className="studio-account-popover"
+                hidden={!accountOpen}
+              >
+                <div className="studio-account-summary">
+                  <span className="studio-user-avatar" aria-hidden="true">
+                    {session.user.email.charAt(0).toUpperCase()}
+                  </span>
+                  <span>
+                    <strong>Signed in</strong>
+                    <small>{session.user.email}</small>
+                  </span>
+                </div>
+                <Link href="/settings" onClick={() => setAccountOpen(false)}>
+                  <span aria-hidden="true">⚙</span>
+                  Settings
+                </Link>
+                <button type="button" onClick={signOut}>
+                  <span aria-hidden="true">↗</span>
+                  Sign out
+                </button>
+              </div>
             </div>
           ) : null}
         </>

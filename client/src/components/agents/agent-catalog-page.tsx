@@ -1,10 +1,12 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { StudioNav } from '@/components/studio/studio-nav';
+import { AgentIcon } from '@/components/agents/agent-icon';
 import { BrandMark } from '@/components/ui/brand-mark';
+import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
 import {
   AgentApiError,
   deleteStoredAgent,
@@ -35,6 +37,10 @@ export function AgentCatalogPage({
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string>();
   const [error, setError] = useState<string>();
+  const [pendingDelete, setPendingDelete] = useState<ChekkuAgentSummary>();
+  const [deletingAgentId, setDeletingAgentId] = useState<string>();
+  const deleteInFlightRef = useRef(false);
+  const registryHeadingRef = useRef<HTMLHeadingElement>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -107,16 +113,19 @@ export function AgentCatalogPage({
     }
   };
 
-  const remove = async (agent: ChekkuAgentSummary) => {
-    if (
-      RESERVED_AGENT_IDS.has(agent.id) ||
-      agent.source !== 'stored' ||
-      !window.confirm(`Delete “${agent.name}”? This cannot be undone.`)
-    ) {
+  const requestRemove = (agent: ChekkuAgentSummary) => {
+    if (RESERVED_AGENT_IDS.has(agent.id) || agent.source !== 'stored') {
       return;
     }
+    setPendingDelete(agent);
+  };
 
-    setBusyId(agent.id);
+  const remove = async () => {
+    const agent = pendingDelete;
+    if (!agent || deleteInFlightRef.current) return;
+
+    deleteInFlightRef.current = true;
+    setDeletingAgentId(agent.id);
     setError(undefined);
 
     try {
@@ -129,7 +138,9 @@ export function AgentCatalogPage({
           : 'Could not delete the agent.',
       );
     } finally {
-      setBusyId(undefined);
+      deleteInFlightRef.current = false;
+      setDeletingAgentId(undefined);
+      setPendingDelete(undefined);
     }
   };
 
@@ -157,7 +168,7 @@ export function AgentCatalogPage({
           <div className="studio-section-heading">
             <div>
               <p className="studio-eyebrow">Available agents</p>
-              <h2>Registry</h2>
+              <h2 ref={registryHeadingRef} tabIndex={-1}>Registry</h2>
             </div>
 
             <label className="studio-search">
@@ -201,7 +212,7 @@ export function AgentCatalogPage({
                   <article className="studio-agent-card" key={agent.id}>
                     <div className="studio-agent-card-top">
                       <span className="studio-agent-glyph">
-                        {agent.id === 'qa-web-agent' ? '◎' : agent.id === 'qa-android-agent' ? '▷' : '◇'}
+                        <AgentIcon icon={agent.iconKey} />
                       </span>
                       <span
                         className={`studio-source-badge ${agent.source}`}
@@ -254,11 +265,12 @@ export function AgentCatalogPage({
                         <button
                           className="studio-icon-button studio-danger"
                           type="button"
-                          disabled={busyId === agent.id}
-                          onClick={() => void remove(agent)}
+                          disabled={busyId === agent.id || Boolean(deletingAgentId)}
+                          onClick={() => requestRemove(agent)}
                           aria-label={`Delete ${agent.name}`}
+                          aria-haspopup="dialog"
                         >
-                          {busyId === agent.id ? '…' : '×'}
+                          {deletingAgentId === agent.id ? '…' : '×'}
                         </button>
                       )}
                     </div>
@@ -269,6 +281,15 @@ export function AgentCatalogPage({
           )}
         </section>
       </main>
+      <ConfirmationDialog
+        open={Boolean(pendingDelete)}
+        title={pendingDelete ? `Delete ${pendingDelete.name}?` : 'Delete agent?'}
+        description="This removes the stored agent and cannot be undone. Built-in agents are never affected."
+        pending={Boolean(pendingDelete && deletingAgentId === pendingDelete.id)}
+        fallbackFocusRef={registryHeadingRef}
+        onCancel={() => setPendingDelete(undefined)}
+        onConfirm={() => void remove()}
+      />
     </div>
   );
 }

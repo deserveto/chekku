@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { createMock, detailsMock, getStoredAgentMock, updateMock } = vi.hoisted(() => {
+const { createMock, detailsMock, getStoredAgentMock, listAgentsMock, listStoredAgentsMock, updateMock } = vi.hoisted(() => {
   const details = vi.fn();
   const update = vi.fn();
 
@@ -8,6 +8,8 @@ const { createMock, detailsMock, getStoredAgentMock, updateMock } = vi.hoisted((
     createMock: vi.fn(),
     detailsMock: details,
     getStoredAgentMock: vi.fn(() => ({ details, update })),
+    listAgentsMock: vi.fn(),
+    listStoredAgentsMock: vi.fn(),
     updateMock: update,
   };
 });
@@ -16,6 +18,8 @@ vi.mock('./mastra-client', () => ({
   mastraClient: {
     createStoredAgent: createMock,
     getStoredAgent: getStoredAgentMock,
+    listAgents: listAgentsMock,
+    listStoredAgents: listStoredAgentsMock,
   },
 }));
 vi.mock('@/server/agent-payload', async () =>
@@ -25,6 +29,7 @@ vi.mock('@/server/agent-payload', async () =>
 import {
   createStoredAgent,
   getStoredAgent,
+  listAllAgents,
   type AgentFormInput,
   updateStoredAgent,
 } from './stored-agents';
@@ -42,6 +47,7 @@ type StoredFixture = {
   status: 'draft' | 'published' | 'archived';
   createdAt: string;
   updatedAt: string;
+  metadata?: Record<string, unknown>;
 };
 
 function form(overrides: Partial<AgentFormInput> = {}): AgentFormInput {
@@ -53,6 +59,8 @@ function form(overrides: Partial<AgentFormInput> = {}): AgentFormInput {
     tools: ['calculator'],
     agents: ['qa-web-agent'],
     mcpClients: [],
+    iconKey: 'compass',
+    metadata: { owner: 'studio' },
     memoryEnabled: true,
     ...overrides,
   };
@@ -82,6 +90,8 @@ describe('stored-agent MCP selections', () => {
     createMock.mockResolvedValue(stored());
     detailsMock.mockResolvedValue(stored());
     updateMock.mockResolvedValue(stored());
+    listAgentsMock.mockResolvedValue({});
+    listStoredAgentsMock.mockResolvedValue({ agents: [] });
   });
 
   it('creates with Web Reader selection', async () => {
@@ -89,7 +99,26 @@ describe('stored-agent MCP selections', () => {
 
     expect(createMock).toHaveBeenCalledWith(expect.objectContaining({
       mcpClients: { 'web-reader': { tools: {} } },
+      metadata: { owner: 'studio', chekku: { iconKey: 'compass' } },
     }));
+  });
+
+  it('hydrates a selected icon and preserves unrelated metadata for editing', async () => {
+    detailsMock.mockResolvedValue(stored({
+      metadata: { owner: 'studio', chekku: { iconKey: 'pen', retained: true } },
+    }));
+
+    await expect(getStoredAgent('reader-agent')).resolves.toMatchObject({
+      iconKey: 'pen',
+      metadata: { owner: 'studio', chekku: { iconKey: 'pen', retained: true } },
+    });
+  });
+
+  it('rejects edits to every reserved code-defined agent ID', async () => {
+    await expect(getStoredAgent('qa-web-agent')).rejects.toThrow(
+      'qa-web-agent is code-defined and cannot be edited.',
+    );
+    expect(detailsMock).not.toHaveBeenCalled();
   });
 
   it('reads all fixed MCP selections from detail', async () => {
@@ -117,5 +146,31 @@ describe('stored-agent MCP selections', () => {
         'web-reader': { tools: {} },
       },
     }));
+  });
+
+  it('prefers protected code-defined agents over stored ID collisions', async () => {
+    listAgentsMock.mockResolvedValue({
+      'qa-web-agent': {
+        id: 'qa-web-agent',
+        name: 'QA Web Agent',
+        description: 'Protected browser agent.',
+        source: 'code',
+        modelList: [],
+      },
+    });
+    listStoredAgentsMock.mockResolvedValue({
+      agents: [
+        stored({ id: 'qa-web-agent', name: 'Legacy collision' }),
+        stored({ id: 'reader-agent', name: 'Reader Agent' }),
+      ],
+    });
+
+    await expect(listAllAgents()).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'qa-web-agent', name: 'QA Web Agent', source: 'code' }),
+      expect.objectContaining({ id: 'reader-agent', source: 'stored' }),
+    ]));
+    await expect(listAllAgents()).resolves.not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'qa-web-agent', source: 'stored' }),
+    ]));
   });
 });

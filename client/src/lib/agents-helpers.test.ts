@@ -39,6 +39,15 @@ describe('agent ID validation', () => {
       expect(agentIdIssueMessage(issue)).not.toHaveLength(0);
     }
   });
+
+  it.each([
+    'social-media-supervisor-agent',
+    'social-media-content-writer',
+    'social-media-strategist-agent',
+    'visual-content-agent',
+  ])('protects the code-defined agent id %s', (id) => {
+    expect(validateAgentId(id, new Set())).toBe('reserved');
+  });
 });
 
 describe('agent UI helpers', () => {

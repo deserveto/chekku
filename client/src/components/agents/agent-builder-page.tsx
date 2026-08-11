@@ -4,6 +4,13 @@ import Link from 'next/link';
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { StudioNav } from '@/components/studio/studio-nav';
+import { AgentIcon } from '@/components/agents/agent-icon';
+import {
+  AGENT_ICON_IDS,
+  defaultAgentIcon,
+  labelForAgentIcon,
+  type AgentIconId,
+} from '@/lib/agent-icons';
 import { loadModelRegistry } from '@/lib/model-registry';
 import {
   AgentApiError,
@@ -33,6 +40,8 @@ type Values = {
   tools: string[];
   agents: string[];
   mcpClients: string[];
+  iconKey: AgentIconId;
+  metadata?: Record<string, unknown>;
 };
 
 const EMPTY: Values = {
@@ -45,6 +54,7 @@ const EMPTY: Values = {
   tools: [],
   agents: [],
   mcpClients: [],
+  iconKey: 'spark',
 };
 
 function toggle(values: string[], id: string): string[] {
@@ -163,6 +173,8 @@ export function AgentBuilderPage({
             tools: detail.tools,
             agents: detail.agents,
             mcpClients: detail.mcpClients,
+            iconKey: detail.iconKey ?? defaultAgentIcon(detail.id),
+            metadata: detail.metadata,
           });
         } else {
           setValues((current) => ({
@@ -230,6 +242,8 @@ export function AgentBuilderPage({
       agents: values.agents,
       mcpClients: values.mcpClients,
       memoryEnabled: values.memoryEnabled,
+      iconKey: values.iconKey,
+      metadata: values.metadata,
     };
 
     try {
@@ -329,6 +343,27 @@ export function AgentBuilderPage({
                   placeholder="A short summary of what this agent is for"
                 />
               </label>
+
+              <fieldset className="studio-icon-picker">
+                <legend>Agent icon</legend>
+                <p>Choose a visual identity for the registry and conversations.</p>
+                <div>
+                  {AGENT_ICON_IDS.map((iconKey) => (
+                    <button
+                      className={values.iconKey === iconKey ? 'selected' : ''}
+                      type="button"
+                      key={iconKey}
+                      onClick={() => set('iconKey', iconKey)}
+                      aria-pressed={values.iconKey === iconKey}
+                      aria-label={`Use ${labelForAgentIcon(iconKey)} icon`}
+                      title={labelForAgentIcon(iconKey)}
+                      disabled={submitting}
+                    >
+                      <AgentIcon icon={iconKey} />
+                    </button>
+                  ))}
+                </div>
+              </fieldset>
             </section>
 
             <section className="studio-panel studio-form-panel">
@@ -479,7 +514,7 @@ export function AgentBuilderPage({
                         }
                         disabled={submitting}
                       />
-                      <span className="studio-capability-icon">◎</span>
+                      <span className="studio-capability-icon"><AgentIcon icon="browser" /></span>
                       <span>
                         <strong>QA Web Agent</strong>
                         <small>

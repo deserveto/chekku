@@ -3,7 +3,8 @@
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
-import { BrandMark } from '@/components/ui/brand-mark';
+import verificationArtwork from '@/assets/auth/verification-low-poly.png';
+import { AuthLayout } from '@/components/auth/auth-layout';
 import { authClient } from '@/lib/auth-client';
 import { EMAIL_VERIFICATION_CALLBACK_URL } from '@/lib/auth-redirects';
 
@@ -33,33 +34,37 @@ function VerifyEmailContent() {
 
   if (verified) {
     return (
-      <main className="auth-shell">
-        <div className="auth-card">
-          <div className="auth-brand">
-            <BrandMark />
-            <p className="auth-eyebrow">Verified</p>
-            <h1 className="auth-title">Email confirmed</h1>
-          </div>
-          <p className="auth-subtitle">
+      <AuthLayout
+        image={verificationArtwork}
+        imageAlt="Low-poly coastal beacon sending a warm signal at dawn"
+        eyebrow="Verified"
+        title="Email confirmed."
+        description="Your identity is confirmed and your private workspace is ready."
+        quote="A clear signal. A private workspace."
+      >
+        <div className="auth-result auth-verification-panel">
+          <p className="auth-verification-status">Verification complete</p>
+          <p className="auth-description">
             Your email is verified. You can sign in now.
           </p>
-          <p className="auth-foot">
-            <Link href="/login">Sign in</Link>
-          </p>
+          <Link className="auth-primary" href="/login">Sign in</Link>
         </div>
-      </main>
+      </AuthLayout>
     );
   }
 
   return (
-    <main className="auth-shell">
-      <div className="auth-card">
-        <div className="auth-brand">
-          <BrandMark />
-          <p className="auth-eyebrow">Verify email</p>
-          <h1 className="auth-title">Check your email</h1>
-        </div>
-        <p className="auth-subtitle">
+    <AuthLayout
+      image={verificationArtwork}
+      imageAlt="Low-poly coastal beacon sending a warm signal at dawn"
+      eyebrow="Verify email"
+      title="Check your email."
+      description="Use the link we sent, or request a fresh one below."
+      quote="A clear signal. A private workspace."
+    >
+      <div className="auth-result auth-verification-panel">
+        <p className="auth-verification-status">Waiting for confirmation</p>
+        <p className="auth-description">
           We sent a verification link when you signed up. Click it to verify
           your account.
         </p>
@@ -92,7 +97,7 @@ function VerifyEmailContent() {
           <Link href="/login">Back to sign in</Link>
         </p>
       </div>
-    </main>
+    </AuthLayout>
   );
 }
 

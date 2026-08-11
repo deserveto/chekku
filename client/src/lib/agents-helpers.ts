@@ -4,6 +4,10 @@ export const RESERVED_AGENT_IDS = new Set<string>([
   'qa-web-agent',
   'qa-android-agent',
   'pm-agent',
+  'social-media-supervisor-agent',
+  'social-media-content-writer',
+  'social-media-strategist-agent',
+  'visual-content-agent',
 ]);
 
 export type AgentIdIssue = 'required' | 'invalid-format' | 'reserved' | 'duplicate';
