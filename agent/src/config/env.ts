@@ -1,19 +1,69 @@
 import { config } from 'dotenv';
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { z } from 'zod';
 
-// Load agent/.env explicitly using the module's own directory rather than
-// process.cwd(). When scripts/dev.sh runs `npm run dev:agent` inside a
-// tmux pane with cwd set to the repo root, dotenv's default cwd-based
-// lookup fails to find agent/.env — which silently drops keys like
-// WEB_READER_API_KEY. Resolving relative to import.meta.url is deterministic
-// regardless of where the process was launched from.
+// Load env files using the module's own directory rather than process.cwd().
+// When scripts/dev.sh runs `npm run dev:agent` inside a tmux pane with cwd set
+// to the repo root, dotenv's default cwd-based lookup fails to find agent/.env
+// — which silently drops keys like WEB_READER_API_KEY. Resolving relative to
+// import.meta.url is deterministic regardless of where the process was
+// launched from. `quiet: true` also suppresses dotenv v17's promotional
+// `◇ injected env (N) from path // tip: …` log line.
 const moduleDir = dirname(fileURLToPath(import.meta.url));
-// `quiet: true` suppresses dotenv v17's `◇ injected env (N) from path // tip: …`
-// promotional log line, which would otherwise pollute server startup output
-// and trip startup-silence assertions in the web-reader/searxng tests.
-config({ path: resolve(moduleDir, '../../.env'), quiet: true });
+
+// Apply dotenv files in order; missing files are skipped without error.
+//
+// A key already set in process.env always wins — dotenv's own default. With
+// `fillEmpty`, a key present but *empty* is also treated as unset, so a later
+// file can supply a value for a placeholder without ever discarding a value the
+// operator or developer chose deliberately (agent/.env.example documents
+// setting DATABASE_URL to point at a remote Postgres, and an exported shell
+// value must survive too). A blanket `override` would take both.
+//
+// Exported so the precedence contract can be pinned by regression tests.
+export function applyEnvFiles(
+  files: ReadonlyArray<{ path: string; fillEmpty?: boolean }>,
+): void {
+  for (const { path, fillEmpty } of files) {
+    if (!path || !existsSync(path)) continue;
+    if (!fillEmpty) {
+      config({ path, quiet: true });
+      continue;
+    }
+    // Parse into a throwaway object so nothing is written until each key has
+    // been checked against what is already in process.env.
+    const parsed = config({ path, quiet: true, processEnv: {} }).parsed ?? {};
+    for (const [key, value] of Object.entries(parsed)) {
+      const current = process.env[key];
+      if (current === undefined || current === '') process.env[key] = value;
+    }
+  }
+}
+
+// Base user-owned secrets. No override: values already present in process.env
+// (e.g. the production container's Compose environment) are preserved.
+applyEnvFiles([{ path: resolve(moduleDir, '../../.env') }]);
+
+// Dev-only generated values. scripts/setup-env.sh writes the generated
+// DATABASE_URL (plus Garage/SearXNG coordinates) to agent/.env.development,
+// not agent/.env (which keeps an empty DATABASE_URL placeholder). The Mastra
+// dev server does not reliably load .env.development into process.env before
+// this module runs, so load it here with `fillEmpty` so the generated
+// DATABASE_URL fills the placeholder. Without this, env.DATABASE_URL silently
+// falls back to the schema default and PostgresStore fails auth. `fillEmpty`
+// rather than a blanket override: a DATABASE_URL the developer exported or set
+// non-empty in agent/.env stays in force, per the same rule setup-env.sh
+// already follows for SEARXNG_API_KEY.
+// Gated on NODE_ENV as a second line of defence so the file is not read at all
+// under the production container env or a normal test run; the file is also
+// gitignored.
+if (process.env.NODE_ENV !== 'production' && process.env.NODE_ENV !== 'test') {
+  applyEnvFiles([
+    { path: resolve(moduleDir, '../../.env.development'), fillEmpty: true },
+  ]);
+}
 
 const optionalUrl = z.union([z.string().url(), z.literal('')]);
 
