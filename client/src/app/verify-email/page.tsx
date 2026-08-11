@@ -6,6 +6,7 @@ import { Suspense, useState } from 'react';
 import verificationArtwork from '@/assets/auth/verification-low-poly.png';
 import { AuthLayout } from '@/components/auth/auth-layout';
 import { authClient } from '@/lib/auth-client';
+import { EMAIL_VERIFICATION_CALLBACK_URL } from '@/lib/auth-redirects';
 
 function VerifyEmailContent() {
   const search = useSearchParams();
@@ -21,7 +22,7 @@ function VerifyEmailContent() {
     setError(null);
     const { error } = await authClient.sendVerificationEmail({
       email,
-      callbackURL: '/verify-email',
+      callbackURL: EMAIL_VERIFICATION_CALLBACK_URL,
     });
     setPending(false);
     if (error) {

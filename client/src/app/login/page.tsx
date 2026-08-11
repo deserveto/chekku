@@ -1,14 +1,18 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Suspense, useState } from 'react';
 import loginArtwork from '@/assets/auth/login-low-poly.png';
 import { AuthLayout } from '@/components/auth/auth-layout';
 import { authClient } from '@/lib/auth-client';
 
-export default function LoginPage() {
+function LoginContent() {
   const router = useRouter();
+  const search = useSearchParams();
+  const isVerificationCallback = search.get('verified') === '1';
+  const verificationError = isVerificationCallback && search.has('error');
+  const verified = isVerificationCallback && !verificationError;
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -36,6 +40,20 @@ export default function LoginPage() {
       description="Sign in to continue building, testing, and working with your agents."
       quote="A calmer place to run your agents."
     >
+        {verified ? (
+          <p className="auth-alert auth-alert-success" role="status">
+            Your email has been verified. You can sign in now.
+          </p>
+        ) : null}
+        {verificationError ? (
+          <p className="auth-alert auth-alert-error" role="alert">
+            <span>
+              This verification link is invalid or has expired. Request a new
+              link and try again.
+            </span>{' '}
+            <Link href="/verify-email">Resend verification email.</Link>
+          </p>
+        ) : null}
         <form className="auth-form" onSubmit={onSubmit}>
           <label className="studio-field">
             <span>Email</span>
@@ -72,5 +90,13 @@ export default function LoginPage() {
           No account? <Link href="/signup">Create one</Link>
         </p>
     </AuthLayout>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense>
+      <LoginContent />
+    </Suspense>
   );
 }

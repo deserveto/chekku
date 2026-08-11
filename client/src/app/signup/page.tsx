@@ -6,6 +6,7 @@ import signupArtwork from '@/assets/auth/signup-low-poly.png';
 import verificationArtwork from '@/assets/auth/verification-low-poly.png';
 import { AuthLayout } from '@/components/auth/auth-layout';
 import { authClient } from '@/lib/auth-client';
+import { EMAIL_VERIFICATION_CALLBACK_URL } from '@/lib/auth-redirects';
 
 export default function SignupPage() {
   const [email, setEmail] = useState('');
@@ -23,7 +24,7 @@ export default function SignupPage() {
       email,
       password,
       name,
-      callbackURL: '/verify-email',
+      callbackURL: EMAIL_VERIFICATION_CALLBACK_URL,
     });
     setPending(false);
     if (error) {
