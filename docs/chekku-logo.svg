@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="128" height="128" role="img" aria-label="Chekku logo">
+  <title>Chekku</title>
+  <style>
+    .chekku-mark { fill: none; stroke: #332e2a; stroke-width: 1.45; }
+    @media (prefers-color-scheme: dark) {
+      .chekku-mark { stroke: #f7f5f0; }
+    }
+  </style>
+  <g class="chekku-mark">
+    <path d="M5 8.5 16 3l11 5.5v15L16 29 5 23.5z" />
+    <path d="m10 11 6-3 6 3-6 3zM10 16l6 3 6-3M10 21l6 3 6-3" />
+  </g>
+</svg>
