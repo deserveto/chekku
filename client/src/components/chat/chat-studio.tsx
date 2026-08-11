@@ -20,6 +20,9 @@ import {
 import { MarkdownMessage } from '@/components/markdown-message';
 import { ResizableSidebar } from '@/components/studio/resizable-sidebar';
 import { BrandMark } from '@/components/ui/brand-mark';
+import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
+import { AgentIcon } from '@/components/agents/agent-icon';
+import { defaultAgentIcon } from '@/lib/agent-icons';
 import {
   listAgentSkills,
   type AgentSkillSummary,
@@ -93,7 +96,12 @@ export function ChatStudio({
 }) {
   const router = useRouter();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const workspaceHeadingRef = useRef<HTMLHeadingElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  // The dialog's confirm button only disables on the next render, so a fast
+  // double-click can fire onConfirm twice. A ref closes that window
+  // synchronously; `deletingThreadId` below is for rendering only.
+  const deleteInFlightRef = useRef(false);
 
   const [agents, setAgents] = useState<ChekkuAgentSummary[]>([]);
   const [threads, setThreads] = useState<StudioThread[]>([]);
@@ -108,6 +116,8 @@ export function ChatStudio({
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string>();
   const [modelReady, setModelReady] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<StudioThread>();
+  const [deletingThreadId, setDeletingThreadId] = useState<string>();
 
   const agentId = initialAgentId;
   const threadId = initialThreadId;
@@ -230,14 +240,12 @@ export function ChatStudio({
     router.push(buildChatHref(nextAgentId, next.id));
   };
 
-  const deleteThread = async (target: StudioThread) => {
-    if (
-      isStreaming ||
-      !window.confirm(`Delete “${target.title}” and its messages?`)
-    ) {
-      return;
-    }
+  const deleteThread = async () => {
+    const target = pendingDelete;
+    if (isStreaming || !target || deleteInFlightRef.current) return;
 
+    deleteInFlightRef.current = true;
+    setDeletingThreadId(target.id);
     try {
       await removeThread(agentId, target.id, resourceId);
       if (target.id === threadId) {
@@ -251,6 +259,10 @@ export function ChatStudio({
           ? reason.message
           : 'Could not delete the thread.',
       );
+    } finally {
+      deleteInFlightRef.current = false;
+      setDeletingThreadId(undefined);
+      setPendingDelete(undefined);
     }
   };
 
@@ -626,10 +638,12 @@ export function ChatStudio({
               <button
                 className="chat-thread-delete"
                 type="button"
-                onClick={() => void deleteThread(thread)}
+                disabled={isStreaming || Boolean(deletingThreadId)}
+                onClick={() => setPendingDelete(thread)}
                 aria-label={`Delete ${thread.title}`}
+                aria-haspopup="dialog"
               >
-                ×
+                {deletingThreadId === thread.id ? '…' : '×'}
               </button>
             </div>
           ))}
@@ -649,7 +663,9 @@ export function ChatStudio({
         <header className="chat-topbar">
           <div>
             <p className="studio-eyebrow">Agent workspace</p>
-            <h1>{currentAgent?.name || agentId}</h1>
+            <h1 ref={workspaceHeadingRef} tabIndex={-1}>
+              {currentAgent?.name || agentId}
+            </h1>
           </div>
 
           <div className="chat-topbar-actions">
@@ -695,7 +711,7 @@ export function ChatStudio({
                   >
                     <div className="chat-message-label">
                       {message.role === 'assistant' ? (
-                        <BrandMark />
+                        <AgentIcon icon={currentAgent?.iconKey ?? defaultAgentIcon(agentId)} />
                       ) : (
                         <span className="chat-user-avatar">You</span>
                       )}
@@ -855,6 +871,15 @@ export function ChatStudio({
           </form>
         </div>
       </main>
+      <ConfirmationDialog
+        open={Boolean(pendingDelete)}
+        title={pendingDelete ? `Delete ${pendingDelete.title}?` : 'Delete thread?'}
+        description="This permanently removes the conversation and all of its messages."
+        pending={Boolean(deletingThreadId)}
+        fallbackFocusRef={workspaceHeadingRef}
+        onCancel={() => setPendingDelete(undefined)}
+        onConfirm={() => void deleteThread()}
+      />
     </div>
   );
 }

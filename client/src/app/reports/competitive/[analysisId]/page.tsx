@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import { MarkdownMessage } from '@/components/markdown-message';
 import { ShareLinkButton } from '@/components/share-link-button';
 import { StudioNav } from '@/components/studio/studio-nav';
+import { ReportTabs } from '@/components/reports/report-tabs';
 import { requireUserId } from '@/server/auth';
 import {
   CompetitiveAnalysisServiceError,
@@ -74,8 +75,8 @@ export default async function CompetitiveAnalysisDetailPage({
         <header className="studio-page-header studio-report-header">
           <div>
             <p className="studio-eyebrow">Competitive analysis</p>
-            <h1>{analysis.analysisId}</h1>
-            <p>Saved analysis first, followed by storage metadata and original request.</p>
+            <h1>{analysis.metadata.anchorProduct} competitive landscape</h1>
+            <p className="studio-report-id"><code>{analysis.analysisId}</code></p>
           </div>
           <div className="studio-report-header-actions">
             {analysis.slidesMarkdown && analysis.slidesMarkdown.trim().length > 0 ? (
@@ -96,27 +97,39 @@ export default async function CompetitiveAnalysisDetailPage({
           </div>
         </header>
 
-        <div className="studio-report-detail">
-          <section className="studio-panel studio-report-panel">
-            <h2 className="studio-eyebrow">Analysis</h2>
+        <div className="studio-report-detail-wrap">
+          <ReportTabs active="competitive" />
+          <div className="studio-report-detail">
+          <section className="studio-report-analysis studio-panel studio-report-panel">
+            <div className="studio-report-section-heading">
+              <p className="studio-eyebrow">Primary document</p>
+              <h2>Analysis</h2>
+            </div>
             <div className="studio-report-markdown markdown">
               <MarkdownMessage content={analysis.analysisMarkdown} />
             </div>
           </section>
 
-          <section className="studio-panel studio-report-panel">
-            <h2 className="studio-eyebrow">Metadata</h2>
+          <section className="studio-report-context studio-panel studio-report-panel">
+            <div className="studio-report-section-heading">
+              <p className="studio-eyebrow">Technical context</p>
+              <h2>Metadata</h2>
+            </div>
             <pre className="studio-report-metadata">
               {JSON.stringify(analysis.metadata, null, 2)}
             </pre>
           </section>
 
-          <section className="studio-panel studio-report-panel">
-            <h2 className="studio-eyebrow">Original request</h2>
+          <section className="studio-report-context studio-panel studio-report-panel">
+            <div className="studio-report-section-heading">
+              <p className="studio-eyebrow">Source</p>
+              <h2>Original request</h2>
+            </div>
             <div className="studio-report-markdown markdown">
               <MarkdownMessage content={analysis.requestMarkdown} />
             </div>
           </section>
+          </div>
         </div>
       </main>
     </div>

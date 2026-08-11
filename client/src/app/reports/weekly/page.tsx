@@ -1,6 +1,7 @@
 import Link from 'next/link';
 
 import { StudioNav } from '@/components/studio/studio-nav';
+import { ReportTabs } from '@/components/reports/report-tabs';
 import { requireUserId } from '@/server/auth';
 import { formatPmReportCreatedAt } from '@/server/pm-report-format';
 import {
@@ -36,6 +37,7 @@ export default async function WeeklyReportsPage() {
         </header>
 
         <section className="studio-section">
+          <ReportTabs active="weekly" />
           {errorMessage ? (
             <div className="studio-alert studio-alert-error" role="alert">
               {errorMessage}

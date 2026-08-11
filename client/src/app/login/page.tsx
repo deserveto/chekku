@@ -3,7 +3,8 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { BrandMark } from '@/components/ui/brand-mark';
+import loginArtwork from '@/assets/auth/login-low-poly.png';
+import { AuthLayout } from '@/components/auth/auth-layout';
 import { authClient } from '@/lib/auth-client';
 
 export default function LoginPage() {
@@ -27,13 +28,14 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="auth-shell">
-      <div className="auth-card">
-        <div className="auth-brand">
-          <BrandMark />
-          <p className="auth-eyebrow">Sign in</p>
-          <h1 className="auth-title">Welcome back</h1>
-        </div>
+    <AuthLayout
+      image={loginArtwork}
+      imageAlt="Low-poly illuminated path through dark mountains"
+      eyebrow="Welcome back"
+      title="Return to your studio."
+      description="Sign in to continue building, testing, and working with your agents."
+      quote="A calmer place to run your agents."
+    >
         <form className="auth-form" onSubmit={onSubmit}>
           <label className="studio-field">
             <span>Email</span>
@@ -69,7 +71,6 @@ export default function LoginPage() {
         <p className="auth-foot">
           No account? <Link href="/signup">Create one</Link>
         </p>
-      </div>
-    </main>
+    </AuthLayout>
   );
 }
