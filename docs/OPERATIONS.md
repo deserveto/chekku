@@ -694,7 +694,7 @@ In-container wiring is fixed by Compose and differs from local development:
 - The agent binds `HOST=0.0.0.0`; its port `4111` is not published to the host. The client reaches it at `AGENT_URL=http://agent:4111` over the Compose default network.
 - `DATABASE_URL` is constructed as `postgresql://chekku:${POSTGRES_PASSWORD}@postgres:5432/chekku_agent` (service name `postgres`, not `127.0.0.1`).
 - SearXNG is reached at `http://searxng:8080` (the container's internal port), not the loopback `8888` used in development.
-- Every published port is loopback-only. The client publishes `127.0.0.1:3000`; put a reverse proxy (Caddy/nginx) in front for TLS and public exposure. Garage, SearXNG, and Postgres also keep their development publishes, because `scripts/dev.sh` runs the agent and client as host processes against them and `scripts/db-migrate.sh` runs the Better Auth CLI on the host against `127.0.0.1:5432`.
+- Every published port is loopback-only. The client publishes `127.0.0.1:3000`; put a reverse proxy (Caddy/nginx — a ready nginx template lives at [`ops/nginx/chekku.conf`](../ops/nginx/chekku.conf)) in front for TLS and public exposure. Garage, SearXNG, and Postgres also keep their development publishes, because `scripts/dev.sh` runs the agent and client as host processes against them and `scripts/db-migrate.sh` runs the Better Auth CLI on the host against `127.0.0.1:5432`.
 - Each of those four host ports is overridable for shared hosts where the default is already taken by another stack: `CHEKKU_CLIENT_HOST_PORT` (default 3000, set in `client/.env.local`), and `CHEKKU_GARAGE_HOST_PORT` / `CHEKKU_SEARXNG_HOST_PORT` / `CHEKKU_POSTGRES_HOST_PORT` (defaults 3900 / 8888 / 5432, set in `agent/.env`). Leaving them empty keeps the defaults. They move the host side of the publish only — containers always reach each other at `garage:3900`, `searxng:8080`, `postgres:5432`, and `agent:4111`. `scripts/prod.sh` merges those files into its shell, so the overrides apply to the containerized stack; `scripts/dev.sh` reads `storage/.env.local` instead and is unaffected. Point the reverse proxy at whatever `CHEKKU_CLIENT_HOST_PORT` resolves to.
 - Better Auth values reach the client container from `client/.env.local`: `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, and `RATE_LIMIT_TRUST_PROXY`. `BETTER_AUTH_URL` must equal the public browser origin or session cookies and verification links break. Set `RATE_LIMIT_TRUST_PROXY=true` only when a reverse proxy supplies a trustworthy `x-forwarded-for`. `AUTH_DATABASE_URL` is **not** forwarded: Compose pins it to `postgresql://chekku:${POSTGRES_PASSWORD}@postgres:5432/chekku_auth`, leaving the `127.0.0.1` value in `client/.env.local` free for the host-side `npm run db:migrate`.
 - The Compose project network is named `chekku-network` rather than the generated `chekku_default`, so it is identifiable on a host running several stacks.
@@ -723,6 +723,20 @@ set -a; source storage/.env.local; source searxng/.env.local; set +a
   npm run prod:down
   docker volume rm chekku_postgres-data
   ```
+
+## Reverse proxy
+
+The client container publishes `127.0.0.1:3000` only (loopback, by design). Production puts a reverse proxy in front to terminate TLS and expose the studio publicly. A ready-to-copy nginx template with Let's Encrypt + WebSocket/SSE support lives at [`ops/nginx/chekku.conf`](../ops/nginx/chekku.conf) with install steps in [`ops/nginx/README.md`](../ops/nginx/README.md).
+
+When the proxy is in place, set in `client/.env.local` and rebuild the client image so the browser bundle picks up the new origin:
+
+```dotenv
+BETTER_AUTH_URL=https://studio.example.com
+NEXT_PUBLIC_APP_URL=https://studio.example.com
+RATE_LIMIT_TRUST_PROXY=true
+```
+
+`RATE_LIMIT_TRUST_PROXY=true` is safe to set only when the proxy overwrites `x-forwarded-for` with the real client IP (the shipped nginx template does this via `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for`). Without a trusted proxy, leave it unset — the limiter then collapses every anonymous client onto one shared bucket per scope so a spoofed XFF cannot bypass the throttle. See the Authentication section above for the full rate-limit trust model.
 
 ## Production notes
 

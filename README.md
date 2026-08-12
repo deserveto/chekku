@@ -202,7 +202,7 @@ npm run setup        # generates storage/.env.local + searxng/.env.local; prompt
 npm run prod:sh      # build images, bring the stack up, wait for every service to be healthy
 ```
 
-Put a reverse proxy (Caddy or nginx) in front of the client's loopback port (`127.0.0.1:3000`) for TLS and public exposure. The agent's port `4111` is intentionally not published; the client reaches it over the Compose network at `http://agent:4111`. See [Operations](docs/OPERATIONS.md) for the full containerized-production guide, troubleshooting, and the secret-manager checklist.
+Put a reverse proxy (Caddy or nginx — a ready template lives at [`ops/nginx/chekku.conf`](ops/nginx/chekku.conf)) in front of the client's loopback port (`127.0.0.1:3000`) for TLS and public exposure. The agent's port `4111` is intentionally not published; the client reaches it over the Compose network at `http://agent:4111`. See [Operations](docs/OPERATIONS.md) for the full containerized-production guide, troubleshooting, and the secret-manager checklist.
 
 ## Repository layout
 
