@@ -200,6 +200,7 @@ wait_healthy() {
 
 wait_healthy garage Garage
 wait_healthy searxng SearXNG
+wait_healthy reader Reader
 wait_healthy postgres Postgres
 wait_healthy agent Agent
 wait_healthy client Client

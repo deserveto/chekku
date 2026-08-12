@@ -94,7 +94,7 @@ const MCP_META = {
   },
   'web-reader': {
     title: 'Web Reader',
-    description: 'Read one public web page through the fixed hosted Reader and return bounded untrusted Markdown.',
+    description: 'Read one public web page through the self-hosted Reader and return bounded untrusted Markdown.',
     icon: 'R',
   },
 } satisfies Record<

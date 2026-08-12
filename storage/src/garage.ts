@@ -134,7 +134,7 @@ async function bodyToString(body: unknown): Promise<string> {
 
 /**
  * Upper bound on a single binary object read. Mirrors the bounded-reader
- * pattern used by the hosted Web Reader client: a streamed body that exceeds
+ * pattern used by the self-hosted Web Reader client: a streamed body that exceeds
  * this cap is cancelled and surfaced as a safe `unavailable` error before the
  * bytes ever reach the caller. The cap is well above any image the visual
  * content pipeline produces (≤ 10 MiB) while keeping unbounded streams from

@@ -48,6 +48,26 @@ services:
       retries: 30
       start_period: 5s
 
+  reader:
+    # Self-hosted Jina Reader OSS. Stateless by default — no cache, no auth,
+    # no API key. The HTTP/1.1 port (8081 in the container) is what Chekku's
+    # client talks to; the h2c port (8080) stays unpublishd. The same image
+    # powers the hosted r.jina.ai service, so the Markdown envelope contract
+    # ({code, status, data: {title, url, content}}) is identical.
+    image: ghcr.io/jina-ai/reader:oss
+    restart: unless-stopped
+    ports:
+      # Loopback publish for scripts/dev.sh (agent/.env.development pins
+      # WEB_READER_BASE_URL to 127.0.0.1:8081). Host port overridable;
+      # containers always talk to http://reader:8081.
+      - "127.0.0.1:${CHEKKU_READER_HOST_PORT:-8081}:8081"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8081/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+
   postgres:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
@@ -91,6 +111,8 @@ services:
         condition: service_healthy
       searxng:
         condition: service_healthy
+      reader:
+        condition: service_healthy
     environment:
       NODE_ENV: production
       HOST: 0.0.0.0
@@ -120,7 +142,9 @@ services:
       # SearXNG search; fixed to the in-container service (listens on 8080).
       SEARXNG_BASE_URL: http://searxng:8080
       SEARXNG_API_KEY: ${SEARXNG_API_KEY:-}
-      WEB_READER_API_KEY: ${WEB_READER_API_KEY:-}
+      # Self-hosted Jina Reader (OSS image); fixed to the in-container service
+      # HTTP/1.1 endpoint. No API key — the local Reader is unauthenticated.
+      WEB_READER_BASE_URL: http://reader:8081
       PUBLIC_HOLIDAY_API_BASE_URL: ${PUBLIC_HOLIDAY_API_BASE_URL:-https://api-hari-libur.vercel.app/api}
       CHEKKU_DEFAULT_AGENT_ID: ${CHEKKU_DEFAULT_AGENT_ID:-main-agent}
       CHEKKU_LOCAL_USER_ID: ${CHEKKU_LOCAL_USER_ID:-local-user}

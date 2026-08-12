@@ -6,19 +6,19 @@ import { join } from 'node:path';
 import { applyEnvFiles, loadEnv } from './env.js';
 
 describe('env config', () => {
-  it('uses an empty provider-neutral Web Reader key by default', () => {
-    expect(loadEnv({}).WEB_READER_API_KEY).toBe('');
+  it('uses an empty self-hosted Web Reader base URL by default', () => {
+    expect(loadEnv({}).WEB_READER_BASE_URL).toBe('');
   });
 
-  it('accepts only the provider-neutral Web Reader application value', () => {
+  it('accepts only the self-hosted Web Reader base URL', () => {
     const value = loadEnv({
-      WEB_READER_API_KEY: 'reader-secret',
+      WEB_READER_BASE_URL: 'http://reader.local:8081',
       JINA_API_KEY: 'must-be-ignored',
-      WEB_READER_BASE_URL: 'https://evil.test',
+      WEB_READER_API_KEY: 'must-be-ignored',
     });
-    expect(value.WEB_READER_API_KEY).toBe('reader-secret');
+    expect(value.WEB_READER_BASE_URL).toBe('http://reader.local:8081');
     expect(value).not.toHaveProperty('JINA_API_KEY');
-    expect(value).not.toHaveProperty('WEB_READER_BASE_URL');
+    expect(value).not.toHaveProperty('WEB_READER_API_KEY');
   });
 
   it('uses empty server-owned SearXNG defaults', () => {

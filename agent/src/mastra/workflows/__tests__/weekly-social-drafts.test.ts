@@ -39,7 +39,7 @@ const envMock = vi.hoisted(() => ({
   SEARXNG_BASE_URL: '',
   PUBLIC_HOLIDAY_API_BASE_URL: '',
   PUBLIC_HOLIDAY_CACHE_DIR: '',
-  WEB_READER_API_KEY: '',
+  WEB_READER_BASE_URL: '',
 }));
 
 vi.mock('../../../config/env.js', () => ({ env: envMock }));
@@ -505,7 +505,7 @@ describe('runWeeklySocialDrafts', () => {
     envMock.SEARXNG_BASE_URL = '';
     envMock.PUBLIC_HOLIDAY_API_BASE_URL = '';
     envMock.PUBLIC_HOLIDAY_CACHE_DIR = '';
-    envMock.WEB_READER_API_KEY = '';
+    envMock.WEB_READER_BASE_URL = '';
   });
 
   it('drafts, persists via MCP create_text_object, and notifies for 2 topics on the happy path', async () => {

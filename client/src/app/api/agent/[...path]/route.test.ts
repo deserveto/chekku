@@ -82,7 +82,7 @@ const rejectedMcpBodies = [
   ['tool override', { mcpClients: { searxng: { tools: { search_web: {} } } } }],
   ['Reader endpoint', { mcpClients: { 'web-reader': { url: 'https://r.jina.ai/' } } }],
   ['Reader command', { mcpClients: { 'web-reader': { command: 'npx', args: ['evil'] } } }],
-  ['Reader environment', { mcpClients: { 'web-reader': { tools: {}, env: { WEB_READER_API_KEY: 'secret' } } } }],
+  ['Reader environment', { mcpClients: { 'web-reader': { tools: {}, env: { WEB_READER_BASE_URL: 'http://evil.test/' } } } }],
   ['Reader credentials', { mcpClients: { 'web-reader': { tools: {}, credentials: { token: 'secret' } } } }],
   ['Reader headers', { mcpClients: { 'web-reader': { tools: {}, headers: { Authorization: 'secret' } } } }],
   ['Reader tool override', { mcpClients: { 'web-reader': { tools: { read_web_page: {} } } } }],

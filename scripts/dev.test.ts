@@ -113,6 +113,9 @@ if [[ "$1" == compose ]] && [[ "$*" == *" ps -q garage" ]]; then
 elif [[ "$1" == compose ]] && [[ "$*" == *" ps -q searxng" ]]; then
   docker_command=ps
   docker_service=searxng
+elif [[ "$1" == compose ]] && [[ "$*" == *" ps -q reader" ]]; then
+  docker_command=ps
+  docker_service=reader
 elif [[ "$1" == compose ]] && [[ "$*" == *" ps -q postgres" ]]; then
   docker_command=ps
   docker_service=postgres
@@ -120,6 +123,7 @@ elif [[ "$1" == inspect ]]; then
   case "\${*: -1}" in
     garage-id) docker_service=garage ;;
     searxng-id) docker_service=searxng ;;
+    reader-id) docker_service=reader ;;
     postgres-id) docker_service=postgres ;;
   esac
 fi
@@ -144,6 +148,10 @@ if [[ "$1" == compose ]]; then
   fi
   if [[ "$*" == *" ps -q searxng" ]]; then
     if [[ "\${SEARXNG_RUNNING:-1}" == 1 ]]; then printf 'searxng-id\\n'; fi
+    exit 0
+  fi
+  if [[ "$*" == *" ps -q reader" ]]; then
+    if [[ "\${READER_RUNNING:-1}" == 1 ]]; then printf 'reader-id\\n'; fi
     exit 0
   fi
   if [[ "$*" == *" ps -q postgres" ]]; then
@@ -224,13 +232,13 @@ const { parse } = require('dotenv');
 
 const values = { ...process.env, ...parse(readFileSync('agent/.env.development')) };
 const lines = Object.entries(values)
-  .filter(([name]) => /^(?:GARAGE|SEARXNG)_/.test(name) || name === 'WEB_READER_API_KEY' || name === 'POSTGRES_PASSWORD')
+  .filter(([name]) => /^(?:GARAGE|SEARXNG)_/.test(name) || name === 'WEB_READER_BASE_URL' || name === 'POSTGRES_PASSWORD')
   .sort(([left], [right]) => left.localeCompare(right))
   .map(([name, value]) => name + '=' + value);
 writeFileSync(process.argv[2], lines.join('\\n') + '\\n');
 NODE
 else
-  env | grep -E '^(GARAGE|SEARXNG)_|^(WEB_READER_API_KEY|POSTGRES_PASSWORD)=' | sort > "$MOCK_LOG/env-$role"
+  env | grep -E '^(GARAGE|SEARXNG)_|^(WEB_READER_BASE_URL|POSTGRES_PASSWORD)=' | sort > "$MOCK_LOG/env-$role"
 fi
 touch "$MOCK_LOG/ready-$role"
 for _ in {1..100}; do
@@ -689,7 +697,7 @@ describe('development launcher', () => {
       SEARXNG_SECRET: 'must-not-reach-apps',
       SEARXNG_CONFIG_HASH: 'must-not-reach-apps',
       SEARXNG_UNRELATED: 'must-not-reach-apps',
-      WEB_READER_API_KEY: 'must-reach-agent-only',
+      WEB_READER_BASE_URL: 'http://reader.inherited.example.test:8081',
     });
     const agentNames = [
       'GARAGE_ACCESS_KEY_ID',
@@ -699,7 +707,7 @@ describe('development launcher', () => {
       'GARAGE_SECRET_ACCESS_KEY',
       'SEARXNG_API_KEY',
       'SEARXNG_BASE_URL',
-      'WEB_READER_API_KEY',
+      'WEB_READER_BASE_URL',
     ];
     const clientNames = [
       'GARAGE_ACCESS_KEY_ID',
@@ -713,7 +721,11 @@ describe('development launcher', () => {
     const expectedValues: Record<string, string> = {
       ...storageValues,
       ...searxngValues,
-      WEB_READER_API_KEY: 'must-reach-agent-only',
+      // The agent pane does not unset WEB_READER_BASE_URL, so an inherited
+      // shell value survives into the agent subprocess (dotenv then sees it in
+      // process.env and does not override from agent/.env.development). The
+      // client pane strips it via web_reader_client_cleanup.
+      WEB_READER_BASE_URL: 'http://reader.inherited.example.test:8081',
     };
 
     expect(result.status, result.stderr).toBe(0);
@@ -733,24 +745,25 @@ describe('development launcher', () => {
     }
   });
 
-  it('strips the Web Reader key from only the tmux client process', () => {
+  it('strips the Web Reader base URL from only the tmux client process', () => {
     const root = fixture({ tmux: true });
-    const result = runDev(root, { WEB_READER_API_KEY: 'must-reach-agent-only' });
+    const result = runDev(root, { WEB_READER_BASE_URL: 'http://reader.inherited.example.test:8081' });
     const calls = readFileSync(resolve(root, 'mock-log/tmux'), 'utf8').split('\n');
     const agentCall = calls.find((line) => line.startsWith('new-session '));
     const clientCall = calls.find((line) => line.startsWith('split-window '));
 
     expect(result.status, result.stderr).toBe(0);
-    expect(agentCall).not.toContain('unset WEB_READER_API_KEY');
-    expect(clientCall).toContain('unset WEB_READER_API_KEY');
+    expect(agentCall).not.toContain('unset WEB_READER_BASE_URL');
+    expect(clientCall).toContain('unset WEB_READER_BASE_URL');
   });
 
-  it('propagates the Web Reader key from agent env through setup only to the agent', () => {
+  it('propagates the canonical Web Reader base URL from setup only to the agent', () => {
     const root = fixture({ captureNpmEnv: true });
     const agentEnvPath = resolve(root, 'agent/.env');
+    // Stale user-set value in agent/.env must be replaced by the canonical dev URL.
     const agentEnv = readFileSync(agentEnvPath, 'utf8').replace(
-      /^WEB_READER_API_KEY=.*$/m,
-      'WEB_READER_API_KEY=reader-from-agent-env',
+      /^WEB_READER_BASE_URL=.*$/m,
+      'WEB_READER_BASE_URL=http://reader.stale.example.test:9999',
     );
     writeFileSync(agentEnvPath, agentEnv);
 
@@ -762,9 +775,9 @@ describe('development launcher', () => {
 
     expect(setup.status, setup.stderr).toBe(0);
     expect(result.status, result.stderr).toBe(0);
-    expect(generated.WEB_READER_API_KEY).toBe('reader-from-agent-env');
-    expect(agentCapture).toContain('WEB_READER_API_KEY=reader-from-agent-env');
-    expect(clientCapture).not.toContain('WEB_READER_API_KEY');
+    expect(generated.WEB_READER_BASE_URL).toBe('http://127.0.0.1:8081');
+    expect(agentCapture).toContain('WEB_READER_BASE_URL=http://127.0.0.1:8081');
+    expect(clientCapture).not.toContain('WEB_READER_BASE_URL');
   });
 
   it('force-recreates Garage only after generated config changes', () => {
@@ -780,15 +793,19 @@ describe('development launcher', () => {
     expect(starts[0]).toContain('up -d --force-recreate garage');
     expect(starts[1]).toContain('up -d searxng');
     expect(starts[1]).not.toContain('--force-recreate');
-    expect(starts[2]).toContain('up -d postgres');
+    expect(starts[2]).toContain('up -d reader');
     expect(starts[2]).not.toContain('--force-recreate');
-    expect(starts[3]).toContain('up -d garage');
+    expect(starts[3]).toContain('up -d postgres');
     expect(starts[3]).not.toContain('--force-recreate');
-    expect(starts[4]).toContain('up -d searxng');
-    expect(starts[5]).toContain('up -d postgres');
-    expect(starts[6]).toContain('up -d --force-recreate garage');
-    expect(starts[7]).toContain('up -d searxng');
-    expect(starts[8]).toContain('up -d postgres');
+    expect(starts[4]).toContain('up -d garage');
+    expect(starts[4]).not.toContain('--force-recreate');
+    expect(starts[5]).toContain('up -d searxng');
+    expect(starts[6]).toContain('up -d reader');
+    expect(starts[7]).toContain('up -d postgres');
+    expect(starts[8]).toContain('up -d --force-recreate garage');
+    expect(starts[9]).toContain('up -d searxng');
+    expect(starts[10]).toContain('up -d reader');
+    expect(starts[11]).toContain('up -d postgres');
   }, 30_000);
 
   it('removes partially-created tmux session after pane failure', () => {
@@ -1116,7 +1133,7 @@ describe('setup-env.sh', () => {
   });
 
   describe('agent/.env.development rendering', () => {
-    it('writes the Garage and SearXNG app keys plus DATABASE_URL, never service secrets', () => {
+    it('writes the Garage and SearXNG app keys plus WEB_READER_BASE_URL and DATABASE_URL, never service secrets', () => {
       const root = fixture();
       const result = runSetup(root);
       const devPath = resolve(root, 'agent/.env.development');
@@ -1134,6 +1151,7 @@ describe('setup-env.sh', () => {
       expect(values.GARAGE_SECRET_ACCESS_KEY).toBe(storageValues.GARAGE_SECRET_ACCESS_KEY);
       expect(values.SEARXNG_BASE_URL).toBe('http://127.0.0.1:8888');
       expect(values.SEARXNG_API_KEY).toBe('');
+      expect(values.WEB_READER_BASE_URL).toBe('http://127.0.0.1:8081');
       expect(values.DATABASE_URL).toBe(
         `postgresql://chekku:${storageValues.POSTGRES_PASSWORD}@127.0.0.1:5432/chekku_agent`,
       );
@@ -1371,7 +1389,8 @@ describe('setup-env.sh', () => {
       expect(result.stdout).toContain('LLM_API_KEY');
       expect(result.stdout).toContain('TELEGRAM_BOT_TOKEN');
       expect(result.stdout).toContain('RESEND_API_KEY');
-      expect(result.stdout).toContain('WEB_READER_API_KEY');
+      expect(result.stdout).toContain('LLM_IMAGE_MODEL');
+      expect(result.stdout).not.toContain('WEB_READER_API_KEY');
       expect(result.stdout).toContain('Rerun npm run setup after editing agent/.env.');
     });
   });

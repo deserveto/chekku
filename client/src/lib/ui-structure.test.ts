@@ -131,7 +131,7 @@ describe('requested UI structure', () => {
     );
     expect(agentBuilder).toContain('Web Reader');
     expect(agentBuilder).toContain(
-      'Read one public web page through the fixed hosted Reader and return bounded untrusted Markdown.',
+      'Read one public web page through the self-hosted Reader and return bounded untrusted Markdown.',
     );
     expect(agentBuilder).toContain("set('mcpClients', toggle(values.mcpClients, mcpClientId))");
     expect(agentBuilder).not.toMatch(
