@@ -74,6 +74,28 @@ describe('agent-scoped memory threads', () => {
     expect(threadDelete).not.toHaveBeenCalled();
   });
 
+  it('treats an already-absent thread as a successful deletion', async () => {
+    threadDelete.mockRejectedValueOnce(
+      Object.assign(new Error('HTTP error! status: 404 - {"error":"Thread not found"}'), {
+        status: 404,
+      }),
+    );
+
+    await expect(
+      removeThread('main-agent', 'main-agent-local-user-a', 'local-user'),
+    ).resolves.toBeUndefined();
+  });
+
+  it('re-throws deletion errors other than thread-not-found', async () => {
+    threadDelete.mockRejectedValueOnce(
+      Object.assign(new Error('Server error'), { status: 500 }),
+    );
+
+    await expect(
+      removeThread('main-agent', 'main-agent-local-user-a', 'local-user'),
+    ).rejects.toThrow('Server error');
+  });
+
   it('returns an empty list when the thread does not exist yet (upstream 404 status)', async () => {
     threadListMessages.mockRejectedValueOnce(
       Object.assign(new Error('Request failed with 404'), { status: 404 }),

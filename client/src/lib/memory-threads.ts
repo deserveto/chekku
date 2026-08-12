@@ -212,5 +212,8 @@ export async function removeThread(
 ): Promise<void> {
   assertThreadOwnership(agentId, threadId, resourceId);
   const thread = mastraClient.getMemoryThread({ threadId, agentId });
-  await thread.delete();
+  await thread.delete().catch((error: unknown) => {
+    if (isThreadNotFoundError(error)) return;
+    throw error;
+  });
 }
