@@ -8,12 +8,14 @@ const {
   listAgentThreads,
   listThreadMessages,
   removeThread,
+  agentStream,
   router,
 } = vi.hoisted(() => ({
   listAgentSkills: vi.fn(),
   listAgentThreads: vi.fn(),
   listThreadMessages: vi.fn(),
   removeThread: vi.fn(),
+  agentStream: vi.fn(),
   router: {
     push: vi.fn(),
     replace: vi.fn(),
@@ -22,7 +24,6 @@ const {
 
 vi.mock('next/navigation', () => ({ useRouter: () => router }));
 vi.mock('@/components/agents/agent-icon', () => ({ AgentIcon: () => null }));
-vi.mock('@/components/chat/command-menu', () => ({ CommandMenu: () => null }));
 vi.mock('@/components/markdown-message', () => ({ MarkdownMessage: () => null }));
 vi.mock('@/components/studio/resizable-sidebar', () => ({
   ResizableSidebar: ({
@@ -40,7 +41,12 @@ vi.mock('@/lib/memory-threads', () => ({
   renameThread: vi.fn(),
 }));
 vi.mock('@/lib/mastra-client', () => ({
-  mastraClient: { getAgent: vi.fn(() => ({})) },
+  mastraClient: {
+    getAgent: vi.fn(() => ({
+      stream: agentStream,
+      abortThread: vi.fn(),
+    })),
+  },
 }));
 vi.mock('@/lib/model-registry', () => ({
   loadModelRegistry: vi.fn(async () => ({
@@ -106,14 +112,85 @@ async function confirmDeletion(title: string): Promise<void> {
   });
 }
 
+async function enterComposerText(value: string): Promise<void> {
+  const textarea = container.querySelector<HTMLTextAreaElement>('textarea');
+  expect(textarea).not.toBeNull();
+  const valueSetter = Object.getOwnPropertyDescriptor(
+    HTMLTextAreaElement.prototype,
+    'value',
+  )?.set;
+  expect(valueSetter).toBeDefined();
+
+  await act(async () => {
+    valueSetter!.call(textarea, value);
+    textarea!.dispatchEvent(new Event('input', { bubbles: true }));
+    await Promise.resolve();
+  });
+}
+
+async function submitComposer(): Promise<void> {
+  const form = container.querySelector<HTMLFormElement>('.chat-composer');
+  expect(form).not.toBeNull();
+  await act(async () => {
+    form!.dispatchEvent(
+      new Event('submit', { bubbles: true, cancelable: true }),
+    );
+    await Promise.resolve();
+  });
+  await flushEffects();
+}
+
 beforeEach(async () => {
   vi.clearAllMocks();
-  listAgentSkills.mockResolvedValue([]);
+  listAgentSkills.mockResolvedValue([
+    {
+      name: 'weekly-report-analysis',
+      description: 'Create a weekly product report.',
+      userInvocable: true,
+    },
+  ]);
   listAgentThreads.mockResolvedValue(threads);
-  listThreadMessages.mockResolvedValue([]);
+  listThreadMessages.mockResolvedValue([
+    {
+      id: 'stored-message',
+      role: 'assistant',
+      content: 'Stored response',
+      createdAt: 1,
+    },
+  ]);
   removeThread.mockResolvedValue(undefined);
-  vi.spyOn(crypto, 'randomUUID').mockReturnValue(
-    '00000000-0000-4000-8000-000000000000',
+  agentStream.mockResolvedValue({
+    processDataStream: async ({
+      onChunk,
+    }: {
+      onChunk: (chunk: {
+        type: string;
+        payload: Record<string, unknown>;
+      }) => void;
+    }) => {
+      onChunk({
+        type: 'tool-call',
+        payload: {
+          toolCallId: 'tool-call-1',
+          toolName: 'test_tool',
+          args: { input: 'value' },
+        },
+      });
+      onChunk({
+        type: 'tool-result',
+        payload: {
+          toolCallId: 'tool-call-1',
+          toolName: 'test_tool',
+          result: { ok: true },
+        },
+      });
+      onChunk({ type: 'finish', payload: {} });
+    },
+  });
+  let uuidCounter = 0;
+  vi.spyOn(crypto, 'randomUUID').mockImplementation(
+    () =>
+      `00000000-0000-4000-8000-${String(uuidCounter++).padStart(12, '0')}` as `${string}-${string}-${string}-${string}-${string}`,
   );
 
   document.body.innerHTML = '';
@@ -165,14 +242,57 @@ describe('ChatStudio thread deletion', () => {
   });
 
   it('replaces a deleted active thread with a fresh route and removes it locally', async () => {
+    await enterComposerText('Run a tool');
+    await submitComposer();
+    expect(container.querySelector('.chat-tool-card')).not.toBeNull();
+
+    await enterComposerText('/weekly');
+    expect(container.querySelector('[role="listbox"]')).not.toBeNull();
+
     await confirmDeletion('Active thread');
 
     expect(
       container.querySelector('[aria-label="Delete Active thread"]'),
     ).toBeNull();
     expect(router.push).not.toHaveBeenCalled();
-    expect(router.replace).toHaveBeenCalledWith(
-      '/chat?thread=main-agent-local-user-00000000-0000-4000-8000-000000000000&agent=main-agent',
+    expect(router.replace).toHaveBeenCalledTimes(1);
+    const replacement = new URL(
+      String(router.replace.mock.calls[0]?.[0]),
+      'http://localhost',
     );
+    expect(replacement.pathname).toBe('/chat');
+    expect(replacement.searchParams.get('agent')).toBe('main-agent');
+    expect(replacement.searchParams.get('thread')).toMatch(
+      /^main-agent-local-user-/,
+    );
+    expect(replacement.searchParams.get('thread')).not.toBe(activeThreadId);
+    expect(container.querySelector('.chat-message')).toBeNull();
+    expect(container.querySelector('.chat-tool-card')).toBeNull();
+    expect(container.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe(
+      '',
+    );
+    expect(container.querySelector('[role="listbox"]')).toBeNull();
+    expect(container.querySelector('.studio-alert-error')).toBeNull();
+  });
+
+  it('retains the thread and releases deletion state when removal fails', async () => {
+    removeThread.mockRejectedValueOnce(new Error('Delete unavailable'));
+
+    await confirmDeletion('Other thread');
+
+    const deleteButton = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Delete Other thread"]',
+    );
+    expect(deleteButton).not.toBeNull();
+    expect(deleteButton?.textContent).toBe('×');
+    expect(deleteButton?.disabled).toBe(false);
+    expect(container.querySelector('.studio-alert-error')?.textContent).toContain(
+      'Delete unavailable',
+    );
+    expect(container.querySelector<HTMLDialogElement>('dialog')?.open).toBe(
+      false,
+    );
+    expect(router.push).not.toHaveBeenCalled();
+    expect(router.replace).not.toHaveBeenCalled();
   });
 });

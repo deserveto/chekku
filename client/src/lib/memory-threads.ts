@@ -116,8 +116,8 @@ function assertThreadOwnership(
 function isThreadNotFoundError(value: unknown): boolean {
   if (!(value instanceof Error)) return false;
   const status = (value as { status?: unknown }).status;
-  if (status === 404) return true;
-  return /\b404\b|not found/i.test(value.message);
+  if (status !== undefined) return status === 404;
+  return value.message === 'Thread not found';
 }
 
 export async function listAgentThreads(

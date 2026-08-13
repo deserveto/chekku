@@ -266,6 +266,8 @@ export function ChatStudio({
       if (target.id === threadId) {
         setMessages([]);
         setTools([]);
+        setInput('');
+        setCommandOpen(false);
         replaceWithNew(agentId);
       }
     } catch (reason) {
