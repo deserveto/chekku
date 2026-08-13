@@ -726,7 +726,7 @@ set -a; source storage/.env.local; source searxng/.env.local; set +a
 
 ## Reverse proxy
 
-The client container publishes `127.0.0.1:3000` only (loopback, by design). Production puts a reverse proxy in front to terminate TLS and expose the studio publicly. A ready-to-copy nginx template with Let's Encrypt + WebSocket/SSE support lives at [`ops/nginx/chekku.conf`](../ops/nginx/chekku.conf) with install steps in [`ops/nginx/README.md`](../ops/nginx/README.md).
+The client container publishes `127.0.0.1:3000` only (loopback, by design). Production puts a reverse proxy in front to terminate TLS and expose the studio publicly. A ready-to-copy nginx template with Let's Encrypt, WebSocket/SSE, and streaming support lives at [`ops/nginx/chekku.conf`](../ops/nginx/chekku.conf) with install steps in [`ops/nginx/README.md`](../ops/nginx/README.md).
 
 When the proxy is in place, set in `client/.env.local` and rebuild the client image so the browser bundle picks up the new origin:
 
@@ -736,7 +736,7 @@ NEXT_PUBLIC_APP_URL=https://studio.example.com
 RATE_LIMIT_TRUST_PROXY=true
 ```
 
-`RATE_LIMIT_TRUST_PROXY=true` is safe to set only when the proxy overwrites `x-forwarded-for` with the real client IP (the shipped nginx template does this via `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for`). Without a trusted proxy, leave it unset — the limiter then collapses every anonymous client onto one shared bucket per scope so a spoofed XFF cannot bypass the throttle. See the Authentication section above for the full rate-limit trust model.
+`RATE_LIMIT_TRUST_PROXY=true` is safe to set only when the proxy **overwrites** `x-forwarded-for` with the real client IP. The shipped nginx template does this via `proxy_set_header X-Forwarded-For $remote_addr` — it must NOT use `$proxy_add_x_forwarded_for`, which appends and leaves the client-supplied leftmost entry in place (the app reads that entry, so appending would let a spoofer rotate rate-limit buckets). Behind a CDN that appends to XFF, the same overwrite must be enforced at the edge or the flag stays unset. Without a trusted proxy, leave it unset — the limiter then collapses every anonymous client onto one shared bucket per scope so a spoofed XFF cannot bypass the throttle. See the Authentication section above for the full rate-limit trust model.
 
 ## Production notes
 
