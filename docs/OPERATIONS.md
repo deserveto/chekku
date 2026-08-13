@@ -79,6 +79,8 @@ WEB_READER_BASE_URL=http://127.0.0.1:8081
 
 `scripts/setup-env.sh` writes the canonical dev URL into `agent/.env.development`; in compose prod the service name resolves it (`http://reader:8081`). Empty/unset/invalid `WEB_READER_BASE_URL` does not block startup; `read_web_page` instead returns fixed `Web Reader is not configured.` error when invoked.
 
+Migration note: the retired `WEB_READER_API_KEY` is inert if it lingers in an exported shell environment (nothing reads it), but remove it from shell rc files and CI secrets to avoid confusion — `scripts/setup-env.sh` cleans only the dotenv files.
+
 #### Visual Content Agent (image generation)
 
 The Visual Content Agent generates images on demand for an APPROVED social post through the fixed image model. Add server-owned configuration:
@@ -231,6 +233,7 @@ Self-hosted trust boundary:
 - operators are responsible for the network positioning of the reader service (egress filtering, DNS resolver, proxy);
 - Chekku does not claim end-to-end SSRF or redirect enforcement inside the reader container;
 - the public-URL guard in `parsePublicWebUrl` is the only Chekku-side network control;
+- **intra-network oracle**: the reader endpoint is unauthenticated on the Compose network (`http://reader:8081`), so any peer container can POST URLs to it directly, bypassing `parsePublicWebUrl` — and the image bundles headless Chrome, making it a richer fetch oracle than SearXNG. This is consistent with the shared-`chekku-network` trust domain (any peer can also reach Garage and Postgres), but on a host running untrusted containers, isolate the reader onto a dedicated Compose network that only the agent joins;
 - do not submit signed, OAuth, password-reset, or otherwise secret-bearing URLs.
 
 `read_web_page` accepts one public HTTP(S) URL at most 2,048 UTF-8 bytes. It reads one chosen page only: no search, crawling, recursive link following, authenticated pages, PDFs, uploads, screenshots, persistence, or built-in competitive orchestration. Fixed transport sends one `POST <WEB_READER_BASE_URL origin>/` request, rejects redirects, uses one 30-second deadline, performs no retry, accepts JSON only, and stops response body above 2 MiB. Normalized title is at most 512 UTF-8 bytes; serialized tool output is at most 71,680 UTF-8 bytes with UTF-8-safe Markdown truncation.
@@ -643,7 +646,7 @@ npm run build
 git diff --check
 ```
 
-The test suite covers model routing, model discovery, prompt normalization, all five built-in agents, Telegram roles and slash commands, email delivery, weekly and competitive PM skills/tools/repositories, report APIs/pages and accessible tables, stored-agent payloads and fixed Garage/SearXNG/Web Reader hydration, bounded search and hosted reading transports with safe errors, stored-model migration, thread ownership, proxy paths, UI structure, namespaced storage, Garage adapter safety, Maestro flow runner, char-budget guard, and launcher behavior.
+The test suite covers model routing, model discovery, prompt normalization, all five built-in agents, Telegram roles and slash commands, email delivery, weekly and competitive PM skills/tools/repositories, report APIs/pages and accessible tables, stored-agent payloads and fixed Garage/SearXNG/Web Reader hydration, bounded search and self-hosted reading transports with safe errors, stored-model migration, thread ownership, proxy paths, UI structure, namespaced storage, Garage adapter safety, Maestro flow runner, char-budget guard, and launcher behavior.
 
 ## Production run
 

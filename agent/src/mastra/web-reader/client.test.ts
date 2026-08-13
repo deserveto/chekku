@@ -59,6 +59,53 @@ describe('Jina Reader client', () => {
     });
   });
 
+  it('strips a fragment from the configured base URL origin', async () => {
+    const fetch = vi.fn(async () => jsonResponse(payload()));
+    const client = createJinaReaderClient({ baseUrl: 'http://reader.test:8081/#section', fetch });
+
+    await client.read('https://example.com/');
+
+    expect(fetch).toHaveBeenCalledWith('http://reader.test:8081/', expect.anything());
+  });
+
+  it('uses the 30-second default deadline when no timeoutMs is supplied', async () => {
+    let requestedSignal: AbortSignal | undefined;
+    const fetch = vi.fn((_url: URL | RequestInfo, init?: RequestInit) => {
+      requestedSignal = init?.signal ?? undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), {
+          once: true,
+        });
+      });
+    });
+    const client = createJinaReaderClient({ baseUrl: 'http://reader.test', fetch });
+    const result = client.read('https://example.com/');
+    // Resolve once the client's internal AbortSignal.timeout fires.
+    await new Promise<void>((resolve) => {
+      requestedSignal?.addEventListener('abort', () => resolve(), { once: true });
+    });
+
+    await expect(result).rejects.toThrow('Web Reader timed out. Try again.');
+  }, 40_000);
+
+  it('accepts the plain status: 200 envelope variant', async () => {
+    const fetch = vi.fn(async () => jsonResponse({
+      code: 200,
+      status: 200,
+      data: {
+        title: 'Example',
+        url: 'https://example.com/',
+        content: '# Example\n\nPublic content.',
+      },
+    }));
+    const client = createJinaReaderClient({ baseUrl: 'http://reader.test', fetch });
+
+    await expect(client.read('https://example.com/')).resolves.toMatchObject({
+      title: 'Example',
+      markdown: '# Example\n\nPublic content.',
+    });
+  });
+
   it.each(['', '   ', 'bad\r\nurl: injected', 'not-a-url', 'ftp://reader.test/', 'javascript:void(0)'])(
     'fails safely for missing or malformed base URL %#',
     async (baseUrl) => {

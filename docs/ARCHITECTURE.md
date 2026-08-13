@@ -122,7 +122,7 @@ Secrets are injected exclusively through Compose `environment:` interpolation; n
 - `storedAgentTools` (`calculatorTool`, `getCurrentTimeTool`, and `sendEmailTool`) for stored-agent hydration;
 - `garageMcpServer` for generic agent-isolated object storage;
 - `searxngMcpServer` for fixed read-only web search by selected stored agents;
-- `webReaderMcpServer` for fixed read-only hosted page reading by selected stored agents;
+- `webReaderMcpServer` for fixed read-only self-hosted page reading by selected stored agents;
 - `PostgresStore` (`@mastra/pg`);
 - `MastraEditor` with database storage;
 - `OpenAICompatibleGateway`;
@@ -486,7 +486,7 @@ Add future functionality through these boundaries:
 - code-defined agents in `agent/src/agents/`;
 - registered stored-agent tools in `agent/src/mastra/tools/`;
 - provider-neutral gateway behavior in `agent/src/mastra/gateways/`;
-- bounded search transport in `agent/src/mastra/searxng/` and one-page hosted reading in `agent/src/mastra/web-reader/`, without adding crawling or authenticated fetching;
+- bounded search transport in `agent/src/mastra/searxng/` and one-page self-hosted reading in `agent/src/mastra/web-reader/`, without adding crawling or authenticated fetching;
 - server request context and future authentication seam;
 - routed client components and Mastra client helpers.
 

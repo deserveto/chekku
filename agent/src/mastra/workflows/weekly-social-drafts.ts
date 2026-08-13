@@ -644,9 +644,11 @@ export function createDefaultSearch(): SearchFn | undefined {
  * startup, per AGENTS.md — the workflow degrades gracefully without it.
  */
 export function createDefaultReadPage(): ReadPageFn | undefined {
-  const baseUrl = env.WEB_READER_BASE_URL;
-  console.log(`[weekly-social-drafts] createDefaultReadPage: WEB_READER_BASE_URL ${baseUrl && baseUrl.trim().length > 0 ? `is set (${baseUrl.trim().length} chars)` : 'is EMPTY'}`);
-  if (!baseUrl || baseUrl.trim().length === 0) return undefined;
+  const baseUrl = env.WEB_READER_BASE_URL.trim();
+  // The base URL is the self-hosted Reader origin (no secret; the old key-based
+  // length-redaction does not apply), so log it directly for operator sanity.
+  console.log(`[weekly-social-drafts] createDefaultReadPage: WEB_READER_BASE_URL ${baseUrl || 'is EMPTY'}`);
+  if (!baseUrl) return undefined;
   return async (url: string): Promise<WebReaderOutput> => {
     const output = await readWebPageTool.execute!({ url }, READ_TOOL_CONTEXT);
     return output as WebReaderOutput;

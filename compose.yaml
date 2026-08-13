@@ -51,10 +51,14 @@ services:
   reader:
     # Self-hosted Jina Reader OSS. Stateless by default — no cache, no auth,
     # no API key. The HTTP/1.1 port (8081 in the container) is what Chekku's
-    # client talks to; the h2c port (8080) stays unpublishd. The same image
+    # client talks to; the h2c port (8080) stays unpublished. The same image
     # powers the hosted r.jina.ai service, so the Markdown envelope contract
     # ({code, status, data: {title, url, content}}) is identical.
-    image: ghcr.io/jina-ai/reader:oss
+    # Pinned by digest (tag :oss floats; the digest is the multi-arch index,
+    # so amd64 and arm64 hosts both resolve). To update, pull the new digest,
+    # smoke-test read_web_page, and update here:
+    #   docker manifest inspect ghcr.io/jina-ai/reader:oss | grep digest | head -1
+    image: ghcr.io/jina-ai/reader:oss@sha256:8cc9a5cf6dc9c240235fccc0026661de74b6e13c21b36e6a86b3281b9ef10f28
     restart: unless-stopped
     ports:
       # Loopback publish for scripts/dev.sh (agent/.env.development pins
