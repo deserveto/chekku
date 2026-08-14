@@ -74,6 +74,82 @@ describe('agent-scoped memory threads', () => {
     expect(threadDelete).not.toHaveBeenCalled();
   });
 
+  it('treats an already-absent thread as a successful deletion', async () => {
+    threadDelete.mockRejectedValueOnce(
+      Object.assign(new Error('HTTP error! status: 404 - {"error":"Thread not found"}'), {
+        status: 404,
+      }),
+    );
+
+    await expect(
+      removeThread('main-agent', 'main-agent-local-user-a', 'local-user'),
+    ).resolves.toBeUndefined();
+    expect(threadDelete).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts the upstream thread-not-found message when no status is available', async () => {
+    threadDelete.mockRejectedValueOnce(new Error('Thread not found'));
+
+    await expect(
+      removeThread('main-agent', 'main-agent-local-user-a', 'local-user'),
+    ).resolves.toBeUndefined();
+    expect(threadDelete).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-throws deletion errors other than thread-not-found', async () => {
+    threadDelete.mockRejectedValueOnce(
+      Object.assign(new Error('Server error'), { status: 500 }),
+    );
+
+    await expect(
+      removeThread('main-agent', 'main-agent-local-user-a', 'local-user'),
+    ).rejects.toThrow('Server error');
+  });
+
+  it('does not let a thread-not-found message override an explicit non-404 status', async () => {
+    threadDelete.mockRejectedValueOnce(
+      Object.assign(new Error('Thread not found'), { status: 500 }),
+    );
+
+    await expect(
+      removeThread('main-agent', 'main-agent-local-user-a', 'local-user'),
+    ).rejects.toThrow('Thread not found');
+  });
+
+  it('does not treat an unrelated not-found message as a missing thread', async () => {
+    threadDelete.mockRejectedValueOnce(new Error('Search index not found'));
+
+    await expect(
+      removeThread('main-agent', 'main-agent-local-user-a', 'local-user'),
+    ).rejects.toThrow('Search index not found');
+  });
+
+  it('does not swallow an extended status-less deletion error', async () => {
+    threadDelete.mockRejectedValueOnce(
+      new Error('Thread not found while storage is unavailable'),
+    );
+
+    await expect(
+      removeThread('main-agent', 'main-agent-local-user-a', 'local-user'),
+    ).rejects.toThrow('Thread not found while storage is unavailable');
+  });
+
+  it('rejects a rename when the thread is already absent', async () => {
+    threadGet.mockRejectedValueOnce(
+      Object.assign(new Error('Thread not found'), { status: 404 }),
+    );
+
+    await expect(
+      renameThread(
+        'main-agent',
+        'main-agent-local-user-a',
+        'local-user',
+        'New title',
+      ),
+    ).rejects.toThrow('Thread not found');
+    expect(threadUpdate).not.toHaveBeenCalled();
+  });
+
   it('returns an empty list when the thread does not exist yet (upstream 404 status)', async () => {
     threadListMessages.mockRejectedValueOnce(
       Object.assign(new Error('Request failed with 404'), { status: 404 }),
@@ -88,6 +164,15 @@ describe('agent-scoped memory threads', () => {
     await expect(
       listThreadMessages('main-agent', 'main-agent-local-user-a', 'local-user'),
     ).resolves.toEqual([]);
+  });
+
+  it('re-throws an extended status-less message-read error', async () => {
+    threadListMessages.mockRejectedValueOnce(
+      new Error('Thread not found while storage is unavailable'),
+    );
+    await expect(
+      listThreadMessages('main-agent', 'main-agent-local-user-a', 'local-user'),
+    ).rejects.toThrow('Thread not found while storage is unavailable');
   });
 
   it('re-throws errors that are not thread-not-found', async () => {

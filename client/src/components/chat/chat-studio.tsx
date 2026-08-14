@@ -234,6 +234,17 @@ export function ChatStudio({
     [agentId, resourceId, router],
   );
 
+  const replaceWithNew = useCallback(
+    (nextAgentId: string = agentId) => {
+      const nextThreadId = createOwnedThreadId(
+        nextAgentId,
+        resourceId,
+      );
+      router.replace(buildChatHref(nextAgentId, nextThreadId));
+    },
+    [agentId, resourceId, router],
+  );
+
   const openThread = (next: StudioThread) => {
     if (isStreaming) return;
     const nextAgentId = next.agentId || agentId;
@@ -248,10 +259,16 @@ export function ChatStudio({
     setDeletingThreadId(target.id);
     try {
       await removeThread(agentId, target.id, resourceId);
+      setThreads((current) =>
+        current.filter((thread) => thread.id !== target.id),
+      );
+      setError(undefined);
       if (target.id === threadId) {
-        startNew(agentId);
-      } else {
-        await refreshThreads();
+        setMessages([]);
+        setTools([]);
+        setInput('');
+        setCommandOpen(false);
+        replaceWithNew(agentId);
       }
     } catch (reason) {
       setError(
