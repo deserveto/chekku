@@ -265,6 +265,7 @@ const garageKeys = [
   'GARAGE_ACCESS_KEY_ID', 'GARAGE_SECRET_ACCESS_KEY',
 ];
 const searxngKeys = ['SEARXNG_BASE_URL', 'SEARXNG_API_KEY'];
+const webReaderKeys = ['WEB_READER_BASE_URL'];
 const serviceSecretNames = [
   'GARAGE_RPC_SECRET', 'GARAGE_ADMIN_TOKEN', 'GARAGE_METRICS_TOKEN',
   'SEARXNG_SECRET', 'SEARXNG_CONFIG_HASH',
@@ -328,6 +329,7 @@ let source = readFileSync(sourcePath, 'utf8');
 const userValues = parse(source);
 source = removeAssignments('GARAGE_')(source);
 source = removeAssignments('SEARXNG_')(source);
+source = removeAssignments('WEB_READER_')(source);
 source = removeAssignments('DATABASE_')(source);
 
 for (const name of serviceSecretNames) {
@@ -346,6 +348,9 @@ const searxngAssignments = searxngKeys.map((name) => {
   }
   return serialize(name, process.env[name] ?? '');
 });
+// Reader is a self-hosted stateless container with no secrets; the dev URL is
+// fixed and only the host port is overridable (mirroring SearXNG's pattern).
+const webReaderAssignments = webReaderKeys.map((name) => serialize(name, 'http://127.0.0.1:8081'));
 const userDatabaseUrl =
   typeof userValues.DATABASE_URL === 'string' && userValues.DATABASE_URL !== ''
     ? userValues.DATABASE_URL
@@ -361,7 +366,7 @@ const databaseAssignment = userDatabaseUrl
       );
     })();
 const separator = source.length > 0 && !source.endsWith('\n') ? '\n' : '';
-writeFileSync(outputPath, `${source}${separator}${[...garageAssignments, ...searxngAssignments, databaseAssignment].join('\n')}\n`);
+writeFileSync(outputPath, `${source}${separator}${[...garageAssignments, ...searxngAssignments, ...webReaderAssignments, databaseAssignment].join('\n')}\n`);
 NODE
   chmod 600 "$tmp"
   if [[ -f "$AGENT_DEV_ENV_FILE" ]] && cmp -s "$tmp" "$AGENT_DEV_ENV_FILE"; then
@@ -637,7 +642,6 @@ NODE
   echo "  - TELEGRAM_BOT_TOKEN   (social-media-agent)"
   echo "  - RESEND_API_KEY       (send-email tool)"
   echo "  - MAESTRO_ENABLED      (qa-android-agent)"
-  echo "  - WEB_READER_API_KEY   (read_web_page)"
   echo "  - LLM_IMAGE_MODEL      (visual-content-agent generate_image)"
   echo ""
   echo "Rerun npm run setup after editing agent/.env."

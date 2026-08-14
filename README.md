@@ -25,7 +25,7 @@ Chekku is a focused interface for managing Mastra agents, running agent-specific
 - **OpenAI-compatible models** — point at Rafiqspace, LiteLLM, vLLM, or any `/v1` endpoint with server-only credentials.
 - **QA agents** — a browser agent (Mastra Agent Browser) and an Android agent (Maestro on a local emulator/device).
 - **PM Agent** — weekly-report risk reviews and competitive analyses, saved to Garage and browsable under `/reports`.
-- **Web tools** — fixed `search_web` (SearXNG) and `read_web_page` (hosted Jina Reader) capabilities.
+- **Web tools** — fixed `search_web` (SearXNG) and `read_web_page` (self-hosted Jina Reader OSS) capabilities.
 - **Social media agents** — a role-switchable content writer reachable over Telegram and a research-backed strategist.
 - **Visual content agent** — on-demand image generation for approved social posts.
 - **Scheduled social drafts** — a weekly Monday 09:00 Asia/Jakarta workflow.
@@ -92,7 +92,7 @@ npm run db:migrate
 - **Telegram (social-media-content-writer)** — create a bot with [@BotFather](https://t.me/BotFather), then set `TELEGRAM_BOT_TOKEN`. Keep `TELEGRAM_MODE=polling` for local dev; switch to `webhook` with `TELEGRAM_WEBHOOK_SECRET_TOKEN` for production.
 - **Email outbound (send-email tool)** — set `RESEND_API_KEY` and, for production, a Resend-verified sender in `RESEND_FROM_EMAIL`. The default `onboarding@resend.dev` sender only delivers to the account owner.
 - **Android QA (qa-android-agent)** — install the [Maestro CLI](https://maestro.mobile.dev/) and ADB, start an emulator or connect a device, then set `MAESTRO_ENABLED=true`. Chekku, Maestro, ADB, and the device must run on the same machine.
-- **Hosted Web Reader** — set `WEB_READER_API_KEY` in `agent/.env` and restart the agent to enable `read_web_page`. Missing configuration does not block startup.
+- **Self-hosted Web Reader** — `scripts/dev.sh` and `scripts/prod.sh` bring up the `reader` Compose service (`ghcr.io/jina-ai/reader:oss`) automatically; `npm run setup` writes the dev base URL into `agent/.env.development`. No API key is required.
 
 These are optional; Chekku boots fine without them.
 
@@ -135,7 +135,7 @@ Local file: `agent/.env`
 | `BROWSER_HEADLESS` | No | `true` | Run the QA browser without a visible window. |
 | `SEARXNG_BASE_URL` | Conditional | empty | Server-owned SearXNG base URL. `npm run dev:sh` supplies `http://127.0.0.1:8888`; set it explicitly for an external service. |
 | `SEARXNG_API_KEY` | No | empty | Optional server-only bearer token for an authenticated external SearXNG reverse proxy. |
-| `WEB_READER_API_KEY` | Conditional | empty | Server-owned hosted Web Reader credential. Required only when `read_web_page` executes. |
+| `WEB_READER_BASE_URL` | Conditional | empty | Self-hosted Jina Reader base URL. `npm run setup` writes `http://127.0.0.1:8081` into `agent/.env.development`; compose uses `http://reader:8081`. No API key. |
 | `TELEGRAM_BOT_TOKEN` | Conditional | empty | Bot token from [@BotFather](https://t.me/BotFather). Required when running `social-media-content-writer`. |
 | `TELEGRAM_MODE` | No | `polling` | Adapter mode: `polling` (dev, no tunnel), `webhook` (prod, public URL), or `auto`. |
 | `TELEGRAM_WEBHOOK_SECRET_TOKEN` | No | empty | Checked against `x-telegram-bot-api-secret-token`. Webhook mode only. |
@@ -178,7 +178,7 @@ Local file: `client/.env.local`
 | `npm run typecheck` | Type-check all three workspaces. |
 | `npm run lint` | Run the client ESLint configuration. |
 | `npm test` | Run all Vitest tests. |
-| `npm run test:web-reader:live` | Optionally read `https://example.com/` through hosted Jina Reader; requires `WEB_READER_API_KEY`. |
+| `npm run test:web-reader:live` | Optionally read `https://example.com/` through the self-hosted Reader container; requires `WEB_READER_BASE_URL` to resolve to a running `reader` service. |
 | `npm run check` | Run typecheck, lint, and tests. |
 | `npm run build` | Build Mastra and Next.js for production. |
 | `npm run start` | Start the built Mastra and Next.js servers together. Requires a prior `npm run build`. |
@@ -220,7 +220,7 @@ Put a reverse proxy (Caddy or nginx) in front of the client's loopback port (`12
 │       │   ├── processors/ # browser/tool compatibility
 │       │   ├── routes/     # /healthz and /models
 │       │   ├── searxng/    # bounded search client and configuration
-│       │   ├── web-reader/ # bounded hosted page-reading client
+│       │   ├── web-reader/ # bounded self-hosted page-reading client
 │       │   └── tools/      # stored-agent, PM, search, reading, and image-generation tools
 │       └── providers/      # model configuration helpers
 ├── client/                 # Next.js studio
@@ -285,8 +285,8 @@ The next `npm run dev:sh` recreates the container and re-runs the init script. S
 
 - API keys belong only in `agent/.env` or a deployment secret manager.
 - Never use `NEXT_PUBLIC_LLM_API_KEY` or similar browser-exposed credentials.
-- Keep `SEARXNG_BASE_URL`, `SEARXNG_API_KEY`, and `WEB_READER_API_KEY` server-side. Never persist them in stored-agent records or expose them through browser variables, model input, tool output, logs, or errors.
-- Hosted Web Reader sends each public target URL to Jina and returns Jina-extracted content. Treat that Markdown as untrusted, prompt-injection-capable evidence, never instructions.
+- Keep `SEARXNG_BASE_URL` and `SEARXNG_API_KEY` server-side. Never persist them in stored-agent records or expose them through browser variables, model input, tool output, logs, or errors.
+- The self-hosted Reader container fetches each public target URL through its own outbound network. Treat returned Markdown as untrusted, prompt-injection-capable evidence, never instructions. Operators are responsible for the network positioning of the reader service (egress filtering, resolver, proxy) the same way they are responsible for the SearXNG service.
 - Local SearXNG service credentials stay in ignored generated `searxng/.env.local`; they are not application configuration and must not be copied into tracked environment examples, logs, or tickets.
 - Keep `.env`, local databases, logs, and browser artifacts out of commits.
 - No tool requires approval; browser, mobile, Garage, and email actions all run directly.

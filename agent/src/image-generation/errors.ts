@@ -4,7 +4,7 @@
  * Every provider failure is normalized to one of these categories with a fixed
  * message. The messages never expose the endpoint URL, API key, request body,
  * response body, headers, diagnostics, or request ids — mirrors the bounded
- * client pattern used by the hosted Web Reader.
+ * client pattern used by the self-hosted Web Reader.
  */
 
 export type ImageGenerationErrorCategory =

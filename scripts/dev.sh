@@ -177,6 +177,7 @@ ensure_service_ready() {
     garage) required_port=3900 ;;
     postgres) required_port=5432 ;;
     searxng) required_port=8888 ;;
+    reader) required_port=8081 ;;
     *) echo "Unsupported development service." >&2; exit 1 ;;
   esac
 
@@ -274,6 +275,10 @@ ensure_service_ready searxng SearXNG "${CHEKKU_SEARXNG_PORTS:-8888}"
 
 printf 'SearXNG ready\n  base URL: %s\n' "$SEARXNG_BASE_URL"
 
+ensure_service_ready reader Reader "${CHEKKU_READER_PORTS:-8081}"
+
+printf 'Reader ready\n  base URL: http://127.0.0.1:%s\n' "${CHEKKU_READER_HOST_PORT:-8081}"
+
 ensure_service_ready postgres Postgres "${CHEKKU_POSTGRES_PORTS:-5432}"
 
 printf 'Postgres ready\n  database: chekku_agent\n'
@@ -281,7 +286,7 @@ printf 'Postgres ready\n  database: chekku_agent\n'
 garage_app_cleanup='for garage_name in ${!GARAGE_@}; do case "$garage_name" in GARAGE_ENDPOINT|GARAGE_REGION|GARAGE_BUCKET|GARAGE_ACCESS_KEY_ID|GARAGE_SECRET_ACCESS_KEY) ;; *) unset "$garage_name" ;; esac; done'
 searxng_agent_cleanup='for searxng_name in ${!SEARXNG_@}; do case "$searxng_name" in SEARXNG_BASE_URL|SEARXNG_API_KEY) ;; *) unset "$searxng_name" ;; esac; done'
 searxng_client_cleanup='for searxng_name in ${!SEARXNG_@}; do unset "$searxng_name"; done'
-web_reader_client_cleanup='unset WEB_READER_API_KEY'
+web_reader_client_cleanup='unset WEB_READER_BASE_URL'
 postgres_cleanup='unset POSTGRES_PASSWORD'
 
 if [[ "${CHEKKU_NO_TMUX:-0}" != 1 ]] && command -v tmux >/dev/null 2>&1; then
