@@ -18,6 +18,7 @@ import {
   buildRepurposePrompt,
   buildSourceBlock,
   buildTitleHint,
+  createDefaultReadPage,
   defaultGenerateCanonical,
   defaultRepurpose,
   renderReviewEmail,
@@ -39,7 +40,7 @@ const envMock = vi.hoisted(() => ({
   SEARXNG_BASE_URL: '',
   PUBLIC_HOLIDAY_API_BASE_URL: '',
   PUBLIC_HOLIDAY_CACHE_DIR: '',
-  WEB_READER_API_KEY: '',
+  WEB_READER_BASE_URL: '',
 }));
 
 vi.mock('../../../config/env.js', () => ({ env: envMock }));
@@ -127,6 +128,55 @@ describe('pure helpers', () => {
     expect(buildPostUrl('smp_20260713120000_abcd1234', 'http://localhost:3000/')).toBe(
       'http://localhost:3000/social-posts/smp_20260713120000_abcd1234',
     );
+  });
+
+  it('createDefaultReadPage returns undefined when WEB_READER_BASE_URL is empty', () => {
+    envMock.WEB_READER_BASE_URL = '';
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      expect(createDefaultReadPage()).toBeUndefined();
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining('WEB_READER_BASE_URL is EMPTY'),
+      );
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('createDefaultReadPage returns a read fn bound to readWebPageTool when configured', async () => {
+    envMock.WEB_READER_BASE_URL = 'http://127.0.0.1:8081';
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const output = {
+      requestedUrl: 'https://source.example.test/article',
+      sourceUrl: 'https://source.example.test/article',
+      title: 'Source Article',
+      markdown: '# Source Article\n\nBody.',
+      contentIsUntrusted: true as const,
+      truncated: false,
+    };
+    const readModule = await import('../../tools/web-reader.js');
+    const execute = vi.fn(async () => output);
+    const toolSpy = vi.spyOn(readModule, 'readWebPageTool', 'get').mockReturnValue({
+      execute,
+    } as never);
+    try {
+      const readPage = createDefaultReadPage();
+      expect(readPage).toBeTypeOf('function');
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining('WEB_READER_BASE_URL http://127.0.0.1:8081'),
+      );
+
+      const result = await readPage!('https://source.example.test/article');
+      expect(result).toEqual(output);
+      expect(execute).toHaveBeenCalledWith(
+        { url: 'https://source.example.test/article' },
+        expect.anything(),
+      );
+    } finally {
+      toolSpy.mockRestore();
+      log.mockRestore();
+      envMock.WEB_READER_BASE_URL = '';
+    }
   });
 
   it('buildRepurposePrompt forbids Assumption/Note preambles and meta-commentary for trending topics', () => {
@@ -505,7 +555,7 @@ describe('runWeeklySocialDrafts', () => {
     envMock.SEARXNG_BASE_URL = '';
     envMock.PUBLIC_HOLIDAY_API_BASE_URL = '';
     envMock.PUBLIC_HOLIDAY_CACHE_DIR = '';
-    envMock.WEB_READER_API_KEY = '';
+    envMock.WEB_READER_BASE_URL = '';
   });
 
   it('drafts, persists via MCP create_text_object, and notifies for 2 topics on the happy path', async () => {

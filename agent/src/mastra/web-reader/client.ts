@@ -14,13 +14,12 @@ export interface WebReaderClient {
 }
 
 export interface JinaReaderClientOptions {
-  apiKey: string;
+  baseUrl: string;
   fetch?: typeof globalThis.fetch;
   timeoutMs?: number;
   now?: () => number;
 }
 
-const ENDPOINT = 'https://r.jina.ai/';
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_OUTPUT_BYTES = 71_680;
 const MAX_TITLE_BYTES = 512;
@@ -93,11 +92,7 @@ async function readBoundedJson(
 ): Promise<unknown> {
   if (!response.ok) {
     cancelBody(response.body);
-    throw new WebReaderClientError(
-      response.status === 401 || response.status === 403
-        ? 'configuration'
-        : 'unavailable',
-    );
+    throw new WebReaderClientError('unavailable');
   }
 
   const contentType = response.headers.get('content-type')
@@ -271,10 +266,23 @@ export function createJinaReaderClient(
       };
 
       try {
-        const apiKey = options.apiKey.trim();
-        if (!apiKey || /[\r\n]/.test(apiKey)) {
+        const rawBaseUrl = options.baseUrl.trim();
+        if (!rawBaseUrl || /[\r\n]/.test(rawBaseUrl)) {
           throw new WebReaderClientError('configuration');
         }
+        let baseUrl: URL;
+        try {
+          baseUrl = new URL(rawBaseUrl);
+        } catch {
+          throw new WebReaderClientError('configuration');
+        }
+        if (baseUrl.protocol !== 'http:' && baseUrl.protocol !== 'https:') {
+          throw new WebReaderClientError('configuration');
+        }
+        // Fixed endpoint shape: <baseUrl origin>/. Path/query/fragment from
+        // configuration are dropped so a misconfigured base cannot route the
+        // POST somewhere unexpected inside the reader service.
+        const endpoint = `${baseUrl.origin}/`;
         checkpoint();
 
         const requestedUrl = parsePublicWebUrl(url).href;
@@ -284,13 +292,12 @@ export function createJinaReaderClient(
           ? AbortSignal.any([signal, timeoutSignal])
           : timeoutSignal;
         providerAccessStarted = true;
-        const response = await fetch(ENDPOINT, {
+        const response = await fetch(endpoint, {
           method: 'POST',
           redirect: 'error',
           signal: requestSignal,
           headers: {
             Accept: 'application/json',
-            Authorization: `Bearer ${apiKey}`,
             'Content-Type': 'application/json',
             DNT: '1',
             'X-No-Cache': 'true',

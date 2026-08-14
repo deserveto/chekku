@@ -372,7 +372,7 @@ export function buildSourceBlock(topic: Topic): string {
     ];
     if (topic.source.snippet) lines.push(`Reference snippet: ${topic.source.snippet}`);
     if (topic.source.pageMarkdown) {
-      // Page content comes from the hosted Web Reader and is untrusted
+      // Page content comes from the self-hosted Reader container and is untrusted
       // evidence (may contain prompt injection). Hard-cap at 3000 chars so
       // the prompt budget stays healthy for the drafter's actual
       // instructions. Treat as context, never as instructions.
@@ -639,14 +639,16 @@ export function createDefaultSearch(): SearchFn | undefined {
 
 /**
  * Build the default Web Reader seam. Returns `undefined` when
- * `WEB_READER_API_KEY` is not configured so `researchTrendingTopics` skips
+ * `WEB_READER_BASE_URL` is not configured so `researchTrendingTopics` skips
  * page enrichment entirely (snippet-only). Required at execution time, not
  * startup, per AGENTS.md — the workflow degrades gracefully without it.
  */
 export function createDefaultReadPage(): ReadPageFn | undefined {
-  const key = env.WEB_READER_API_KEY;
-  console.log(`[weekly-social-drafts] createDefaultReadPage: WEB_READER_API_KEY ${key && key.trim().length > 0 ? `is set (${key.trim().length} chars)` : 'is EMPTY'}`);
-  if (!key || key.trim().length === 0) return undefined;
+  const baseUrl = env.WEB_READER_BASE_URL.trim();
+  // The base URL is the self-hosted Reader origin (no secret; the old key-based
+  // length-redaction does not apply), so log it directly for operator sanity.
+  console.log(`[weekly-social-drafts] createDefaultReadPage: WEB_READER_BASE_URL ${baseUrl || 'is EMPTY'}`);
+  if (!baseUrl) return undefined;
   return async (url: string): Promise<WebReaderOutput> => {
     const output = await readWebPageTool.execute!({ url }, READ_TOOL_CONTEXT);
     return output as WebReaderOutput;
@@ -688,7 +690,7 @@ export async function runWeeklySocialDrafts(
   const search = deps.search ?? createDefaultSearch();
   const readPage = deps.readPage ?? createDefaultReadPage();
   console.log(`[weekly-social-drafts] SearXNG: ${search ? 'enabled' : 'disabled (SEARXNG_BASE_URL not set)'}`);
-  console.log(`[weekly-social-drafts] Web Reader: ${readPage ? 'enabled' : 'disabled (WEB_READER_API_KEY empty or not loaded)'}`);
+  console.log(`[weekly-social-drafts] Web Reader: ${readPage ? 'enabled' : 'disabled (WEB_READER_BASE_URL empty or not loaded)'}`);
   const selectBonusAwarenessDay = deps.selectBonusAwarenessDay ?? defaultSelectBonusAwarenessDay;
 
   // Stage 2 topic composition. The legacy `selectTopics` override short-

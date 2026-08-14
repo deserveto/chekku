@@ -7,10 +7,10 @@ const live = process.env.npm_lifecycle_event === 'test:web-reader:live';
 
 describe.skipIf(!live)('Jina Reader live smoke test', () => {
   it('reads one public page into bounded untrusted output', async () => {
-    const apiKey = process.env.WEB_READER_API_KEY?.trim();
-    if (!apiKey) throw new Error('WEB_READER_API_KEY is required for live Web Reader tests.');
+    const baseUrl = process.env.WEB_READER_BASE_URL?.trim();
+    if (!baseUrl) throw new Error('WEB_READER_BASE_URL is required for live Web Reader tests.');
 
-    const output = await createJinaReaderClient({ apiKey }).read('https://example.com/');
+    const output = await createJinaReaderClient({ baseUrl }).read('https://example.com/');
 
     expect({
       requestedUrl: output.requestedUrl === 'https://example.com/',

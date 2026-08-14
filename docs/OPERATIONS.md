@@ -17,7 +17,7 @@ The launcher provisions local Garage and SearXNG configuration, waits for both s
 - Mastra on `http://localhost:4111`;
 - Next.js on `http://localhost:3000`.
 
-Web Reader is not a local service. Chekku calls hosted Jina Reader directly from the Mastra process only when `read_web_page` executes.
+Web Reader runs as a `reader` Compose service (`ghcr.io/jina-ai/reader:oss`) — stateless, unauthenticated, no API key. `scripts/setup-env.sh` writes `WEB_READER_BASE_URL=http://127.0.0.1:8081` into `agent/.env.development`; compose uses `http://reader:8081`. Chekku calls it from the Mastra process only when `read_web_page` executes.
 
 It exports these five Garage application values to both the Mastra process and the Next.js server boundary; do not copy generated credentials into tracked files:
 
@@ -71,15 +71,15 @@ SEARXNG_API_KEY=replace-with-server-only-reverse-proxy-token
 
 The endpoint must use HTTP or HTTPS and must not contain URL credentials, query parameters, or a fragment. `SEARXNG_API_KEY` is optional; when present, Chekku sends it as a bearer token to fixed `/config` and `/search` paths. Keep both values server-side. An empty `SEARXNG_BASE_URL` leaves search unconfigured and makes `search_web` fail closed without preventing other agent features from starting.
 
-To enable hosted page reading, add provider-neutral server credential:
+Chekku self-hosts Jina Reader via the `reader` Compose service (`ghcr.io/jina-ai/reader:oss`). The container is stateless and unauthenticated — there is no API key. The agent reaches it via:
 
 ```dotenv
-WEB_READER_API_KEY=replace-with-server-owned-key
+WEB_READER_BASE_URL=http://127.0.0.1:8081
 ```
 
-Keep key only in agent process or deployment secret manager. Missing or malformed key does not block startup; `read_web_page` instead returns fixed `Web Reader is not configured.` error when invoked. Chekku provides no anonymous fallback.
+`scripts/setup-env.sh` writes the canonical dev URL into `agent/.env.development`; in compose prod the service name resolves it (`http://reader:8081`). Empty/unset/invalid `WEB_READER_BASE_URL` does not block startup; `read_web_page` instead returns fixed `Web Reader is not configured.` error when invoked.
 
-For local development, rerun `npm run setup` after editing `agent/.env` so the key is copied into generated `agent/.env.development`, then restart the agent.
+Migration note: the retired `WEB_READER_API_KEY` is inert if it lingers in an exported shell environment (nothing reads it), but remove it from shell rc files and CI secrets to avoid confusion — `scripts/setup-env.sh` cleans only the dotenv files.
 
 #### Visual Content Agent (image generation)
 
@@ -213,41 +213,44 @@ docker compose --env-file storage/.env.local --env-file searxng/.env.local down
 
 Do not add `--volumes` or run `docker volume rm` during normal shutdown or application/database reset. SearXNG cache and all Garage objects remain available for the next startup.
 
-## Hosted Web Reader
+## Self-hosted Web Reader
 
-Jina Reader is an external hosted API at fixed endpoint `https://r.jina.ai/`. Chekku's `web-reader` MCP is only a fixed local in-process wrapper around that API, never a dynamically configurable remote MCP server. There is no local Reader container, endpoint setting, provider selector, fallback provider, or anonymous mode.
+Chekku self-hosts Jina Reader via the `reader` Compose service (`ghcr.io/jina-ai/reader:oss`) — the same image that powers the hosted `r.jina.ai` API, bundled with headless Chrome, LibreOffice, and CJK fonts. The container is stateless and unauthenticated; there is no API key. Chekku's `web-reader` MCP is a fixed local in-process wrapper around the reader container, never a dynamically configurable remote MCP server. There is no endpoint setting, provider selector, fallback provider, anonymous mode, or path back to the hosted `r.jina.ai` service.
 
 PM Agent has `search_web` and `read_web_page` directly. Stored agents may select SearXNG and Web Reader independently or together. Normal flow:
 
 ```text
 PM Agent / selected stored agent
   -> search_web -> fixed SearXNG -> candidate URLs/snippets
-  -> read_web_page -> fixed Web Reader client -> hosted Jina Reader
+  -> read_web_page -> fixed Web Reader client -> self-hosted Reader container
   -> bounded untrusted Markdown
 ```
 
-Hosted-provider privacy and network boundary:
+Self-hosted trust boundary:
 
-- public target URL and extracted page content pass through Jina;
-- Chekku does not control Jina's retention, remote DNS resolution, target redirects, provider availability, or provider-side network isolation;
-- Chekku validates submitted and provider-reported URLs, but Jina performs remote DNS resolution and target fetching;
+- the reader container is part of the Chekku stack's SSRF/trust boundary, like Garage and SearXNG;
+- Chekku controls the reader container; the container controls its own outbound network;
+- operators are responsible for the network positioning of the reader service (egress filtering, DNS resolver, proxy);
+- Chekku does not claim end-to-end SSRF or redirect enforcement inside the reader container;
+- the public-URL guard in `parsePublicWebUrl` is the only Chekku-side network control;
+- **intra-network oracle**: the reader endpoint is unauthenticated on the Compose network (`http://reader:8081`), so any peer container can POST URLs to it directly, bypassing `parsePublicWebUrl` — and the image bundles headless Chrome, making it a richer fetch oracle than SearXNG. This is consistent with the shared-`chekku-network` trust domain (any peer can also reach Garage and Postgres), but on a host running untrusted containers, isolate the reader onto a dedicated Compose network that only the agent joins;
 - do not submit signed, OAuth, password-reset, or otherwise secret-bearing URLs.
 
-`read_web_page` accepts one public HTTP(S) URL at most 2,048 UTF-8 bytes. It reads one chosen page only: no search, crawling, recursive link following, authenticated pages, PDFs, uploads, screenshots, persistence, or built-in competitive orchestration. Fixed transport sends one `POST https://r.jina.ai/` request, rejects redirects from Jina API endpoint, uses one 30-second deadline, performs no retry, accepts JSON only, and stops response body above 2 MiB. Normalized title is at most 512 UTF-8 bytes; serialized tool output is at most 71,680 UTF-8 bytes with UTF-8-safe Markdown truncation.
+`read_web_page` accepts one public HTTP(S) URL at most 2,048 UTF-8 bytes. It reads one chosen page only: no search, crawling, recursive link following, authenticated pages, PDFs, uploads, screenshots, persistence, or built-in competitive orchestration. Fixed transport sends one `POST <WEB_READER_BASE_URL origin>/` request, rejects redirects, uses one 30-second deadline, performs no retry, accepts JSON only, and stops response body above 2 MiB. Normalized title is at most 512 UTF-8 bytes; serialized tool output is at most 71,680 UTF-8 bytes with UTF-8-safe Markdown truncation.
 
-Safe failures cover missing configuration, disallowed URLs, cancellation, timeout, provider availability, unsupported format, oversized body, and invalid response. They do not include key, target URL, query string, fragment, endpoint, headers, provider body, status details, diagnostics, stack, timing, usage, or request ID. Do not add these details to logs or tickets.
+Safe failures cover missing configuration, disallowed URLs, cancellation, timeout, provider availability, unsupported format, oversized body, and invalid response. They do not include target URL, query string, fragment, endpoint, headers, provider body, status details, diagnostics, stack, timing, usage, or request ID. Do not add these details to logs or tickets.
 
 Returned Markdown may contain prompt injection. Output always marks `contentIsUntrusted: true`; treat content only as untrusted evidence, never instructions. Size bounds and labeling are defense in depth, not content sanitization.
 
-No-key smoke: start server without `WEB_READER_API_KEY` and invoke `read_web_page`; it must fail with `Web Reader is not configured.` without startup failure or outbound provider access. Standard deterministic tests require no key and make no live Jina call.
+No-key smoke: start server without `WEB_READER_BASE_URL` and invoke `read_web_page`; it must fail with `Web Reader is not configured.` without startup failure or outbound provider access. Standard deterministic tests require no key and make no live Reader call.
 
-Optional keyed live smoke reads only `https://example.com/`. Export `WEB_READER_API_KEY` into command environment without printing it, then run:
+Optional live smoke reads only `https://example.com/` through the self-hosted Reader container. Ensure `WEB_READER_BASE_URL` resolves to a running `reader` container, then run:
 
 ```bash
 npm run test:web-reader:live
 ```
 
-Without exported key, live command stops with local key-required test error before provider access. Live provider access is optional and not required by CI.
+Without a reachable Reader, the live command stops with a local base-URL-required test error before any provider access. Live provider access is optional and not required by CI.
 
 ## PM competitive analysis
 
@@ -468,12 +471,12 @@ SEARXNG_API_KEY=
 # Defaults to the public api-hari-libur instance; unset to opt out.
 PUBLIC_HOLIDAY_API_BASE_URL=https://api-hari-libur.vercel.app/api
 #PUBLIC_HOLIDAY_CACHE_DIR=src/mastra/calendar/.cache
-# Optional — enriches each chosen trending topic with the hosted Web Reader's
+# Optional — enriches each chosen trending topic with the self-hosted Reader's
 # page markdown. Unset = snippet-only (same as before Phase 2b).
-WEB_READER_API_KEY=
+WEB_READER_BASE_URL=http://127.0.0.1:8081
 ```
 
-The `weekly-social-drafts` workflow fires every Monday at 09:00 Asia/Jakarta via Mastra's built-in scheduler (no separate registration). One run drafts 2 base Instagram captions plus, when the week contains a holiday, 1 bonus awareness post (total 2–3 drafts). Base slots come from SearXNG trending research; when `WEB_READER_API_KEY` is set, each chosen topic is also enriched with the hosted Web Reader's page markdown (single-page read per topic, parallel, bounded — per-topic fetch failure falls back to snippet only). Remaining base slots are filled from the deterministic evergreen-pillar rotation when research yields fewer than 2 topics. Trending results that overlap the chosen awareness day are skipped so the bonus and a base slot do not duplicate the same theme. Each post is drafted through a two-step layered flow: Step 1 routes through the `social-media-supervisor-agent` (the `[weekly-social-drafts]` marker makes it delegate straight to the Content Writer, which runs in canonical mode) to emit a platform-agnostic Canonical Content Unit; Step 2 calls the `social-media-content-writer` directly (repurpose mode, `instagram-writer` voice) to derive the final Instagram caption. The canonical/repurpose mode is carried in `requestContext` (`SOCIAL_DRAFT_MODE_KEY`), not via an `instructions` override, so the supervisor's own routing instructions are never bypassed. Both outputs are wrapped into `post.md` under HTML comment delimiters, then saved to the fixed `social-media-agent` Garage namespace (the `SOCIAL_MEDIA_AGENT_ID` storage constant, decoupled from the agent identity) under `social-posts/<postId>/`. An unparseable canonical unit (empty or unstructured) is skipped before persistence and recorded in `researchNote`. The run then emails a review link per draft to `SOCIAL_DRAFT_REVIEW_EMAIL`.
+The `weekly-social-drafts` workflow fires every Monday at 09:00 Asia/Jakarta via Mastra's built-in scheduler (no separate registration). One run drafts 2 base Instagram captions plus, when the week contains a holiday, 1 bonus awareness post (total 2–3 drafts). Base slots come from SearXNG trending research; when `WEB_READER_BASE_URL` is set, each chosen topic is also enriched with the self-hosted Reader's page markdown (single-page read per topic, parallel, bounded — per-topic fetch failure falls back to snippet only). Remaining base slots are filled from the deterministic evergreen-pillar rotation when research yields fewer than 2 topics. Trending results that overlap the chosen awareness day are skipped so the bonus and a base slot do not duplicate the same theme. Each post is drafted through a two-step layered flow: Step 1 routes through the `social-media-supervisor-agent` (the `[weekly-social-drafts]` marker makes it delegate straight to the Content Writer, which runs in canonical mode) to emit a platform-agnostic Canonical Content Unit; Step 2 calls the `social-media-content-writer` directly (repurpose mode, `instagram-writer` voice) to derive the final Instagram caption. The canonical/repurpose mode is carried in `requestContext` (`SOCIAL_DRAFT_MODE_KEY`), not via an `instructions` override, so the supervisor's own routing instructions are never bypassed. Both outputs are wrapped into `post.md` under HTML comment delimiters, then saved to the fixed `social-media-agent` Garage namespace (the `SOCIAL_MEDIA_AGENT_ID` storage constant, decoupled from the agent identity) under `social-posts/<postId>/`. An unparseable canonical unit (empty or unstructured) is skipped before persistence and recorded in `researchNote`. The run then emails a review link per draft to `SOCIAL_DRAFT_REVIEW_EMAIL`.
 
 `SOCIAL_DRAFT_REVIEW_EMAIL` must be set per environment — there is no default. When unset, the workflow still drafts and saves posts but skips the email step, recording `emailSent: false` and `emailError: 'SOCIAL_DRAFT_REVIEW_EMAIL is not set...'` in the run output. The workflow also needs `RESEND_API_KEY` for delivery and the five `GARAGE_*` values for persistence. Other email delivery failures are recorded in the run output (`emailSent: false`, `emailError`) without failing the run; saved drafts remain readable at `/social-posts` and `/social-posts/[postId]`.
 
@@ -521,11 +524,11 @@ For local operation, call `curl --fail http://127.0.0.1:8888/healthz` and inspec
 
 ### Web Reader is not configured
 
-For local development, set `WEB_READER_API_KEY` in `agent/.env`, rerun `npm run setup`, and restart the agent. Confirm the key reaches only the agent process. Do not add it to client environment, stored-agent records, model input, command output, logs, or tickets. Server should remain healthy while tool fails closed.
+For local development, ensure the `reader` Compose service is up (`docker compose ps reader`) and `WEB_READER_BASE_URL` resolves to it. `scripts/setup-env.sh` writes the canonical dev URL (`http://127.0.0.1:8081`) into `agent/.env.development`; in compose prod the service name resolves it (`http://reader:8081`). Restart the agent after changing env. Server should remain healthy while tool fails closed.
 
 ### Web Reader is unavailable or times out
 
-Jina Reader is hosted dependency. Confirm outbound HTTPS access from Mastra host and provider availability; no local Reader health endpoint exists. Request deadline stays fixed at 30 seconds. Do not add configurable endpoint, retries, anonymous fallback, or raw provider diagnostics.
+Reader is a self-hosted container. Confirm `docker compose ps reader` shows it healthy and `WEB_READER_BASE_URL` points at the right host:port. Inspect container logs (`docker compose logs reader`) for outbound fetcher errors. Request deadline stays fixed at 30 seconds. Do not add configurable timeout, retries, anonymous fallback, or raw provider diagnostics.
 
 ### Garage MCP reports missing identity
 
@@ -643,7 +646,7 @@ npm run build
 git diff --check
 ```
 
-The test suite covers model routing, model discovery, prompt normalization, all five built-in agents, Telegram roles and slash commands, email delivery, weekly and competitive PM skills/tools/repositories, report APIs/pages and accessible tables, stored-agent payloads and fixed Garage/SearXNG/Web Reader hydration, bounded search and hosted reading transports with safe errors, stored-model migration, thread ownership, proxy paths, UI structure, namespaced storage, Garage adapter safety, Maestro flow runner, char-budget guard, and launcher behavior.
+The test suite covers model routing, model discovery, prompt normalization, all five built-in agents, Telegram roles and slash commands, email delivery, weekly and competitive PM skills/tools/repositories, report APIs/pages and accessible tables, stored-agent payloads and fixed Garage/SearXNG/Web Reader hydration, bounded search and self-hosted reading transports with safe errors, stored-model migration, thread ownership, proxy paths, UI structure, namespaced storage, Garage adapter safety, Maestro flow runner, char-budget guard, and launcher behavior.
 
 ## Production run
 
@@ -694,8 +697,9 @@ In-container wiring is fixed by Compose and differs from local development:
 - The agent binds `HOST=0.0.0.0`; its port `4111` is not published to the host. The client reaches it at `AGENT_URL=http://agent:4111` over the Compose default network.
 - `DATABASE_URL` is constructed as `postgresql://chekku:${POSTGRES_PASSWORD}@postgres:5432/chekku_agent` (service name `postgres`, not `127.0.0.1`).
 - SearXNG is reached at `http://searxng:8080` (the container's internal port), not the loopback `8888` used in development.
-- Every published port is loopback-only. The client publishes `127.0.0.1:3000`; put a reverse proxy (Caddy/nginx — a ready nginx template lives at [`ops/nginx/chekku.conf`](../ops/nginx/chekku.conf)) in front for TLS and public exposure. Garage, SearXNG, and Postgres also keep their development publishes, because `scripts/dev.sh` runs the agent and client as host processes against them and `scripts/db-migrate.sh` runs the Better Auth CLI on the host against `127.0.0.1:5432`.
-- Each of those four host ports is overridable for shared hosts where the default is already taken by another stack: `CHEKKU_CLIENT_HOST_PORT` (default 3000, set in `client/.env.local`), and `CHEKKU_GARAGE_HOST_PORT` / `CHEKKU_SEARXNG_HOST_PORT` / `CHEKKU_POSTGRES_HOST_PORT` (defaults 3900 / 8888 / 5432, set in `agent/.env`). Leaving them empty keeps the defaults. They move the host side of the publish only — containers always reach each other at `garage:3900`, `searxng:8080`, `postgres:5432`, and `agent:4111`. `scripts/prod.sh` merges those files into its shell, so the overrides apply to the containerized stack; `scripts/dev.sh` reads `storage/.env.local` instead and is unaffected. Point the reverse proxy at whatever `CHEKKU_CLIENT_HOST_PORT` resolves to.
+- Reader is reached at `http://reader:8081` (the container's HTTP/1.1 port), not the loopback `8081` host publish used in development.
+- Every published port is loopback-only. The client publishes `127.0.0.1:3000`; put a reverse proxy (Caddy/nginx — a ready nginx template lives at [`ops/nginx/chekku.conf`](../ops/nginx/chekku.conf)) in front for TLS and public exposure. Garage, SearXNG, Reader, and Postgres also keep their development publishes, because `scripts/dev.sh` runs the agent and client as host processes against them and `scripts/db-migrate.sh` runs the Better Auth CLI on the host against `127.0.0.1:5432`.
+- Each of those host ports is overridable for shared hosts where the default is already taken by another stack: `CHEKKU_CLIENT_HOST_PORT` (default 3000, set in `client/.env.local`), and `CHEKKU_GARAGE_HOST_PORT` / `CHEKKU_SEARXNG_HOST_PORT` / `CHEKKU_READER_HOST_PORT` / `CHEKKU_POSTGRES_HOST_PORT` (defaults 3900 / 8888 / 8081 / 5432, set in `agent/.env`). Leaving them empty keeps the defaults. They move the host side of the publish only — containers always reach each other at `garage:3900`, `searxng:8080`, `reader:8081`, `postgres:5432`, and `agent:4111`. `scripts/prod.sh` merges those files into its shell, so the overrides apply to the containerized stack; `scripts/dev.sh` reads `storage/.env.local` instead and is unaffected. Point the reverse proxy at whatever `CHEKKU_CLIENT_HOST_PORT` resolves to.
 - Better Auth values reach the client container from `client/.env.local`: `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, and `RATE_LIMIT_TRUST_PROXY`. `BETTER_AUTH_URL` must equal the public browser origin or session cookies and verification links break. Set `RATE_LIMIT_TRUST_PROXY=true` only when a reverse proxy supplies a trustworthy `x-forwarded-for`. `AUTH_DATABASE_URL` is **not** forwarded: Compose pins it to `postgresql://chekku:${POSTGRES_PASSWORD}@postgres:5432/chekku_auth`, leaving the `127.0.0.1` value in `client/.env.local` free for the host-side `npm run db:migrate`.
 - The Compose project network is named `chekku-network` rather than the generated `chekku_default`, so it is identifiable on a host running several stacks.
 - The QA Web Agent works in production because the agent image installs system Chromium and points the agent browser at it with `BROWSER_EXECUTABLE_PATH=/usr/bin/chromium`. Leave that variable empty outside the container: host development uses Playwright's own downloaded browser, and an empty value correctly falls back to it. The QA Android Agent (Maestro) stays host/device-only: `MAESTRO_ENABLED` is forced to `false` in the agent container.
@@ -747,7 +751,7 @@ Before deploying beyond local development:
 - restrict `WEB_URL` to the deployed client origin;
 - configure an authenticated server-to-server hop if the Mastra service is exposed separately;
 - configure `SEARXNG_BASE_URL` and optional `SEARXNG_API_KEY` only in the agent service or deployment secret manager; keep the endpoint private or protect it with a reverse proxy;
-- configure `WEB_READER_API_KEY` only in the agent service or deployment secret manager, and review Jina's privacy, retention, availability, remote DNS, redirect, and network-isolation behavior for deployment requirements;
+- position the self-hosted `reader` container on the network the same way as the SearXNG service (egress filtering, DNS resolver, proxy). Chekku does not claim end-to-end SSRF or redirect enforcement inside the reader container; operators own that boundary;
 - review browser and network policies;
 - if the social-media-content-writer (Telegram) is enabled, set `TELEGRAM_MODE=webhook` with a public URL and `TELEGRAM_WEBHOOK_SECRET_TOKEN`, and provision a Resend-verified sender for the send-email tool;
 - add rate limits, audit logging, and backup procedures appropriate to the environment.

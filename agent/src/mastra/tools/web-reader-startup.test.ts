@@ -8,9 +8,9 @@ describe('read_web_page startup', () => {
     vi.resetModules();
   });
 
-  it.each(['', 'bad\r\nkey'])(
-    'keeps registry loadable with unusable key %#',
-    async (apiKey) => {
+  it.each(['', 'bad\r\nurl', 'not-a-url', 'ftp://reader.test/'])(
+    'keeps registry loadable with unusable base URL %#',
+    async (baseUrl) => {
       const fetch = vi.fn();
       const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -19,7 +19,7 @@ describe('read_web_page startup', () => {
       const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
       const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
       const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-      vi.stubEnv('WEB_READER_API_KEY', apiKey);
+      vi.stubEnv('WEB_READER_BASE_URL', baseUrl);
       vi.stubGlobal('fetch', fetch);
       vi.resetModules();
 
@@ -41,7 +41,7 @@ describe('read_web_page startup', () => {
     },
   );
 
-  it('loads the full Mastra runtime without a configured key or startup output', async () => {
+  it('loads the full Mastra runtime without a configured base URL or startup output', async () => {
     const fetch = vi.fn();
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -50,7 +50,7 @@ describe('read_web_page startup', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-    vi.stubEnv('WEB_READER_API_KEY', '');
+    vi.stubEnv('WEB_READER_BASE_URL', '');
     vi.stubGlobal('fetch', fetch);
     vi.resetModules();
 

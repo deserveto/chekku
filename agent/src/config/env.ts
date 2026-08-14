@@ -7,7 +7,7 @@ import { z } from 'zod';
 // Load env files using the module's own directory rather than process.cwd().
 // When scripts/dev.sh runs `npm run dev:agent` inside a tmux pane with cwd set
 // to the repo root, dotenv's default cwd-based lookup fails to find agent/.env
-// — which silently drops keys like WEB_READER_API_KEY. Resolving relative to
+// — which silently drops keys like WEB_READER_BASE_URL. Resolving relative to
 // import.meta.url is deterministic regardless of where the process was
 // launched from. `quiet: true` also suppresses dotenv v17's promotional
 // `◇ injected env (N) from path // tip: …` log line.
@@ -96,7 +96,11 @@ const envSchema = z.object({
 
   SEARXNG_BASE_URL: z.string().default(''),
   SEARXNG_API_KEY: z.string().default(''),
-  WEB_READER_API_KEY: z.string().default(''),
+  // Base URL of the self-hosted Jina Reader OSS container (HTTP/1.1 endpoint,
+  // e.g. `http://127.0.0.1:8081` in dev or `http://reader:8081` in compose).
+  // Empty/unset → read_web_page fails closed with a fixed configuration error.
+  // No API key; the local Reader service is unauthenticated.
+  WEB_READER_BASE_URL: z.string().default(''),
 
   // Public Holiday Indonesia API base URL. Optional — when unset, the
   // weekly-social-drafts workflow falls back to the hardcoded SPECIAL_DAYS
