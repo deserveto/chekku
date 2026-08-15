@@ -41,6 +41,7 @@ import {
   ensureStoredAgentUsesServerGateway,
   listAllAgents,
 } from '@/lib/stored-agents';
+import { extractImageUrl } from '@/lib/tool-result';
 import {
   createOwnedThreadId,
   isOwnedThreadId,
@@ -172,16 +173,20 @@ export function ChatStudio({
         await refreshThreads();
 
         try {
-          const storedMessages = await listThreadMessages(
+          const stored = await listThreadMessages(
             agentId,
             threadId,
             resourceId,
           );
           if (!cancelled) {
-            setMessages(storedMessages.map(messageFromMemory));
+            setMessages(stored.messages.map(messageFromMemory));
+            setTools(stored.toolEvents);
           }
         } catch {
-          if (!cancelled) setMessages([]);
+          if (!cancelled) {
+            setMessages([]);
+            setTools([]);
+          }
         }
       } catch (reason) {
         if (!cancelled) {
@@ -749,41 +754,72 @@ export function ChatStudio({
 
                     {relatedTools.length > 0 && (
                       <div className="chat-tool-timeline">
-                        {relatedTools.map((tool) => (
-                          <details
-                            className={`chat-tool-card ${tool.status}`}
-                            key={tool.id}
-                          >
-                            <summary>
-                              <span />
-                              <strong>
-                                {tool.toolName.replaceAll('_', ' ')}
-                              </strong>
-                              <small>{tool.status}</small>
-                              <i>⌄</i>
-                            </summary>
+                        {relatedTools.map((tool) => {
+                          const imageUrl =
+                            tool.result !== undefined
+                              ? extractImageUrl(tool.result)
+                              : null;
+                          return (
+                            <details
+                              className={`chat-tool-card ${tool.status}`}
+                              key={tool.id}
+                              // Auto-expand cards that carry an image preview so
+                              // the generated visual is visible without an extra
+                              // click; leave text/JSON results collapsed.
+                              open={Boolean(imageUrl) || undefined}
+                            >
+                              <summary>
+                                <span />
+                                <strong>
+                                  {tool.toolName.replaceAll('_', ' ')}
+                                </strong>
+                                <small>{tool.status}</small>
+                                <i>⌄</i>
+                              </summary>
 
-                            {tool.args !== undefined && (
-                              <pre>{safeDisplay(tool.args)}</pre>
-                            )}
-                            {tool.result !== undefined && (
-                              <pre>{safeDisplay(tool.result)}</pre>
-                            )}
-                          </details>
-                        ))}
+                              {imageUrl && (
+                                <div className="chat-tool-image-wrap">
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img
+                                    alt={`${tool.toolName} result`}
+                                    className="chat-tool-image"
+                                    loading="lazy"
+                                    referrerPolicy="no-referrer"
+                                    src={imageUrl}
+                                  />
+                                </div>
+                              )}
+
+                              {tool.args !== undefined && (
+                                <div className="chat-tool-section">
+                                  <span className="chat-tool-label">input</span>
+                                  <pre>{safeDisplay(tool.args)}</pre>
+                                </div>
+                              )}
+                              {tool.result !== undefined && (
+                                <div className="chat-tool-section">
+                                  <span className="chat-tool-label">
+                                    {tool.status === 'error' ? 'error' : 'result'}
+                                  </span>
+                                  <pre>{safeDisplay(tool.result)}</pre>
+                                </div>
+                              )}
+                            </details>
+                          );
+                        })}
                       </div>
                     )}
 
                     <div className="chat-message-content markdown">
                       {message.content ? (
                         <MarkdownMessage content={message.content} />
-                      ) : (
+                      ) : relatedTools.length === 0 && isStreaming ? (
                         <span className="chat-typing">
                           <i />
                           <i />
                           <i />
                         </span>
-                      )}
+                      ) : null}
                     </div>
 
                     {message.role === 'assistant' && message.content && (

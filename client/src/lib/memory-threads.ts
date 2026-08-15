@@ -1,5 +1,6 @@
 import { mastraClient } from './mastra-client';
 import { isOwnedThreadId } from './thread-id';
+import type { ToolEvent, ToolEventStatus } from './types';
 
 export interface StudioThread {
   id: string;
@@ -14,6 +15,11 @@ export interface StudioMemoryMessage {
   role: 'user' | 'assistant';
   content: string;
   createdAt: number;
+}
+
+export interface StudioThreadMessages {
+  messages: StudioMemoryMessage[];
+  toolEvents: ToolEvent[];
 }
 
 function toTimestamp(value: unknown, fallback = Date.now()): number {
@@ -90,7 +96,11 @@ function normalizeMessage(value: unknown): StudioMemoryMessage | undefined {
   if (role !== 'user' && role !== 'assistant') return undefined;
 
   const content = textFromContent(row.content);
-  if (!content && role === 'assistant') return undefined;
+  // Keep assistant messages that carry tool-call parts even when they have no
+  // text body — their tool cards need a parent message to render under. Drop
+  // only truly empty assistant messages.
+  const hasToolParts = messageHasToolParts(row.content);
+  if (!content && role === 'assistant' && !hasToolParts) return undefined;
 
   return {
     id:
@@ -101,6 +111,114 @@ function normalizeMessage(value: unknown): StudioMemoryMessage | undefined {
     content,
     createdAt: toTimestamp(row.createdAt),
   };
+}
+
+function messageHasToolParts(content: unknown): boolean {
+  if (!Array.isArray(content)) return false;
+  return content.some((part) => {
+    if (!part || typeof part !== 'object') return false;
+    const type = (part as Record<string, unknown>).type;
+    return type === 'tool-call' || type === 'tool-result';
+  });
+}
+
+/**
+ * Unwrap a persisted tool-result `output` (AI SDK v5
+ * `LanguageModelV2ToolResultOutput`) to its inner value and detect error
+ * variants so restored cards can render with the right status.
+ */
+function unwrapToolOutput(
+  output: unknown,
+): { value: unknown; error: boolean } {
+  if (output && typeof output === 'object') {
+    const rec = output as Record<string, unknown>;
+    const type = rec.type;
+    if (typeof type === 'string' && 'value' in rec) {
+      return {
+        value: rec.value,
+        error: type === 'error-text' || type === 'error-json',
+      };
+    }
+  }
+  return { value: output, error: false };
+}
+
+/**
+ * Harvest tool-call and tool-result parts from every raw memory row (any role)
+ * and merge them by `toolCallId` into `ToolEvent` records. Each event is
+ * attached to the assistant message that emitted the tool call so it renders
+ * under the right chat bubble after a reload.
+ */
+function extractToolEvents(rows: unknown[]): ToolEvent[] {
+  const byCallId = new Map<string, ToolEvent>();
+  const order: string[] = [];
+
+  const touch = (toolCallId: string, init: ToolEvent): ToolEvent => {
+    const existing = byCallId.get(toolCallId);
+    if (existing) return existing;
+    byCallId.set(toolCallId, init);
+    order.push(toolCallId);
+    return init;
+  };
+
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const rec = row as Record<string, unknown>;
+    const messageId = typeof rec.id === 'string' ? rec.id : '';
+    const role = rec.role;
+    const parts = Array.isArray(rec.content) ? rec.content : [];
+
+    for (const part of parts) {
+      if (!part || typeof part !== 'object') continue;
+      const p = part as Record<string, unknown>;
+      const type = p.type;
+      const toolCallId =
+        typeof p.toolCallId === 'string' ? p.toolCallId : '';
+      if (!toolCallId) continue;
+      const toolName =
+        typeof p.toolName === 'string' && p.toolName ? p.toolName : 'tool';
+
+      if (type === 'tool-call') {
+        const event = touch(toolCallId, {
+          id: toolCallId,
+          messageId: role === 'assistant' ? messageId : '',
+          toolCallId,
+          toolName,
+          status: 'running',
+          args: p.input ?? p.args,
+        });
+        if (!event.messageId && role === 'assistant') {
+          event.messageId = messageId;
+        }
+        if (event.args === undefined) {
+          event.args = p.input ?? p.args;
+        }
+        if (event.toolName === 'tool' && toolName !== 'tool') {
+          event.toolName = toolName;
+        }
+      } else if (type === 'tool-result') {
+        const { value, error } = unwrapToolOutput(p.output ?? p.result);
+        const status: ToolEventStatus = error ? 'error' : 'complete';
+        const event = touch(toolCallId, {
+          id: toolCallId,
+          messageId: role === 'assistant' ? messageId : '',
+          toolCallId,
+          toolName,
+          status,
+          result: value,
+        });
+        event.result = value;
+        event.status = status;
+        if (event.toolName === 'tool' && toolName !== 'tool') {
+          event.toolName = toolName;
+        }
+      }
+    }
+  }
+
+  return order
+    .map((id) => byCallId.get(id) as ToolEvent)
+    .filter((event) => Boolean(event.messageId));
 }
 
 function assertThreadOwnership(
@@ -151,7 +269,7 @@ export async function listThreadMessages(
   agentId: string,
   threadId: string,
   resourceId: string,
-): Promise<StudioMemoryMessage[]> {
+): Promise<StudioThreadMessages> {
   assertThreadOwnership(agentId, threadId, resourceId);
   const thread = mastraClient.getMemoryThread({ threadId, agentId });
   const response = await thread
@@ -172,12 +290,16 @@ export async function listThreadMessages(
       ? ((raw as Record<string, unknown>).messages ?? [])
       : [];
 
-  if (!Array.isArray(rows)) return [];
+  const rowArray = Array.isArray(rows) ? rows : [];
 
-  return rows
+  const messages = rowArray
     .map(normalizeMessage)
     .filter((row): row is StudioMemoryMessage => Boolean(row))
     .sort((a, b) => a.createdAt - b.createdAt);
+
+  const toolEvents = extractToolEvents(rowArray);
+
+  return { messages, toolEvents };
 }
 
 export async function renameThread(

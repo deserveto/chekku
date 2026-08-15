@@ -164,11 +164,20 @@ describe('OpenAI-compatible image client — provider failures', () => {
     [500, 'Image generation is unavailable. Try again later.'],
     [503, 'Image generation is unavailable. Try again later.'],
   ])('maps HTTP %i to a fixed error', async (status, message) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const fetch = vi.fn(async () => new Response('private body', { status }));
     const client = createOpenAICompatibleImageClient({ config, fetch });
     const error = await readError(client.generate({ prompt: 'hi' }));
     expect(String(error)).toContain(message);
+    // The thrown error stays sanitized — no body, key, or endpoint leaks.
     expect(String(error)).not.toMatch(/private-token|private body|llm\.example\.test/);
+    // The operator gets a server-side log with the status + a body snippet.
+    expect(warn).toHaveBeenCalled();
+    const logged = warn.mock.calls.map((call) => String(call[0])).join('\n');
+    expect(logged).toContain(`status ${status}`);
+    // The API key is never echoed in the server log either.
+    expect(logged).not.toContain('private-token');
+    warn.mockRestore();
   });
 
   it('rejects a non-json response with a fixed format error', async () => {

@@ -148,9 +148,12 @@ describe('visual-content-agent (identity and tools)', () => {
     expect(await visualContentAgent.getMemory()).toBeDefined();
   });
 
-  it('binds exactly generate_image and nothing else', async () => {
+  it('binds generate_image, review_image, plus the dev-only preview_image', async () => {
     const tools = await visualContentAgent.listTools();
-    expect(Object.keys(tools).sort()).toEqual(['generateImageTool']);
+    // Vitest runs with NODE_ENV='test' (non-production), so the dev-only
+    // post-less `previewImageTool` is also registered alongside
+    // `generateImageTool` and its companion `reviewImageTool`.
+    expect(Object.keys(tools).sort()).toEqual(['generateImageTool', 'previewImageTool', 'reviewImageTool']);
   });
 });
 
@@ -186,5 +189,91 @@ describe('social-media-supervisor-agent (three sub-agents and routing)', () => {
     const instructions = (await socialMediaSupervisorAgent.getInstructions()) as unknown as string;
     expect(instructions).toContain('Social Media Content Writer');
     expect(instructions).toContain('Social Media Strategist');
+  });
+
+  it('instructs the supervisor to complete the full request in one turn without stopping', async () => {
+    const instructions = (await socialMediaSupervisorAgent.getInstructions()) as unknown as string;
+    expect(instructions.toLowerCase()).toContain('complete the full request in one turn');
+    expect(instructions.toLowerCase()).toContain('never stop after a single delegation');
+    expect(instructions.toLowerCase()).toContain('in sequence within this turn');
+  });
+
+  it('requires a conversational approval checkpoint before generating a visual (no custom button)', async () => {
+    const instructions = (await socialMediaSupervisorAgent.getInstructions()) as unknown as string;
+    const lower = instructions.toLowerCase();
+    expect(lower).toContain('conversational approval before generating a visual');
+    // The draft→visual boundary must stop and ask, not generate in the same turn.
+    expect(lower).toContain('do not generate the visual in the same turn');
+    expect(lower).toContain('ask the user conversationally');
+    // Native chat flow only — never a custom button.
+    expect(lower).toContain('never a custom button');
+    // The supervisor must propose a concrete visual concept and let the user
+    // approve/adjust it BEFORE generating, so the image matches intent.
+    expect(lower).toContain('propose a concrete visual concept');
+    expect(lower).toContain('never invent the visual silently');
+    // A standalone visual with no preceding draft skips the checkpoint.
+    expect(lower).toContain('standalone visual request with no preceding draft');
+  });
+
+  it('routes news-research requests to the Strategist in news-research mode', async () => {
+    const instructions = (await socialMediaSupervisorAgent.getInstructions()) as unknown as string;
+    expect(instructions).toContain('NEWS-RESEARCH mode');
+    expect(instructions).toContain('BRAND-STRATEGY mode');
+    expect(instructions).toContain('News Research Result');
+    for (const trigger of ['berita', 'terbaru', 'terkini', 'trending']) {
+      expect(instructions).toContain(trigger);
+    }
+  });
+
+  it('declares the Visual Content Agent as a renderer only', async () => {
+    const instructions = (await socialMediaSupervisorAgent.getInstructions()) as unknown as string;
+    expect(instructions).toContain('RENDERER ONLY');
+    expect(instructions.toLowerCase()).toContain('does not research');
+    expect(instructions.toLowerCase()).toContain('does not fact-check');
+    expect(instructions.toLowerCase()).toContain('does not originate or strengthen any factual claim');
+  });
+
+  it('extends the approval checkpoint to cover factual framing, not just the visual', async () => {
+    const instructions = (await socialMediaSupervisorAgent.getInstructions()) as unknown as string;
+    const lower = instructions.toLowerCase();
+    expect(lower).toContain('factual framing');
+    expect(lower).toContain('content direction');
+    expect(lower).toContain('visual concept');
+    // Factual issue must route back to Content Writer, not proceed to visual.
+    expect(lower).toContain('route the factual issue back to the content writer');
+  });
+
+  it('requires a structured visual-concept proposal with content pillar, headline, facts, source, logo placement', async () => {
+    const instructions = (await socialMediaSupervisorAgent.getInstructions()) as unknown as string;
+    expect(instructions).toContain('Content pillar: CELEBRATION | TECHNOLOGY | GENERAL');
+    expect(instructions).toContain('Visual style:');
+    expect(instructions).toContain('Headline on image:');
+    expect(instructions).toContain('Verified facts on image');
+    expect(instructions).toContain('Source attribution:');
+    expect(instructions).toContain('Logo placement:');
+  });
+
+  it('expands the approval checkpoint to four dimensions including content pillar', async () => {
+    const instructions = (await socialMediaSupervisorAgent.getInstructions()) as unknown as string;
+    expect(instructions).toContain('FOUR things at once');
+    expect(instructions).toContain('content pillar classification');
+  });
+
+  it('documents the internal quality gate covering research, content, visual, and brand checks', async () => {
+    const instructions = (await socialMediaSupervisorAgent.getInstructions()) as unknown as string;
+    expect(instructions).toContain('Quality gate');
+    expect(instructions).toContain('RESEARCH:');
+    expect(instructions).toContain('CONTENT:');
+    expect(instructions).toContain('VISUAL:');
+    expect(instructions).toContain('BRAND:');
+    expect(instructions).toContain('feels like Rafiqspace AI');
+    expect(instructions.toLowerCase()).toContain('generic ai news aggregator');
+  });
+
+  it('forbids semantic-drift upgrades in the quality gate', async () => {
+    const instructions = (await socialMediaSupervisorAgent.getInstructions()) as unknown as string;
+    expect(instructions).toContain('assessment did not become endorsement');
+    expect(instructions).toContain('planned did not become completed');
+    expect(instructions).toContain('using-X-tech did not become X-owned');
   });
 });

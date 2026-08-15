@@ -11,6 +11,7 @@ import {
   listRolesText,
   buildInstructions,
   buildCanonicalInstructions,
+  buildRepurposeInstructions,
   buildInstructionsForRole,
   HELP_TEXT,
   unknownCommandReply,
@@ -239,28 +240,28 @@ describe('buildInstructions', () => {
 });
 
 describe('buildCanonicalInstructions', () => {
-  it('frames the visual script brick as a platform-agnostic sequence of visual concepts', () => {
+  it('frames the image brick as a designed 1:1 poster/infographic (not a photo, not video)', () => {
     const instructions = buildCanonicalInstructions();
-    expect(instructions).toContain('VISUAL / VIDEO SCRIPT BRICK');
-    expect(instructions).toContain('platform-agnostic');
-    expect(instructions).toContain('sequence of reusable visual concepts');
-    expect(instructions).toContain('Do NOT label items "Panel 1');
-    expect(instructions).toContain('one concept can carry it');
-    expect(instructions).toContain('Ground every visual in the source');
+    expect(instructions).toContain('IMAGE BRICK');
+    expect(instructions).toContain('platform-agnostic 1:1 image composition');
+    expect(instructions).toContain('designed poster/infographic');
+    expect(instructions).toContain('NOT a bare photograph');
+    expect(instructions).toContain('NOT a video script');
+    expect(instructions).toContain('ACTUAL TEXT drawn from this Canonical Content Unit');
+    expect(instructions).toContain('Ground every panel in the source');
     expect(instructions).toContain('Do NOT include camera direction');
-    expect(instructions).toContain('transition effects');
     expect(instructions).toContain('"carousel", "slide", or "reel"');
   });
 
-  it('demands descriptive Purpose, concrete scenes, concise Overlay, and a coherent narrative', () => {
+  it('demands detailed visual brief properties for each panel', () => {
     const instructions = buildCanonicalInstructions();
-    expect(instructions).toContain('generic labels');
-    expect(instructions).toContain('Highlight the healthcare accessibility problem');
-    expect(instructions).toContain('prioritize concrete scenes');
-    expect(instructions).toContain('logos, maps, icons');
-    expect(instructions).toContain('3–8 words');
-    expect(instructions).toContain('Never a full sentence');
-    expect(instructions).toContain('coherent story');
+    expect(instructions).toContain('hero object');
+    expect(instructions).toContain('environment');
+    expect(instructions).toContain('emotional goal');
+    expect(instructions).toContain('composition');
+    expect(instructions).toContain('supporting elements');
+    expect(instructions).toContain('negative constraints');
+    expect(instructions).toContain('Overlay');
   });
 
   it('keeps the medium-form brick factual and hedged', () => {
@@ -268,6 +269,157 @@ describe('buildCanonicalInstructions', () => {
     expect(instructions).toContain('Keep it factual');
     expect(instructions).toContain('diharapkan');
     expect(instructions).toContain('berpotensi');
+  });
+
+  it('uses the corrected 8 Blocks terminology (not "7-brick")', () => {
+    const instructions = buildCanonicalInstructions();
+    expect(instructions).toContain('Canonical Content Unit — 8 Blocks');
+    expect(instructions).not.toContain('7-brick');
+    expect(instructions).not.toContain('7 brick');
+  });
+
+  it('documents the anti-strengthening factual integrity rules', () => {
+    const instructions = buildCanonicalInstructions();
+    expect(instructions).toContain('Factual integrity rules');
+    expect(instructions).toContain('traceable to a verified fact');
+    expect(instructions).toContain('NEVER strengthen a claim');
+    expect(instructions).toContain('assessment');
+    expect(instructions).toContain('endorsement');
+    expect(instructions).toContain('menilai kesiapan');
+    expect(instructions).toContain('menyatakan siap');
+  });
+
+  it('distinguishes editorial framing from new factual claims in THESIS', () => {
+    const instructions = buildCanonicalInstructions();
+    expect(instructions).toContain('Editorial framing is allowed in THESIS and HOOKS only');
+    expect(instructions).toContain('the ANGLE you take on a fact, not a NEW fact');
+  });
+
+  it('allows an optional source-attribution panel when the source is verified', () => {
+    const instructions = buildCanonicalInstructions();
+    expect(instructions).toContain('source-attribution panel');
+    expect(instructions).toContain('Source: <publisher> • <year>');
+    expect(instructions).toContain('OMIT this panel entirely if the source is unverifiable');
+  });
+});
+
+describe('buildRepurposeInstructions (anti-drift)', () => {
+  const repurposeInstructions = () => {
+    const role: { id: string; label: string; guidance: string } = {
+      id: 'instagram-writer',
+      label: 'Instagram Writer',
+      guidance: 'reflective warm tone',
+    };
+    return buildRepurposeInstructions(role as never);
+  };
+
+  it('documents what the repurpose step MAY change', () => {
+    const text = repurposeInstructions();
+    expect(text).toContain('You MAY change');
+    expect(text).toContain('tone');
+    expect(text).toContain('length');
+    expect(text).toContain('structure');
+    expect(text).toContain('hook wording');
+  });
+
+  it('documents what the repurpose step MAY NOT change', () => {
+    const text = repurposeInstructions();
+    expect(text).toContain('You MAY NOT change');
+    expect(text).toContain('subject of the story');
+    expect(text).toContain('factual claims');
+    expect(text).toContain('scope');
+    expect(text).toContain('chronology');
+    expect(text).toContain('attribution');
+    expect(text).toContain('meaning of the source');
+  });
+
+  it('includes the assessment-vs-endorsement mapping for the repurpose step', () => {
+    const text = repurposeInstructions();
+    expect(text).toContain('menilai kesiapan AI Indonesia');
+    expect(text).toContain('mengakui');
+    expect(text).toContain('mengesahkan');
+  });
+
+  it('preserves the hedged-wording rule for the repurpose step', () => {
+    const text = repurposeInstructions();
+    expect(text).toContain('berpotensi');
+    expect(text).toContain('diharapkan');
+    expect(text).toContain('FORBIDDEN: "akan"');
+  });
+
+  it('warns against dropping details that would make the remaining text misleading', () => {
+    const text = repurposeInstructions();
+    expect(text).toContain('clarity beats brevity');
+  });
+});
+
+describe('buildCanonicalInstructions (pillar-aware + expanded anti-strengthening)', () => {
+  it('documents pillar-aware voice for CELEBRATION, TECHNOLOGY, GENERAL', () => {
+    const instructions = buildCanonicalInstructions();
+    expect(instructions).toContain('Pillar-aware voice');
+    expect(instructions).toContain('CELEBRATION — voice is warm, respectful, elegant');
+    expect(instructions).toContain('TECHNOLOGY & AI — voice is informative, intelligent, modern');
+    expect(instructions).toContain('GENERAL / DIGITAL SOCIETY — voice is accessible');
+  });
+
+  it('aligns THESIS with the technology sub-angle when one is provided', () => {
+    const instructions = buildCanonicalInstructions();
+    expect(instructions).toContain('AI Infrastructure');
+    expect(instructions).toContain('AI Agents');
+    expect(instructions).toContain('AI Explained');
+  });
+
+  it('expands the anti-strengthening mapping to planned/completed and announced/launched', () => {
+    const instructions = buildCanonicalInstructions();
+    expect(instructions).toContain('"planned" / "direncanakan" / "target"');
+    expect(instructions).toContain('"completed"');
+    expect(instructions).toContain('"announced" / "diumumkan"');
+    expect(instructions).toContain('"launched"');
+    expect(instructions).toContain('menggunakan teknologi Nvidia');
+    expect(instructions).toContain('Nvidia-owned facility');
+  });
+
+  it('requires contextual caveats to be preserved across bricks', () => {
+    const instructions = buildCanonicalInstructions();
+    expect(instructions).toContain('Contextual caveats from the source');
+    expect(instructions).toContain('MUST be preserved');
+    expect(instructions).toContain('Firmus adalah developer');
+  });
+});
+
+describe('buildRepurposeInstructions (caveat preservation + expanded mapping)', () => {
+  const repurposeInstructions = () => {
+    const role: { id: string; label: string; guidance: string } = {
+      id: 'instagram-writer',
+      label: 'Instagram Writer',
+      guidance: 'reflective warm tone',
+    };
+    return buildRepurposeInstructions(role as never);
+  };
+
+  it('preserves contextual caveats across the repurpose step', () => {
+    const text = repurposeInstructions();
+    expect(text).toContain('Contextual caveats from the canonical unit');
+    expect(text).toContain('Firmus adalah developer');
+    expect(text).toContain('clarity beats brevity');
+  });
+
+  it('expands the mapping to planned/completed, announced/launched, using-tech/owned', () => {
+    const text = repurposeInstructions();
+    expect(text).toContain('direncanakan');
+    expect(text).toContain('telah selesai');
+    expect(text).toContain('diumumkan');
+    expect(text).toContain('diluncurkan');
+    expect(text).toContain('menggunakan teknologi Nvidia');
+    expect(text).toContain('milik Nvidia');
+  });
+
+  it('documents pillar-aware tone for the repurpose step', () => {
+    const text = repurposeInstructions();
+    expect(text).toContain('Pillar-aware tone');
+    expect(text).toContain('CELEBRATION');
+    expect(text).toContain('TECHNOLOGY & AI');
+    expect(text).toContain('GENERAL / DIGITAL SOCIETY');
   });
 });
 

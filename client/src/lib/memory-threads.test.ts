@@ -156,14 +156,14 @@ describe('agent-scoped memory threads', () => {
     );
     await expect(
       listThreadMessages('main-agent', 'main-agent-local-user-a', 'local-user'),
-    ).resolves.toEqual([]);
+    ).resolves.toEqual({ messages: [], toolEvents: [] });
   });
 
   it('returns an empty list when the upstream reports not-found via message', async () => {
     threadListMessages.mockRejectedValueOnce(new Error('Thread not found'));
     await expect(
       listThreadMessages('main-agent', 'main-agent-local-user-a', 'local-user'),
-    ).resolves.toEqual([]);
+    ).resolves.toEqual({ messages: [], toolEvents: [] });
   });
 
   it('re-throws an extended status-less message-read error', async () => {
@@ -182,5 +182,143 @@ describe('agent-scoped memory threads', () => {
     await expect(
       listThreadMessages('main-agent', 'main-agent-local-user-a', 'local-user'),
     ).rejects.toThrow('Server error');
+  });
+
+  it('restores tool-call and tool-result parts as tool events', async () => {
+    threadListMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'msg-user',
+          role: 'user',
+          content: [{ type: 'text', text: 'draft a post' }],
+          createdAt: '2024-01-01T00:00:00.000Z',
+        },
+        {
+          id: 'msg-asst',
+          role: 'assistant',
+          content: [
+            { type: 'text', text: 'Delegating…' },
+            {
+              type: 'tool-call',
+              toolCallId: 'call_1',
+              toolName: 'search_web',
+              input: { query: 'local-first db' },
+            },
+          ],
+          createdAt: '2024-01-01T00:00:01.000Z',
+        },
+        {
+          id: 'msg-tool',
+          role: 'tool',
+          content: [
+            {
+              type: 'tool-result',
+              toolCallId: 'call_1',
+              toolName: 'search_web',
+              output: { type: 'json', value: { results: ['a', 'b'] } },
+            },
+          ],
+          createdAt: '2024-01-01T00:00:02.000Z',
+        },
+      ],
+    });
+
+    const result = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    expect(result.messages.map((m) => m.id)).toEqual([
+      'msg-user',
+      'msg-asst',
+    ]);
+    expect(result.toolEvents).toEqual([
+      expect.objectContaining({
+        id: 'call_1',
+        toolCallId: 'call_1',
+        messageId: 'msg-asst',
+        toolName: 'search_web',
+        status: 'complete',
+        args: { query: 'local-first db' },
+        result: { results: ['a', 'b'] },
+      }),
+    ]);
+  });
+
+  it('keeps an assistant message whose only body is a tool call', async () => {
+    threadListMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'msg-asst',
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool-call',
+              toolCallId: 'call_1',
+              toolName: 'get_current_time',
+              input: {},
+            },
+          ],
+          createdAt: '2024-01-01T00:00:00.000Z',
+        },
+      ],
+    });
+
+    const result = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]!.content).toBe('');
+    expect(result.toolEvents[0]!.messageId).toBe('msg-asst');
+  });
+
+  it('marks restored tool events as error when the result is an error variant', async () => {
+    threadListMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'msg-asst',
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool-call',
+              toolCallId: 'call_1',
+              toolName: 'generate_image',
+              input: { prompt: 'x' },
+            },
+          ],
+          createdAt: '2024-01-01T00:00:00.000Z',
+        },
+        {
+          id: 'msg-tool',
+          role: 'tool',
+          content: [
+            {
+              type: 'tool-result',
+              toolCallId: 'call_1',
+              toolName: 'generate_image',
+              output: { type: 'error-text', value: 'Not configured' },
+            },
+          ],
+          createdAt: '2024-01-01T00:00:01.000Z',
+        },
+      ],
+    });
+
+    const result = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    expect(result.toolEvents[0]).toEqual(
+      expect.objectContaining({
+        status: 'error',
+        result: 'Not configured',
+      }),
+    );
   });
 });
