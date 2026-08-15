@@ -218,7 +218,8 @@ Put a reverse proxy (Caddy or nginx — a ready template lives at [`ops/nginx/ch
 │       │   ├── gateways/   # OpenAI-compatible gateway and normalization
 │       │   ├── mcp/        # fixed Garage, SearXNG, and Web Reader MCP servers
 │       │   ├── processors/ # browser/tool compatibility
-│       │   ├── routes/     # /healthz and /models
+│       │   ├── routes/     # /healthz, /models, and server-owned /runs routes
+│       │   ├── runs/       # server-owned agent-run registry and execution driver
 │       │   ├── searxng/    # bounded search client and configuration
 │       │   ├── web-reader/ # bounded self-hosted page-reading client
 │       │   └── tools/      # stored-agent, PM, search, reading, and image-generation tools

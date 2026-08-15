@@ -236,8 +236,11 @@ describe('requested UI structure', () => {
   it('guards thread deletion against a double-confirm the same way', () => {
     expect(chatStudio).toContain('const deleteInFlightRef = useRef(false)');
     expect(chatStudio).toContain(
-      'if (isStreaming || !target || deleteInFlightRef.current) return',
+      'if (!target || deleteInFlightRef.current) return',
     );
+    // Deletion is blocked only for threads with a live run — never by
+    // component-local streaming state.
+    expect(chatStudio).toContain('if (threadHasActiveRun(target.id))');
     expect(chatStudio).toContain('deleteInFlightRef.current = false');
   });
 

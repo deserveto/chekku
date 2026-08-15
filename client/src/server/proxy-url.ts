@@ -43,3 +43,28 @@ export function buildAgentProxyUrl(
 
   return `${base}/${suffix}${search}`;
 }
+
+/**
+ * Builds the upstream URL for the server-owned agent-run surface
+ * (`POST /runs`, `GET /runs/active`, `GET /runs/:runId/events`, ...).
+ * An empty path targets the run-start route itself.
+ */
+export function buildRunsProxyUrl(
+  baseUrl: string,
+  path: readonly string[],
+  search: string,
+): string {
+  if (path.length === 0) {
+    return `${baseUrl.replace(/\/+$/, '')}/runs${search}`;
+  }
+
+  for (const segment of path) {
+    if (!SAFE_SEGMENT.test(segment)) {
+      throw new Error(`Unsafe run proxy path segment: ${segment}`);
+    }
+  }
+
+  const base = baseUrl.replace(/\/+$/, '');
+  const suffix = path.map(encodeURIComponent).join('/');
+  return `${base}/runs/${suffix}${search}`;
+}

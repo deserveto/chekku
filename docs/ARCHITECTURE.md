@@ -127,11 +127,12 @@ Secrets are injected exclusively through Compose `environment:` interpolation; n
 - `MastraEditor` with database storage;
 - `OpenAICompatibleGateway`;
 - structured logging and request middleware;
-- `/healthz` and `/models` custom routes.
+- `/healthz` and `/models` custom routes;
+- the server-owned agent-run routes (`/runs`, `/runs/active`, `/runs/list`, `/runs/:runId`, `/runs/:runId/events`, `/runs/:runId/cancel`).
 
 Mastra provides native agent, Memory, skill, and editor APIs. Next.js separately provides `/reports/*`, `/api/storage/pm-reports/*`, and `/api/storage/competitive-analyses/*` through focused server-only services; those PM storage interfaces are not Mastra APIs. Chekku does not maintain a parallel custom conversation or agent database.
 
-The chat composer (`client/src/components/chat/chat-studio.tsx`) exposes the active agent's user-invocable skills through a client-side slash-command picker. Typing a leading `/` opens a keyboard-navigable listbox populated from the active agent's serialized record — `listAgentSkills` in `client/src/lib/agent-skills.ts` fetches the agent through the same-origin `/api/agent/*` proxy and reads the `.skills` array, keeping only entries whose `user-invocable` flag is not `false`. Selecting a skill inserts `/<skill-name> ` into the input and dispatches through the existing `sendMessage` → `agent.stream()` path. No backend skill-routing change is involved. Agents with no user-invocable skills show no rows and the picker stays closed.
+The chat composer (`client/src/components/chat/chat-studio.tsx`) exposes the active agent's user-invocable skills through a client-side slash-command picker. Typing a leading `/` opens a keyboard-navigable listbox populated from the active agent's serialized record — `listAgentSkills` in `client/src/lib/agent-skills.ts` fetches the agent through the same-origin `/api/agent/*` proxy and reads the `.skills` array, keeping only entries whose `user-invocable` flag is not `false`. Selecting a skill inserts `/<skill-name> ` into the input and dispatches through the existing `sendMessage` → `startRun()` path. No backend skill-routing change is involved. Agents with no user-invocable skills show no rows and the picker stays closed.
 
 `storedAgentTools` is the instance-level registry that makes calculator, current-time, and email tools available during stored-agent hydration. Weekly and competitive PM tools plus reusable `search_web` and `read_web_page` attach directly to `pmAgent`; PM storage tools are not members of `storedAgentTools`, `garageMcpServer`, `searxngMcpServer`, or `webReaderMcpServer`.
 
@@ -422,6 +423,26 @@ Every thread is owned by an agent and resource:
 
 The client validates this prefix before listing, reading, renaming, or deleting a thread. Changing agents creates or opens a thread owned by that agent; a conversation cannot silently switch its owner.
 
+## Agent run lifecycle
+
+Agent execution is server-owned and independent of any browser connection. ChatStudio no longer holds the model stream: sending a message creates a **run** on the agent server, and the UI merely observes that run.
+
+```text
+ChatStudio ──POST /api/runs──────────▶ Next.js identity seam ──▶ agent server run manager
+                (prompt, agentId, threadId)   (injects resourceId = session user)   │
+                                                                               creates run,
+ChatStudio ◀──SSE /api/runs/:runId/events── Next.js proxy ◀── run registry ◀── agent.stream()
+```
+
+- **Ownership.** The run manager lives in the agent workspace (`agent/src/mastra/runs/`): an in-memory registry (`run-registry.ts`) plus an execution driver (`execute.ts`) that consumes `agent.stream()` with a server-owned `AbortController`. The run's lifetime is the agent server process, not any HTTP connection or React component. Navigating away, reloading, or closing the tab only drops the observation; the run continues and Mastra Memory persists the final messages.
+- **Concurrency.** At most one non-terminal run per `(agentId, threadId, resourceId)`, enforced synchronously at run creation; duplicates receive `409 Conflict` with the active run so the client attaches instead of duplicating.
+- **Reconnection.** `GET /api/runs/:runId/events?offset=N` replays buffered events from N and then streams live (SSE with heartbeats). The client (`client/src/lib/agent-runs.ts`) reconnects with `offset = lastSequence + 1` on drops, so events are delivered exactly once. On mount, ChatStudio asks `GET /api/runs/active` whether the thread has a running execution and, if so, subscribes with offset 0 to reconstruct partial output and tool progress — it never restarts the prompt.
+- **Cancellation.** `POST /api/runs/:runId/cancel` aborts exactly that run's signal; it is idempotent for terminal runs. Stop in the UI targets the active run id, not the thread.
+- **First-turn titles.** The server renames a first-turn thread on run completion (52-character prompt truncation), so titles appear even when nobody is watching.
+- **Sidebar status.** ChatStudio polls `GET /api/runs/list` every 5 seconds and shows a pulsing indicator (reusing the `studio-pulse` animation) next to threads with active runs, refreshing the thread list when one completes.
+- **Identity.** The browser never supplies a `resourceId`: the Next.js `/api/runs/*` seam derives it from the Better Auth session, discards any client value, and validates thread ownership before forwarding. Run-scoped endpoints compare the derived resource against the run record and collapse mismatches to 404.
+- **Limits.** Event buffers are bounded (4 MiB / 10 000 events per run with oldest-eviction and an `evicted` flag); terminal runs stay replayable for 30 minutes, then only Mastra Memory messages remain. An agent server restart kills in-flight runs together with the registry — no stale state survives, but partial output of an interrupted run is not persisted (Mastra skips persistence on abort). Chekku runs a single agent-server instance; there is no cross-instance run coordination.
+
 ## Client boundaries
 
 The browser uses `@mastra/client-js` with the Next.js origin and `/api/agent` prefix. The catch-all proxy:
@@ -432,6 +453,8 @@ The browser uses `@mastra/client-js` with the Next.js origin and `/api/agent` pr
 - attaches an optional service credential;
 - supports GET, POST, PUT, PATCH, DELETE, and HEAD;
 - streams the upstream response back to the browser.
+
+The `/api/runs/*` proxy (`client/src/app/api/runs/[[...path]]/route.ts`) is the second browser-to-agent surface. It resolves the same identity seam, injects `resourceId = session.user.id` into every forwarded run request (discarding any client-supplied value), validates thread ownership for run starts and active-run lookups, validates path segments with the same `SAFE_SEGMENT` rule, and streams SSE bodies through unchanged.
 
 The current identity implementation is intentionally replaceable. Future OIDC must preserve the same resource and thread-ownership checks.
 
@@ -465,6 +488,10 @@ Chat report links use URL-encoded relative `/reports/<reportId>` or `/reports/co
 - `/social-posts` lists scheduled Instagram drafts newest first.
 - `/social-posts/[postId]` renders caption, metadata, and brief.
 - `/api/agent/[...path]` proxies Mastra HTTP requests.
+- `POST /api/runs` starts a server-owned agent run for the signed-in user (resourceId derived from the session; thread ownership validated).
+- `GET /api/runs/active?agentId&threadId` returns the thread's active run (204 when none).
+- `GET /api/runs/list[?agentId]` returns the user's active runs for sidebar status.
+- `GET /api/runs/[...path]` proxies run status, SSE event streams (`/runs/:runId/events?offset=N`), and cancellation (`/runs/:runId/cancel`) with the session-derived resourceId appended.
 - `GET /api/storage/pm-reports` returns report metadata after identity validation.
 - `GET /api/storage/pm-reports/[reportId]` returns one report after identity and ID validation.
 - `GET /api/storage/competitive-analyses` returns competitive metadata after identity validation.
@@ -478,6 +505,11 @@ Chat report links use URL-encoded relative `/reports/<reportId>` or `/reports/co
 
 - `/healthz` reports service status.
 - `/models` reports model configuration, canonical default, and available models.
+- `/runs` (POST) creates a server-owned run and returns `202` with the run summary, or `409` with the active run when one already exists for the thread.
+- `/runs/active` (GET) and `/runs/list` (GET) discover active runs for a resource.
+- `/runs/:runId` (GET) returns run metadata; unknown or foreign runs collapse to 404.
+- `/runs/:runId/events` (GET) streams replayed-then-live run events over SSE.
+- `/runs/:runId/cancel` (POST) aborts exactly the target run, idempotently.
 
 ## Extension points
 

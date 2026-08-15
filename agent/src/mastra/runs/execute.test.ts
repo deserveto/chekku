@@ -1,0 +1,299 @@
+import { describe, expect, it } from 'vitest';
+import { RunRegistry, createRunId } from './run-registry.js';
+import {
+  buildThreadTitle,
+  chunkToRunEvent,
+  runExecution,
+  type MemoryAccess,
+  type RunnableAgent,
+} from './execute.js';
+
+type Chunk = { type?: unknown; payload?: unknown };
+
+function streamOf(chunks: Chunk[]): { fullStream: ReadableStream<Chunk> } {
+  return {
+    fullStream: new ReadableStream<Chunk>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(chunk);
+        controller.close();
+      },
+    }),
+  };
+}
+
+function makeMemory(existing: boolean) {
+  const calls: { titles: string[] } = { titles: [] };
+  const memory: MemoryAccess = {
+    getThreadById: async () => (existing ? { metadata: { kept: true } } : null),
+    updateThread: async (params) => {
+      calls.titles.push(params.title);
+      return params;
+    },
+  };
+  return { memory, calls };
+}
+
+function makeAgent(chunks: Chunk[], memory?: MemoryAccess) {
+  const calls: {
+    prompt?: string;
+    runId?: string;
+    threadId?: string;
+    resourceId?: string;
+    aborted?: AbortSignal;
+  } = {};
+  const agent: RunnableAgent = {
+    stream: async (prompt, options) => {
+      calls.prompt = prompt;
+      calls.runId = options.runId;
+      calls.threadId = options.memory.thread;
+      calls.resourceId = options.memory.resource;
+      calls.aborted = options.abortSignal;
+      if (options.abortSignal.aborted) {
+        throw new Error('This operation was aborted');
+      }
+      return streamOf(chunks);
+    },
+    getMemory: async () => memory,
+  };
+  return { agent, calls };
+}
+
+const TUPLE = {
+  agentId: 'main-agent',
+  threadId: 'main-agent-user-1-uuid-a',
+  resourceId: 'user-1',
+};
+
+function registeredRun(registry: RunRegistry, requestAbort: () => void = () => undefined) {
+  const run = registry.createRun({
+    id: createRunId(),
+    ...TUPLE,
+    requestAbort,
+  });
+  return run;
+}
+
+describe('chunkToRunEvent', () => {
+  it('maps text, tool, and error chunks', () => {
+    expect(
+      chunkToRunEvent({ type: 'text-delta', payload: { text: 'hi' } }),
+    ).toEqual({ type: 'text-delta', payload: { text: 'hi' } });
+
+    expect(
+      chunkToRunEvent({
+        type: 'tool-call',
+        payload: { toolCallId: 'tc-1', toolName: 'search_web', args: { q: 'x' } },
+      }),
+    ).toEqual({
+      type: 'tool-call',
+      payload: {
+        toolCallId: 'tc-1',
+        toolName: 'search_web',
+        args: { q: 'x' },
+      },
+    });
+
+    expect(
+      chunkToRunEvent({
+        type: 'tool-result',
+        payload: { toolCallId: 'tc-1', toolName: 'search_web', result: 'ok' },
+      }),
+    ).toEqual({
+      type: 'tool-result',
+      payload: {
+        toolCallId: 'tc-1',
+        toolName: 'search_web',
+        result: 'ok',
+      },
+    });
+
+    expect(
+      chunkToRunEvent({
+        type: 'tool-result',
+        payload: { toolCallId: 'tc-1', toolName: 'search_web', result: 'bad', isError: true },
+      })?.type,
+    ).toBe('tool-error');
+  });
+
+  it('sanitizes error chunks and ignores unrelated chunk types', () => {
+    expect(
+      chunkToRunEvent({ type: 'error', payload: { error: 'model down' } }),
+    ).toEqual({ type: 'error', payload: { error: 'model down' } });
+
+    expect(chunkToRunEvent({ type: 'step-start', payload: {} })).toBeNull();
+    expect(chunkToRunEvent({ type: 'reasoning', payload: {} })).toBeNull();
+    expect(chunkToRunEvent({ payload: { text: 'no type' } })).toBeNull();
+    expect(chunkToRunEvent({ type: 'text-delta', payload: {} })).toBeNull();
+  });
+});
+
+describe('buildThreadTitle', () => {
+  it('uses the prompt unchanged up to 52 characters', () => {
+    expect(buildThreadTitle('short prompt')).toBe('short prompt');
+  });
+
+  it('truncates long prompts the same way the client did', () => {
+    const long = 'a'.repeat(60);
+    const title = buildThreadTitle(long);
+    expect(title.length).toBe(50);
+    expect(title.endsWith('…')).toBe(true);
+  });
+});
+
+describe('runExecution', () => {
+  it('consumes the stream into registry events and completes the run', async () => {
+    const registry = new RunRegistry();
+    const { memory, calls: memoryCalls } = makeMemory(true);
+    const { agent, calls } = makeAgent(
+      [
+        { type: 'text-delta', payload: { text: 'Hello' } },
+        { type: 'text-delta', payload: { text: ' there' } },
+        { type: 'tool-call', payload: { toolCallId: 'tc-1', toolName: 'search_web' } },
+        { type: 'tool-result', payload: { toolCallId: 'tc-1', toolName: 'search_web', result: 'ok' } },
+        { type: 'step-start', payload: {} },
+      ],
+      memory,
+    );
+    const run = registeredRun(registry);
+
+    await runExecution(registry, agent, {
+      runId: run.id,
+      ...TUPLE,
+      prompt: 'do a thing',
+      firstTurn: true,
+      abortSignal: new AbortController().signal,
+    });
+
+    expect(calls.prompt).toBe('do a thing');
+    expect(calls.runId).toBe(run.id);
+    expect(calls.threadId).toBe(TUPLE.threadId);
+    expect(calls.resourceId).toBe(TUPLE.resourceId);
+
+    const events: string[] = [];
+    registry.subscribeFrom(run.id, 0, (event) => events.push(event.type));
+    expect(events).toEqual([
+      'text-delta',
+      'text-delta',
+      'tool-call',
+      'tool-result',
+      'finish',
+    ]);
+
+    expect(registry.getRun(run.id)?.status).toBe('completed');
+    expect(memoryCalls.titles).toEqual(['do a thing']);
+  });
+
+  it('skips the title update when the thread already existed', async () => {
+    const registry = new RunRegistry();
+    const { memory, calls: memoryCalls } = makeMemory(true);
+    const { agent } = makeAgent([], memory);
+    const run = registeredRun(registry);
+
+    await runExecution(registry, agent, {
+      runId: run.id,
+      ...TUPLE,
+      prompt: 'second turn',
+      firstTurn: false,
+      abortSignal: new AbortController().signal,
+    });
+
+    expect(registry.getRun(run.id)?.status).toBe('completed');
+    expect(memoryCalls.titles).toEqual([]);
+  });
+
+  it('fails the run when the stream reports an error chunk', async () => {
+    const registry = new RunRegistry();
+    const { memory, calls: memoryCalls } = makeMemory(true);
+    const { agent } = makeAgent(
+      [
+        { type: 'text-delta', payload: { text: 'partial' } },
+        { type: 'error', payload: { error: 'gateway exploded' } },
+      ],
+      memory,
+    );
+    const run = registeredRun(registry);
+
+    await runExecution(registry, agent, {
+      runId: run.id,
+      ...TUPLE,
+      prompt: 'boom',
+      firstTurn: true,
+      abortSignal: new AbortController().signal,
+    });
+
+    const final = registry.getRun(run.id);
+    expect(final?.status).toBe('failed');
+    expect(final?.error).toBe('The agent run reported an error.');
+    expect(memoryCalls.titles).toEqual([]);
+  });
+
+  it('marks the run cancelled when the abort signal already fired', async () => {
+    const registry = new RunRegistry();
+    const { agent } = makeAgent([]);
+    const controller = new AbortController();
+    const run = registry.createRun({
+      id: createRunId(),
+      ...TUPLE,
+      requestAbort: () => controller.abort(),
+    });
+
+    registry.requestCancel(run.id);
+
+    await runExecution(registry, agent, {
+      runId: run.id,
+      ...TUPLE,
+      prompt: 'stop me',
+      firstTurn: false,
+      abortSignal: controller.signal,
+    });
+
+    expect(registry.getRun(run.id)?.status).toBe('cancelled');
+  });
+
+  it('fails the run with a sanitized message when the agent stream throws', async () => {
+    const registry = new RunRegistry();
+    const failing: RunnableAgent = {
+      stream: async () => {
+        throw new Error('connection refused to model host');
+      },
+      getMemory: async () => undefined,
+    };
+    const run = registeredRun(registry);
+
+    await runExecution(registry, failing, {
+      runId: run.id,
+      ...TUPLE,
+      prompt: 'x',
+      firstTurn: false,
+      abortSignal: new AbortController().signal,
+    });
+
+    const final = registry.getRun(run.id);
+    expect(final?.status).toBe('failed');
+    expect(final?.error).toBe('connection refused to model host');
+  });
+
+  it('swallows title-update failures', async () => {
+    const registry = new RunRegistry();
+    const brokenMemory: MemoryAccess = {
+      getThreadById: async () => ({ metadata: {} }),
+      updateThread: async () => {
+        throw new Error('storage down');
+      },
+    };
+    const { agent } = makeAgent([], brokenMemory);
+    const run = registeredRun(registry);
+
+    await expect(
+      runExecution(registry, agent, {
+        runId: run.id,
+        ...TUPLE,
+        prompt: 'title me',
+        firstTurn: true,
+        abortSignal: new AbortController().signal,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(registry.getRun(run.id)?.status).toBe('completed');
+  });
+});

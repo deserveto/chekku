@@ -179,6 +179,25 @@ curl \
 
 Set `LLM_DEFAULT_MODEL` to an exact returned `id`, without adding Chekku's internal gateway prefix.
 
+## Agent runs
+
+Chat execution is server-owned. Each prompt creates a run on the agent server that keeps executing after the browser navigates away, reloads, or closes; the chat UI reconnects by replaying run events and never restarts the prompt. One non-terminal run is allowed per agent/thread/resource — a second start receives `409` with the active run id.
+
+Browser-facing endpoints (identity derived from the Better Auth session by the Next.js seam):
+
+- `POST /api/runs` — start a run (`{ agentId, threadId, prompt }`); responds `202 { run }` or `409 { run }`.
+- `GET /api/runs/active?agentId&threadId` — the thread's active run, or `204`.
+- `GET /api/runs/list[?agentId]` — active runs for sidebar status polling.
+- `GET /api/runs/<runId>/events?offset=N` — SSE replay-then-live event stream; closes on the terminal event.
+- `POST /api/runs/<runId>/cancel` — cancel exactly that run; idempotent.
+
+Operational limits to know:
+
+- The run registry is in-memory and single-instance. Restarting the agent server (dev or the `agent` container) kills in-flight runs; clients then see no active run and render the persisted Mastra Memory messages. Partial output of an interrupted run is not persisted (Mastra skips persistence on abort).
+- Terminal runs stay replayable for 30 minutes; afterwards only Memory messages remain and tool-timeline detail for that run is gone.
+- Run event buffers are capped (4 MiB / 10 000 events per run). Extremely long runs may replay with a gap in the middle; the run summary carries `evicted: true`.
+- Foreign or malformed run IDs collapse to `404`; unauthenticated calls to `/api/runs/*` return `403`.
+
 ## SearXNG search
 
 Local SearXNG runs pinned image `docker.io/searxng/searxng:2026.7.18-277d8469c`. Compose publishes container port `8080` only on loopback at `127.0.0.1:8888`; the container health check calls its internal `http://127.0.0.1:8080/healthz`. Tracked `searxng/settings.yml` enables JSON search with POST requests, safe-search level 1, page limit 5, a 5-second engine request timeout, and a 10-second maximum engine request timeout.
