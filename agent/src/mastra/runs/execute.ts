@@ -30,17 +30,17 @@ export interface RunnableAgent {
 }
 
 export interface MemoryAccess {
-  getThreadById(params: { id: string }): Promise<
+  getThreadById(params: { threadId: string }): Promise<
     | {
         metadata?: Record<string, unknown>;
       }
     | null
     | undefined
   >;
-  updateThread(params: {
-    id: string;
-    title: string;
-    metadata?: Record<string, unknown>;
+  createThread(params: {
+    threadId: string;
+    resourceId: string;
+    title?: string;
   }): Promise<unknown>;
 }
 
@@ -117,23 +117,30 @@ export function buildThreadTitle(prompt: string): string {
     : prompt;
 }
 
-async function applyFirstTurnTitle(
+/**
+ * Creates the Memory thread record for a first turn before execution starts,
+ * titled from the prompt. Mastra's stream would create the thread record on
+ * its own once consumption begins, but doing it here (before the 202 goes
+ * out) means the thread and its name are already visible to thread listings
+ * the moment the client is told the run started. Best-effort: on failure,
+ * Mastra's own thread creation during the run still applies.
+ */
+export async function ensureFirstTurnThread(
   agent: RunnableAgent,
-  threadId: string,
-  prompt: string,
+  params: { threadId: string; resourceId: string; prompt: string },
 ): Promise<void> {
   try {
     const memory = await agent.getMemory();
     if (!memory) return;
-    const thread = await memory.getThreadById({ id: threadId });
-    if (!thread) return;
-    await memory.updateThread({
-      id: threadId,
-      title: buildThreadTitle(prompt),
-      metadata: thread.metadata ?? {},
+    const thread = await memory.getThreadById({ threadId: params.threadId });
+    if (thread) return;
+    await memory.createThread({
+      threadId: params.threadId,
+      resourceId: params.resourceId,
+      title: buildThreadTitle(params.prompt),
     });
   } catch {
-    // Title generation is best-effort; the run itself stays successful.
+    // Title creation is best-effort; the run itself must still start.
   }
 }
 
@@ -143,7 +150,6 @@ export interface RunExecutionParams {
   threadId: string;
   resourceId: string;
   prompt: string;
-  firstTurn: boolean;
   /** Signal owned by the route handler; `registry.createRun` received its abort callback. */
   abortSignal: AbortSignal;
 }
@@ -190,10 +196,6 @@ export async function runExecution(
       sawError ? 'failed' : 'completed',
       sawError ? 'The agent run reported an error.' : undefined,
     );
-
-    if (!sawError && params.firstTurn) {
-      await applyFirstTurnTitle(agent, params.threadId, params.prompt);
-    }
   } catch (error) {
     if (registry.isCancelRequested(params.runId)) {
       registry.finishRun(params.runId, 'cancelled');

@@ -16,12 +16,23 @@ describe('chat-studio run-lifecycle wiring', () => {
 
   it('discovers an existing run on mount and reconnects to it', () => {
     expect(chatStudio).toContain('await getActiveRun(agentId, threadId)');
-    expect(chatStudio).toContain('beginSubscription(run.id, crypto.randomUUID())');
+    expect(chatStudio).toContain('attachToRun(run)');
   });
 
   it('attaches to the existing run on conflict instead of duplicating', () => {
     expect(chatStudio).toContain('reason instanceof RunConflictError');
-    expect(chatStudio).toContain('beginSubscription(reason.run.id,');
+    expect(chatStudio).toContain('attachToRun(reason.run)');
+  });
+
+  it('synthesizes the in-flight user turn from the run record on attach', () => {
+    // Mastra persists the user message only at turn end, so attaching to a
+    // running run must render the prompt from the run summary.
+    expect(chatStudio).toContain('const attachToRun = useCallback(');
+    expect(chatStudio).toContain('message.content === run.prompt');
+  });
+
+  it('refreshes the thread list as soon as a run starts', () => {
+    expect(chatStudio).toContain('void refreshThreads();');
   });
 
   it('cancels by run id instead of aborting the whole thread', () => {

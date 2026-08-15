@@ -31,6 +31,12 @@ export interface AgentRunSummary {
   resourceId: string;
   agentId: string;
   threadId: string;
+  /**
+   * The prompt that started the run. Mastra persists the user message only
+   * at turn end, so reconnecting clients need it from the run record to
+   * render the in-flight user turn.
+   */
+  prompt: string;
   status: AgentRunStatus;
   startedAt: string;
   updatedAt: string;
@@ -137,6 +143,7 @@ export class RunRegistry {
     agentId: string;
     threadId: string;
     resourceId: string;
+    prompt: string;
     requestAbort: () => void;
   }): AgentRunSummary {
     if (!isRunId(params.id)) {
@@ -161,6 +168,7 @@ export class RunRegistry {
         resourceId: params.resourceId,
         agentId: params.agentId,
         threadId: params.threadId,
+        prompt: params.prompt,
         status: 'running',
         startedAt,
         updatedAt: startedAt,

@@ -3,6 +3,7 @@ import { RunRegistry, createRunId } from './run-registry.js';
 import {
   buildThreadTitle,
   chunkToRunEvent,
+  ensureFirstTurnThread,
   runExecution,
   type MemoryAccess,
   type RunnableAgent,
@@ -25,8 +26,8 @@ function makeMemory(existing: boolean) {
   const calls: { titles: string[] } = { titles: [] };
   const memory: MemoryAccess = {
     getThreadById: async () => (existing ? { metadata: { kept: true } } : null),
-    updateThread: async (params) => {
-      calls.titles.push(params.title);
+    createThread: async (params) => {
+      calls.titles.push(params.title ?? '');
       return params;
     },
   };
@@ -63,15 +64,6 @@ const TUPLE = {
   threadId: 'main-agent-user-1-uuid-a',
   resourceId: 'user-1',
 };
-
-function registeredRun(registry: RunRegistry, requestAbort: () => void = () => undefined) {
-  const run = registry.createRun({
-    id: createRunId(),
-    ...TUPLE,
-    requestAbort,
-  });
-  return run;
-}
 
 describe('chunkToRunEvent', () => {
   it('maps text, tool, and error chunks', () => {
@@ -140,6 +132,77 @@ describe('buildThreadTitle', () => {
   });
 });
 
+describe('ensureFirstTurnThread', () => {
+  it('creates the missing thread record titled from the prompt', async () => {
+    const { memory, calls } = makeMemory(false);
+    const { agent } = makeAgent([], memory);
+
+    await ensureFirstTurnThread(agent, {
+      threadId: TUPLE.threadId,
+      resourceId: TUPLE.resourceId,
+      prompt: 'research the market',
+    });
+
+    expect(calls.titles).toEqual(['research the market']);
+  });
+
+  it('truncates long prompts into the thread title', async () => {
+    const { memory, calls } = makeMemory(false);
+    const { agent } = makeAgent([], memory);
+
+    await ensureFirstTurnThread(agent, {
+      threadId: TUPLE.threadId,
+      resourceId: TUPLE.resourceId,
+      prompt: 'a'.repeat(60),
+    });
+
+    expect(calls.titles).toEqual([buildThreadTitle('a'.repeat(60))]);
+  });
+
+  it('leaves an existing thread untouched', async () => {
+    const { memory, calls } = makeMemory(true);
+    const { agent } = makeAgent([], memory);
+
+    await ensureFirstTurnThread(agent, {
+      threadId: TUPLE.threadId,
+      resourceId: TUPLE.resourceId,
+      prompt: 'second turn',
+    });
+
+    expect(calls.titles).toEqual([]);
+  });
+
+  it('swallows storage failures so the run can still start', async () => {
+    const brokenMemory: MemoryAccess = {
+      getThreadById: async () => null,
+      createThread: async () => {
+        throw new Error('storage down');
+      },
+    };
+    const { agent } = makeAgent([], brokenMemory);
+
+    await expect(
+      ensureFirstTurnThread(agent, {
+        threadId: TUPLE.threadId,
+        resourceId: TUPLE.resourceId,
+        prompt: 'title me',
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('does nothing when the agent has no memory', async () => {
+    const { agent } = makeAgent([]);
+
+    await expect(
+      ensureFirstTurnThread(agent, {
+        threadId: TUPLE.threadId,
+        resourceId: TUPLE.resourceId,
+        prompt: 'title me',
+      }),
+    ).resolves.toBeUndefined();
+  });
+});
+
 describe('runExecution', () => {
   it('consumes the stream into registry events and completes the run', async () => {
     const registry = new RunRegistry();
@@ -154,13 +217,17 @@ describe('runExecution', () => {
       ],
       memory,
     );
-    const run = registeredRun(registry);
+    const run = registry.createRun({
+      id: createRunId(),
+      ...TUPLE,
+      prompt: 'do a thing',
+      requestAbort: () => undefined,
+    });
 
     await runExecution(registry, agent, {
       runId: run.id,
       ...TUPLE,
       prompt: 'do a thing',
-      firstTurn: true,
       abortSignal: new AbortController().signal,
     });
 
@@ -180,30 +247,13 @@ describe('runExecution', () => {
     ]);
 
     expect(registry.getRun(run.id)?.status).toBe('completed');
-    expect(memoryCalls.titles).toEqual(['do a thing']);
-  });
-
-  it('skips the title update when the thread already existed', async () => {
-    const registry = new RunRegistry();
-    const { memory, calls: memoryCalls } = makeMemory(true);
-    const { agent } = makeAgent([], memory);
-    const run = registeredRun(registry);
-
-    await runExecution(registry, agent, {
-      runId: run.id,
-      ...TUPLE,
-      prompt: 'second turn',
-      firstTurn: false,
-      abortSignal: new AbortController().signal,
-    });
-
-    expect(registry.getRun(run.id)?.status).toBe('completed');
+    // Titles are owned by ensureFirstTurnThread at run start, not execution.
     expect(memoryCalls.titles).toEqual([]);
   });
 
   it('fails the run when the stream reports an error chunk', async () => {
     const registry = new RunRegistry();
-    const { memory, calls: memoryCalls } = makeMemory(true);
+    const { memory } = makeMemory(true);
     const { agent } = makeAgent(
       [
         { type: 'text-delta', payload: { text: 'partial' } },
@@ -211,20 +261,23 @@ describe('runExecution', () => {
       ],
       memory,
     );
-    const run = registeredRun(registry);
+    const run = registry.createRun({
+      id: createRunId(),
+      ...TUPLE,
+      prompt: 'boom',
+      requestAbort: () => undefined,
+    });
 
     await runExecution(registry, agent, {
       runId: run.id,
       ...TUPLE,
       prompt: 'boom',
-      firstTurn: true,
       abortSignal: new AbortController().signal,
     });
 
     const final = registry.getRun(run.id);
     expect(final?.status).toBe('failed');
     expect(final?.error).toBe('The agent run reported an error.');
-    expect(memoryCalls.titles).toEqual([]);
   });
 
   it('marks the run cancelled when the abort signal already fired', async () => {
@@ -234,6 +287,7 @@ describe('runExecution', () => {
     const run = registry.createRun({
       id: createRunId(),
       ...TUPLE,
+      prompt: 'stop me',
       requestAbort: () => controller.abort(),
     });
 
@@ -243,7 +297,6 @@ describe('runExecution', () => {
       runId: run.id,
       ...TUPLE,
       prompt: 'stop me',
-      firstTurn: false,
       abortSignal: controller.signal,
     });
 
@@ -258,42 +311,22 @@ describe('runExecution', () => {
       },
       getMemory: async () => undefined,
     };
-    const run = registeredRun(registry);
+    const run = registry.createRun({
+      id: createRunId(),
+      ...TUPLE,
+      prompt: 'x',
+      requestAbort: () => undefined,
+    });
 
     await runExecution(registry, failing, {
       runId: run.id,
       ...TUPLE,
       prompt: 'x',
-      firstTurn: false,
       abortSignal: new AbortController().signal,
     });
 
     const final = registry.getRun(run.id);
     expect(final?.status).toBe('failed');
     expect(final?.error).toBe('connection refused to model host');
-  });
-
-  it('swallows title-update failures', async () => {
-    const registry = new RunRegistry();
-    const brokenMemory: MemoryAccess = {
-      getThreadById: async () => ({ metadata: {} }),
-      updateThread: async () => {
-        throw new Error('storage down');
-      },
-    };
-    const { agent } = makeAgent([], brokenMemory);
-    const run = registeredRun(registry);
-
-    await expect(
-      runExecution(registry, agent, {
-        runId: run.id,
-        ...TUPLE,
-        prompt: 'title me',
-        firstTurn: true,
-        abortSignal: new AbortController().signal,
-      }),
-    ).resolves.toBeUndefined();
-
-    expect(registry.getRun(run.id)?.status).toBe('completed');
   });
 });

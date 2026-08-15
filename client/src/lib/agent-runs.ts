@@ -23,6 +23,12 @@ export interface AgentRunSummary {
   resourceId: string;
   agentId: string;
   threadId: string;
+  /**
+   * The prompt that started the run. Mastra persists the user message only
+   * at turn end, so a client attaching to an in-flight run renders the
+   * user turn from this field instead of Memory.
+   */
+  prompt: string;
   status: AgentRunStatus;
   startedAt: string;
   updatedAt: string;

@@ -9,8 +9,8 @@ import {
   type AgentRunSummary,
 } from '../runs/run-registry.js';
 import {
+  ensureFirstTurnThread,
   runExecution,
-  type MemoryAccess,
   type RunnableAgent,
 } from '../runs/execute.js';
 import {
@@ -134,19 +134,11 @@ export const startRunRoute = registerApiRoute('/runs', {
       return c.json({ error: 'Unknown agent' }, 404);
     }
 
-    // The thread record is created by Mastra on the first completed turn,
-    // so a missing thread means this is the first turn and the server (not
-    // the browser) owns the follow-up title update.
-    let firstTurn = false;
-    try {
-      const memory: MemoryAccess | undefined = await agent.getMemory();
-      const thread = memory
-        ? await memory.getThreadById({ id: threadId })
-        : null;
-      firstTurn = !thread;
-    } catch {
-      firstTurn = false;
-    }
+    // First turn: create the Memory thread record (titled from the prompt)
+    // before execution starts, so the thread and its name are visible in
+    // listings the moment the run starts — not when Mastra persists the
+    // first completed turn.
+    await ensureFirstTurnThread(agent, { threadId, resourceId, prompt });
 
     const runId = createRunId();
     const controller = new AbortController();
@@ -157,6 +149,7 @@ export const startRunRoute = registerApiRoute('/runs', {
         agentId,
         threadId,
         resourceId,
+        prompt,
         requestAbort: () => controller.abort(),
       });
     } catch (error) {
@@ -175,7 +168,6 @@ export const startRunRoute = registerApiRoute('/runs', {
       threadId,
       resourceId,
       prompt,
-      firstTurn,
       abortSignal: controller.signal,
     });
 

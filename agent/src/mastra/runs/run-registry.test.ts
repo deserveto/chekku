@@ -28,6 +28,7 @@ const TUPLE = {
   agentId: 'main-agent',
   threadId: 'main-agent-user-1-uuid-a',
   resourceId: 'user-1',
+  prompt: 'do a thing',
 };
 
 describe('createRunId', () => {
@@ -54,6 +55,7 @@ describe('RunRegistry lifecycle', () => {
 
     expect(run.status).toBe('running');
     expect(run.agentId).toBe(TUPLE.agentId);
+    expect(run.prompt).toBe(TUPLE.prompt);
     expect(registry.getRun(run.id)?.status).toBe('running');
   });
 
@@ -106,6 +108,7 @@ describe('RunRegistry lifecycle', () => {
       agentId: 'main-agent',
       threadId: 'main-agent-user-1-uuid-b',
       resourceId: 'user-1',
+      prompt: 'other thread prompt',
       requestAbort: () => undefined,
     });
     const otherAgent = registry.createRun({
@@ -113,6 +116,7 @@ describe('RunRegistry lifecycle', () => {
       agentId: 'pm-agent',
       threadId: 'pm-agent-user-1-uuid-a',
       resourceId: 'user-1',
+      prompt: 'other agent prompt',
       requestAbort: () => undefined,
     });
 
@@ -173,6 +177,7 @@ describe('RunRegistry discovery', () => {
       agentId: 'pm-agent',
       threadId: 'pm-agent-user-1-uuid-a',
       resourceId: 'user-1',
+      prompt: 'pm prompt',
       requestAbort: () => undefined,
     });
 
@@ -307,6 +312,7 @@ describe('RunRegistry cancellation', () => {
       agentId: 'main-agent',
       threadId: 'main-agent-user-1-uuid-b',
       resourceId: 'user-1',
+      prompt: 'run b prompt',
       requestAbort: () => aborted.push('b'),
     });
 

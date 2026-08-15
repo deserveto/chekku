@@ -98,11 +98,12 @@ const threads = [
   },
 ];
 
-const runningRun = (id: string, threadId: string) => ({
+const runningRun = (id: string, threadId: string, prompt = 'run prompt') => ({
   id,
   resourceId: 'local-user',
   agentId: 'main-agent',
   threadId,
+  prompt,
   status: 'running' as const,
   startedAt: new Date(0).toISOString(),
   updatedAt: new Date(0).toISOString(),
@@ -206,7 +207,9 @@ afterEach(() => {
 
 describe('ChatStudio run reconnection', () => {
   it('discovers a running run on mount and replays its events without starting a new one', async () => {
-    getActiveRun.mockResolvedValue(runningRun('run_20260101000000_000000aa', activeThreadId));
+    getActiveRun.mockResolvedValue(
+      runningRun('run_20260101000000_000000aa', activeThreadId, 'original task'),
+    );
     observeRunEvents.mockImplementation(
       async (_runId: string, { onEvent }: { onEvent: (event: unknown) => void }) => {
         onEvent({
@@ -226,7 +229,67 @@ describe('ChatStudio run reconnection', () => {
       'run_20260101000000_000000aa',
       expect.objectContaining({ offset: 0 }),
     );
+    // Mastra persists the user message only at turn end, so the in-flight
+    // prompt is synthesized from the run record.
+    expect(container.textContent).toContain('original task');
     expect(container.textContent).toContain('reconnected partial');
+    expect(container.querySelector('.chat-welcome')).toBeNull();
+  });
+
+  it('renders replayed tool progress before any text delta arrives', async () => {
+    getActiveRun.mockResolvedValue(
+      runningRun('run_20260101000000_000000dd', activeThreadId, 'search task'),
+    );
+    observeRunEvents.mockImplementation(
+      async (_runId: string, { onEvent }: { onEvent: (event: unknown) => void }) => {
+        onEvent({
+          sequence: 0,
+          type: 'tool-call',
+          payload: { toolCallId: 'tc-1', toolName: 'search_web', args: {} },
+          createdAt: '',
+        });
+      },
+    );
+
+    await remount();
+
+    // The assistant placeholder created on attach gives tool events a
+    // message to render under instead of the empty welcome state.
+    expect(container.querySelector('.chat-welcome')).toBeNull();
+    expect(container.textContent).toContain('search task');
+    // toolName is displayed with underscores replaced by spaces.
+    expect(container.textContent).toContain('search web');
+  });
+
+  it('does not duplicate the prompt when Memory already persisted the turn', async () => {
+    listThreadMessages.mockResolvedValue([
+      {
+        id: 'mem-user-1',
+        role: 'user',
+        content: 'already stored prompt',
+        createdAt: 1,
+      },
+      {
+        id: 'mem-assistant-1',
+        role: 'assistant',
+        content: 'stored answer',
+        createdAt: 2,
+      },
+    ]);
+    getActiveRun.mockResolvedValue(
+      runningRun(
+        'run_20260101000000_000000ee',
+        activeThreadId,
+        'already stored prompt',
+      ),
+    );
+    observeRunEvents.mockImplementation(async () => undefined);
+
+    await remount();
+
+    const occurrences =
+      container.textContent?.split('already stored prompt').length ?? 0;
+    expect(occurrences).toBe(2); // one split prefix + one match
   });
 
   it('navigates to another thread while the current run keeps executing', async () => {
@@ -254,7 +317,7 @@ describe('ChatStudio run reconnection', () => {
   it('attaches to the existing run when a duplicate start is rejected', async () => {
     startRun.mockRejectedValueOnce(
       new RunConflictError(
-        runningRun('run_20260101000000_000000bb', activeThreadId),
+        runningRun('run_20260101000000_000000bb', activeThreadId, 'first tab task'),
         'A run is already active for this thread',
       ),
     );
@@ -267,8 +330,21 @@ describe('ChatStudio run reconnection', () => {
       'run_20260101000000_000000bb',
       expect.objectContaining({ offset: 0 }),
     );
-    // The optimistic duplicate prompt was rolled back.
+    // The optimistic duplicate prompt was rolled back; the existing run's
+    // prompt is re-synthesized from the run record instead.
     expect(container.textContent).not.toContain('duplicate');
+    expect(container.textContent).toContain('first tab task');
+  });
+
+  it('refreshes the thread list as soon as a run starts', async () => {
+    const before = listAgentThreads.mock.calls.length;
+    await enterComposerText('long task');
+    await submitComposer();
+
+    expect(startRun).toHaveBeenCalledTimes(1);
+    // The server creates the Memory thread before responding, so one
+    // refresh surfaces the new thread immediately (sidebar + title).
+    expect(listAgentThreads.mock.calls.length).toBeGreaterThan(before);
   });
 
   it('cancels the active run by id from the stop button', async () => {

@@ -16,6 +16,7 @@ const run = {
   resourceId: 'user-1',
   agentId: 'main-agent',
   threadId: 'main-agent-user-1-uuid-a',
+  prompt: 'do a thing',
   status: 'running' as const,
   startedAt: new Date(0).toISOString(),
   updatedAt: new Date(0).toISOString(),

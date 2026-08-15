@@ -288,6 +288,52 @@ export function ChatStudio({
     [applyRunEvent, finalizeTerminalMessage, refreshThreads],
   );
 
+  /**
+   * Attaches this view to an in-flight run it did not start (mount
+   * discovery or a 409 duplicate). Mastra persists the user message only
+   * at turn end, so the run's prompt is synthesized locally and an empty
+   * assistant placeholder is added — replayed tool events then have a
+   * message to render under even before the first text delta arrives.
+   */
+  const attachToRun = useCallback(
+    (run: AgentRunSummary) => {
+      const assistantId = crypto.randomUUID();
+      const startedAt = Date.parse(run.startedAt) || Date.now();
+
+      setMessages((current) => {
+        // Memory may already contain the persisted turn (completed between
+        // loading messages and discovering the run) — then nothing to add.
+        if (
+          current.some(
+            (message) =>
+              message.role === 'user' && message.content === run.prompt,
+          )
+        ) {
+          return current;
+        }
+        return [
+          ...current,
+          {
+            id: crypto.randomUUID(),
+            role: 'user' as const,
+            content: run.prompt,
+            createdAt: startedAt,
+          },
+          {
+            id: assistantId,
+            role: 'assistant' as const,
+            content: '',
+            createdAt: startedAt + 1,
+          },
+        ];
+      });
+
+      setActiveRun(run);
+      beginSubscription(run.id, assistantId);
+    },
+    [beginSubscription],
+  );
+
   useEffect(() => {
     let cancelled = false;
 
@@ -337,8 +383,7 @@ export function ChatStudio({
         try {
           const run = await getActiveRun(agentId, threadId);
           if (!cancelled && run && run.status === 'running') {
-            setActiveRun(run);
-            beginSubscription(run.id, crypto.randomUUID());
+            attachToRun(run);
           }
         } catch {
           // Run discovery is best-effort; the thread still renders from Memory.
@@ -363,7 +408,7 @@ export function ChatStudio({
       subscriptionRef.current?.abort();
       subscriptionRef.current = null;
     };
-  }, [agentId, beginSubscription, refreshThreads, resourceId, threadId]);
+  }, [agentId, attachToRun, refreshThreads, resourceId, threadId]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -531,19 +576,23 @@ export function ChatStudio({
 
       setActiveRun(run);
       beginSubscription(run.id, assistantId);
+      // The server creates the Memory thread (titled from the prompt)
+      // before the start response, so one refresh surfaces the new thread
+      // in the sidebar immediately instead of after the run completes.
+      void refreshThreads();
     } catch (reason) {
       if (reason instanceof RunConflictError && reason.run) {
         // Another client already started this thread's run (e.g. a second
         // tab). Drop the optimistic duplicate prompt and attach to the
-        // existing run instead of starting a second execution.
+        // existing run instead of starting a second execution; the existing
+        // run's prompt is re-synthesized from the run record.
         setMessages((current) =>
           current.filter(
             (message) =>
               message.id !== userMessageId && message.id !== assistantId,
           ),
         );
-        setActiveRun(reason.run);
-        beginSubscription(reason.run.id, crypto.randomUUID());
+        attachToRun(reason.run);
         return;
       }
 

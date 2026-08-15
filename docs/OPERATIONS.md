@@ -185,7 +185,7 @@ Chat execution is server-owned. Each prompt creates a run on the agent server th
 
 Browser-facing endpoints (identity derived from the Better Auth session by the Next.js seam):
 
-- `POST /api/runs` — start a run (`{ agentId, threadId, prompt }`); responds `202 { run }` or `409 { run }`.
+- `POST /api/runs` — start a run (`{ agentId, threadId, prompt }`); responds `202 { run }` or `409 { run }`. On a first turn the server creates the Memory thread record titled from the prompt (52-character truncation) before responding, so the thread shows up in the sidebar with a real name immediately, and the run summary in the response carries the `prompt`.
 - `GET /api/runs/active?agentId&threadId` — the thread's active run, or `204`.
 - `GET /api/runs/list[?agentId]` — active runs for sidebar status polling.
 - `GET /api/runs/<runId>/events?offset=N` — SSE replay-then-live event stream; closes on the terminal event.
@@ -194,6 +194,7 @@ Browser-facing endpoints (identity derived from the Better Auth session by the N
 Operational limits to know:
 
 - The run registry is in-memory and single-instance. Restarting the agent server (dev or the `agent` container) kills in-flight runs; clients then see no active run and render the persisted Mastra Memory messages. Partial output of an interrupted run is not persisted (Mastra skips persistence on abort).
+- Mastra persists a turn's user message only when the turn completes. While a run is in flight, the chat UI shows the user turn and live tool/text progress from the run record (`prompt` + event replay), not from Memory.
 - Terminal runs stay replayable for 30 minutes; afterwards only Memory messages remain and tool-timeline detail for that run is gone.
 - Run event buffers are capped (4 MiB / 10 000 events per run). Extremely long runs may replay with a gap in the middle; the run summary carries `evicted: true`.
 - Foreign or malformed run IDs collapse to `404`; unauthenticated calls to `/api/runs/*` return `403`.
