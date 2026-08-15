@@ -75,7 +75,7 @@ export function parseStartRunRequest(
 }
 
 type MastraLike = {
-  getAgent(agentId: string): unknown;
+  getAgentById(id: string): unknown;
 };
 
 type RunsRouteContext = {
@@ -93,12 +93,14 @@ function resolveMastra(c: RunsRouteContext): MastraLike | undefined {
   return c.get?.('mastra') as MastraLike | undefined;
 }
 
-function resolveAgent(
+export function resolveAgent(
   c: RunsRouteContext,
   agentId: string,
 ): RunnableAgent | null {
   try {
-    const agent = resolveMastra(c)?.getAgent(agentId);
+    // getAgentById resolves by the agent's public id (e.g. 'main-agent');
+    // the registry keys ('mainAgent', ...) are internal composition names.
+    const agent = resolveMastra(c)?.getAgentById(agentId);
     if (
       agent &&
       typeof (agent as RunnableAgent).stream === 'function' &&

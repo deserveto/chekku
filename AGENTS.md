@@ -69,7 +69,7 @@ A task is not complete until affected tests pass. Before finalizing any reposito
 - The Next.js `/api/runs/*` seam (`client/src/app/api/runs/[[...path]]/route.ts`) derives `resourceId` from the Better Auth session on every request, discards any client-supplied value, and validates thread ownership before forwarding. Agent-side run routes mirror the thread-ownership check (`agent/src/mastra/runs/thread-ownership.ts`) and collapse foreign run IDs to 404.
 - Stop cancels by run ID (`POST /api/runs/:runId/cancel`, idempotent). Do not reintroduce thread-scoped `abortThread` cancellation for the chat UI.
 - First-turn thread titles are updated server-side on run completion (52-character prompt truncation); the browser no longer owns renaming.
-- Native alternatives were evaluated and rejected: Mastra `observe` replay requires `mastra.pubsub` or `DurableAgent`/Redis, which Chekku does not run, and the `sendMessage`/`subscribeToThread`/signals surface is `@experimental`. The run manager uses only stable primitives (`agent.stream` with caller-supplied `runId` and `abortSignal`, `mastra.getAgent`).
+- Native alternatives were evaluated and rejected: Mastra `observe` replay requires `mastra.pubsub` or `DurableAgent`/Redis, which Chekku does not run, and the `sendMessage`/`subscribeToThread`/signals surface is `@experimental`. The run manager uses only stable primitives (`agent.stream` with caller-supplied `runId` and `abortSignal`, `mastra.getAgentById` — resolve agents by their public id, never `getAgent`, which only matches internal registry keys like `mainAgent`).
 
 ### Stored agents
 

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_PROMPT_UTF8_BYTES, parseStartRunRequest } from './runs.js';
+import {
+  MAX_PROMPT_UTF8_BYTES,
+  parseStartRunRequest,
+  resolveAgent,
+} from './runs.js';
 
 const VALID = {
   agentId: 'main-agent',
@@ -7,6 +11,57 @@ const VALID = {
   resourceId: 'user-1',
   prompt: 'Hello there',
 };
+
+const agentLike = {
+  stream: () => undefined,
+  getMemory: async () => undefined,
+};
+
+describe('resolveAgent', () => {
+  it('resolves by public agent id via getAgentById, not registry keys', () => {
+    // Chekku registers agents under composition keys (mainAgent, pmAgent,
+    // ...); the public id ('main-agent') lives on the agent itself. This
+    // regressed once as "Unknown agent" for every agent in the UI.
+    const context = {
+      get: (key: string) =>
+        key === 'mastra'
+          ? {
+              getAgentById: (id: string) =>
+                id === 'main-agent' ? agentLike : undefined,
+            }
+          : undefined,
+    };
+
+    expect(resolveAgent(context as never, 'main-agent')).toBe(agentLike);
+    expect(resolveAgent(context as never, 'no-such-agent')).toBeNull();
+  });
+
+  it('returns null when the mastra instance or agent shape is missing', () => {
+    expect(resolveAgent({} as never, 'main-agent')).toBeNull();
+    expect(
+      resolveAgent(
+        {
+          get: () => ({
+            getAgentById: () => ({ stream: () => undefined }),
+          }),
+        } as never,
+        'main-agent',
+      ),
+    ).toBeNull();
+    expect(
+      resolveAgent(
+        {
+          get: () => ({
+            getAgentById: () => {
+              throw new Error('not found');
+            },
+          }),
+        } as never,
+        'main-agent',
+      ),
+    ).toBeNull();
+  });
+});
 
 describe('parseStartRunRequest', () => {
   it('accepts a valid start payload and trims the prompt', () => {
