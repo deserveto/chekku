@@ -44,6 +44,17 @@ export async function middleware(request: NextRequest) {
         });
       }
     }
+    if (pathname.endsWith('/request-password-reset')) {
+      const result = consumeRateLimit('password-reset', clientIp(request));
+      if (!result.allowed) {
+        return new NextResponse('Too many requests.', {
+          status: 429,
+          headers: {
+            'retry-after': String(Math.ceil(result.retryAfterMs / 1000)),
+          },
+        });
+      }
+    }
   }
 
   const target = resolveAuthRedirect({

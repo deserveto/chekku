@@ -91,6 +91,22 @@ describe('resolveAuthRedirect', () => {
     );
   });
 
+  it('treats the password reset pages as public auth pages', async () => {
+    const { resolveAuthRedirect } = await import('./auth-rate-limit');
+    expect(
+      resolveAuthRedirect({ pathname: '/forgot-password', hasSession: false }),
+    ).toBeNull();
+    expect(
+      resolveAuthRedirect({ pathname: '/reset-password', hasSession: false }),
+    ).toBeNull();
+    expect(
+      resolveAuthRedirect({ pathname: '/forgot-password', hasSession: true }),
+    ).toBe('/agents');
+    expect(
+      resolveAuthRedirect({ pathname: '/reset-password', hasSession: true }),
+    ).toBe('/agents');
+  });
+
   it('sends unauthenticated users on protected routes to /login', async () => {
     const { resolveAuthRedirect } = await import('./auth-rate-limit');
     expect(
