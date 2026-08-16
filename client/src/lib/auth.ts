@@ -1,7 +1,7 @@
 import 'server-only';
 import { betterAuth } from 'better-auth';
 import { buildAuthOptions } from './auth-options';
-import { sendVerificationEmail } from '@/server/email';
+import { sendResetPasswordEmail, sendVerificationEmail } from '@/server/email';
 
 export const auth = betterAuth(
   buildAuthOptions({
@@ -10,6 +10,9 @@ export const auth = betterAuth(
     connectionString: process.env.AUTH_DATABASE_URL,
     sendVerificationEmail: async ({ user, url }) => {
       await sendVerificationEmail({ to: user.email, url });
+    },
+    sendResetPassword: async ({ user, url }) => {
+      await sendResetPasswordEmail({ to: user.email, url });
     },
   }),
 );

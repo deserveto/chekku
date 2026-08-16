@@ -19,5 +19,6 @@ export const auth = betterAuth(
     connectionString: process.env.AUTH_DATABASE_URL,
     // Never invoked — the CLI derives the schema without sending mail.
     sendVerificationEmail: async () => {},
+    sendResetPassword: async () => {},
   }),
 );

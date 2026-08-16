@@ -14,6 +14,7 @@ describe('buildAuthOptions', () => {
       baseURL: 'https://app.test',
       connectionString: 'postgresql://u:p@h:5432/chekku_auth',
       sendVerificationEmail: async () => {},
+      sendResetPassword: async () => {},
     });
     expect(options.baseURL).toBe('https://app.test');
     expect(options.secret).toBe('s');
@@ -29,6 +30,7 @@ describe('buildAuthOptions', () => {
       sendVerificationEmail: async (args) => {
         sent.push(args);
       },
+      sendResetPassword: async () => {},
     });
 
     await options.emailVerification.sendVerificationEmail({
@@ -53,6 +55,7 @@ describe('buildAuthOptions', () => {
       sendVerificationEmail: async (args) => {
         sent.push(args.url);
       },
+      sendResetPassword: async () => {},
     });
 
     await options.emailVerification.sendVerificationEmail({
@@ -62,5 +65,36 @@ describe('buildAuthOptions', () => {
 
     const callback = new URL(sent[0]).searchParams.get('callbackURL');
     expect(callback).toBe(EMAIL_VERIFICATION_CALLBACK_URL);
+  });
+
+  it('revokes every session when a password is reset', async () => {
+    const { buildAuthOptions } = await import('./auth-options');
+    const options = buildAuthOptions({
+      connectionString: 'postgresql://u:p@h:5432/chekku_auth',
+      sendVerificationEmail: async () => {},
+      sendResetPassword: async () => {},
+    });
+    expect(options.emailAndPassword?.revokeSessionsOnPasswordReset).toBe(true);
+  });
+
+  it('delivers reset mail through the injected transport', async () => {
+    const { buildAuthOptions } = await import('./auth-options');
+    const sent: Array<{ user: { email: string }; url: string }> = [];
+    const options = buildAuthOptions({
+      connectionString: 'postgresql://u:p@h:5432/chekku_auth',
+      sendVerificationEmail: async () => {},
+      sendResetPassword: async (args) => {
+        sent.push(args);
+      },
+    });
+
+    await options.emailAndPassword?.sendResetPassword?.({
+      user: { email: 'person@example.test' },
+      url: 'https://app.test/api/auth/reset-password/tok',
+    });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].user).toEqual({ email: 'person@example.test' });
+    expect(sent[0].url).toContain('reset-password/tok');
   });
 });
