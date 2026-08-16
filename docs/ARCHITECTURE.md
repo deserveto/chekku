@@ -475,6 +475,7 @@ Chat report links use URL-encoded relative `/reports/<reportId>` or `/reports/co
 ### Next.js
 
 - `/` redirects to `/agents`.
+- `/login`, `/signup`, `/verify-email`, `/forgot-password`, and `/reset-password` render the email/password auth pages.
 - `/agents` lists code-defined and stored agents.
 - `/agents/new` creates a stored agent.
 - `/agents/[id]/edit` edits a stored agent.
@@ -500,6 +501,17 @@ Chat report links use URL-encoded relative `/reports/<reportId>` or `/reports/co
 - `GET /api/storage/social-posts/[postId]` returns one post after identity and ID validation.
 - `PATCH /api/storage/social-posts/[postId]` transitions a post `DRAFT → APPROVED` (the only allowed status mutation) after identity and ID validation; the body selects the approval transition and the server helper (`updateSocialPostStatus`) rewrites canonical metadata last.
 - `GET /api/storage/social-posts/[postId]/visuals/[assetId]` returns one visual asset's image bytes with the correct `Content-Type` after identity and both ID validation.
+
+Password reset uses Better Auth's native flow: `/forgot-password` calls
+`authClient.requestPasswordReset({ email, redirectTo: '/reset-password' })`;
+the emailed link (`/api/auth/reset-password/:token`) redirects to
+`/reset-password?token=...` for a single-use, one-hour token. A successful
+reset revokes every session for the user (`revokeSessionsOnPasswordReset`).
+Requests to `POST /request-password-reset` are rate-limited (5/min) by the
+middleware `password-reset` scope. The reset mail reuses the Resend transport
+(`RESEND_API_KEY` / `RESEND_FROM_EMAIL`, dev console fallback when unset).
+Signup requires typing the password twice; the match check is client-side
+only and never reaches `signUp.email` on mismatch.
 
 ### Mastra custom routes
 
