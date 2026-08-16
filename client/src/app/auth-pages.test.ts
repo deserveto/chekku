@@ -271,3 +271,94 @@ describe('forgot-password page', () => {
     await act(async () => root.unmount());
   });
 });
+
+describe('reset-password page', () => {
+  it('renders the new-password form when a token is present', async () => {
+    navigationMocks.searchParams = new URLSearchParams('token=tok123');
+    const ResetPage = (await import('./reset-password/page')).default;
+    const markup = renderToStaticMarkup(createElement(ResetPage));
+    expect(markup).toContain('type="password"');
+    expect(markup).toContain('New password');
+    expect(markup).toContain('Confirm password');
+  });
+
+  it('shows a bounded invalid-link panel without a token and never renders raw error codes', async () => {
+    navigationMocks.searchParams = new URLSearchParams(
+      'error=INVALID_TOKEN&error_description=raw%20provider%20detail',
+    );
+    const ResetPage = (await import('./reset-password/page')).default;
+    const markup = renderToStaticMarkup(createElement(ResetPage));
+    expect(markup).toContain(
+      'This reset link is invalid or has expired. Request a new link and try again.',
+    );
+    expect(markup).toContain('href="/forgot-password"');
+    expect(markup).not.toContain('INVALID_TOKEN');
+    expect(markup).not.toContain('raw provider detail');
+  });
+
+  it('resets the password through the token on matching inputs', async () => {
+    navigationMocks.searchParams = new URLSearchParams('token=tok123');
+    const ResetPage = (await import('./reset-password/page')).default;
+    const container = document.createElement('div');
+    const root = createRoot(container);
+
+    await act(async () => root.render(createElement(ResetPage)));
+    const inputs = container.querySelectorAll('input[type="password"]');
+    await act(async () => {
+      setInputValue(inputs[0] as HTMLInputElement, 'password123');
+      setInputValue(inputs[1] as HTMLInputElement, 'password123');
+      container
+        .querySelector('form')
+        ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+
+    expect(authMocks.resetPassword).toHaveBeenCalledWith({
+      newPassword: 'password123',
+      token: 'tok123',
+    });
+    expect(authMocks.resetPassword).toHaveBeenCalledTimes(1);
+    await act(async () => root.unmount());
+  });
+
+  it('blocks submit and stays bounded when the passwords do not match', async () => {
+    navigationMocks.searchParams = new URLSearchParams('token=tok123');
+    const ResetPage = (await import('./reset-password/page')).default;
+    const container = document.createElement('div');
+    const root = createRoot(container);
+
+    await act(async () => root.render(createElement(ResetPage)));
+    const inputs = container.querySelectorAll('input[type="password"]');
+    await act(async () => {
+      setInputValue(inputs[0] as HTMLInputElement, 'password123');
+      setInputValue(inputs[1] as HTMLInputElement, 'password999');
+      container
+        .querySelector('form')
+        ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+
+    expect(authMocks.resetPassword).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('Passwords do not match.');
+    await act(async () => root.unmount());
+  });
+
+  it('shows the success panel after resetting', async () => {
+    navigationMocks.searchParams = new URLSearchParams('token=tok123');
+    const ResetPage = (await import('./reset-password/page')).default;
+    const container = document.createElement('div');
+    const root = createRoot(container);
+
+    await act(async () => root.render(createElement(ResetPage)));
+    const inputs = container.querySelectorAll('input[type="password"]');
+    await act(async () => {
+      setInputValue(inputs[0] as HTMLInputElement, 'password123');
+      setInputValue(inputs[1] as HTMLInputElement, 'password123');
+      container
+        .querySelector('form')
+        ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+
+    expect(container.textContent).toContain('Your password has been reset.');
+    expect(container.textContent).toContain('sign in');
+    await act(async () => root.unmount());
+  });
+});
