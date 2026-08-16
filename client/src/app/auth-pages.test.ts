@@ -14,6 +14,8 @@ const authMocks = vi.hoisted(() => ({
   signInEmail: vi.fn(async () => ({ error: null })),
   signUpEmail: vi.fn(async () => ({ error: null })),
   sendVerificationEmail: vi.fn(async () => ({ error: null })),
+  requestPasswordReset: vi.fn(async () => ({ error: null })),
+  resetPassword: vi.fn(async () => ({ error: null })),
 }));
 
 const navigationMocks = vi.hoisted(() => ({
@@ -27,6 +29,8 @@ vi.mock('@/lib/auth-client', () => ({
     useSession: () => ({ data: null, isPending: false }),
     signOut: vi.fn(async () => ({ success: true })),
     sendVerificationEmail: authMocks.sendVerificationEmail,
+    requestPasswordReset: authMocks.requestPasswordReset,
+    resetPassword: authMocks.resetPassword,
   },
 }));
 
@@ -214,5 +218,56 @@ describe('verify-email page', () => {
     expect(markup).toContain('auth-verification-panel');
     expect(markup).toContain('Low-poly coastal beacon sending a warm signal at dawn');
     expect(markup).toContain('A clear signal. A private workspace.');
+  });
+});
+
+describe('forgot-password page', () => {
+  it('renders an email form and a back-to-login link', async () => {
+    const ForgotPage = (await import('./forgot-password/page')).default;
+    const markup = renderToStaticMarkup(createElement(ForgotPage));
+    expect(markup).toContain('type="email"');
+    expect(markup).toContain('href="/login"');
+  });
+
+  it('requests a reset link addressed to /reset-password', async () => {
+    const ForgotPage = (await import('./forgot-password/page')).default;
+    const container = document.createElement('div');
+    const root = createRoot(container);
+
+    await act(async () => root.render(createElement(ForgotPage)));
+    const input = container.querySelector('input');
+    await act(async () => {
+      if (input) setInputValue(input, 'user@example.test');
+      container
+        .querySelector('form')
+        ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+
+    expect(authMocks.requestPasswordReset).toHaveBeenCalledWith({
+      email: 'user@example.test',
+      redirectTo: '/reset-password',
+    });
+    expect(authMocks.requestPasswordReset).toHaveBeenCalledTimes(1);
+    await act(async () => root.unmount());
+  });
+
+  it('shows the enumeration-safe success state after submitting', async () => {
+    const ForgotPage = (await import('./forgot-password/page')).default;
+    const container = document.createElement('div');
+    const root = createRoot(container);
+
+    await act(async () => root.render(createElement(ForgotPage)));
+    const input = container.querySelector('input');
+    await act(async () => {
+      if (input) setInputValue(input, 'user@example.test');
+      container
+        .querySelector('form')
+        ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+
+    expect(container.textContent).toContain(
+      'If that account exists, a reset link is on its way.',
+    );
+    await act(async () => root.unmount());
   });
 });
