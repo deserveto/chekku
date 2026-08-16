@@ -11,6 +11,7 @@ import { EMAIL_VERIFICATION_CALLBACK_URL } from '@/lib/auth-redirects';
 export default function SignupPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -18,6 +19,10 @@ export default function SignupPage() {
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (password !== confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
     setPending(true);
     setError(null);
     const { error } = await authClient.signUp.email({
@@ -103,6 +108,18 @@ export default function SignupPage() {
               autoComplete="new-password"
               minLength={8}
               placeholder="At least 8 characters"
+            />
+          </label>
+          <label className="studio-field">
+            <span>Confirm password</span>
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={(event) => setConfirmPassword(event.target.value)}
+              required
+              autoComplete="new-password"
+              minLength={8}
+              placeholder="Repeat your password"
             />
           </label>
           <button className="auth-primary" type="submit" disabled={pending}>

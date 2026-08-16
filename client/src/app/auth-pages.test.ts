@@ -110,6 +110,13 @@ describe('login page', () => {
     expect(markup).toContain('Low-poly illuminated path through dark mountains');
     expect(markup).toContain('A calmer place to run your agents.');
   });
+
+  it('links to the forgot-password page under the password field', async () => {
+    const LoginPage = (await import('./login/page')).default;
+    const markup = renderToStaticMarkup(createElement(LoginPage));
+    expect(markup).toContain('href="/forgot-password"');
+    expect(markup).toContain('Forgot password?');
+  });
 });
 
 describe('signup page', () => {
@@ -132,6 +139,7 @@ describe('signup page', () => {
       setInputValue(inputs[0], 'Example User');
       setInputValue(inputs[1], 'user@example.test');
       setInputValue(inputs[2], 'password123');
+      setInputValue(inputs[3], 'password123');
       container
         .querySelector('form')
         ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
@@ -144,6 +152,57 @@ describe('signup page', () => {
       callbackURL: '/login?verified=1',
     });
     expect(authMocks.signUpEmail).toHaveBeenCalledTimes(1);
+    await act(async () => root.unmount());
+  });
+
+  it('renders a confirm password field that must match before sign-up', async () => {
+    const SignupPage = (await import('./signup/page')).default;
+    const container = document.createElement('div');
+    const root = createRoot(container);
+
+    await act(async () => root.render(createElement(SignupPage)));
+    const inputs = container.querySelectorAll('input');
+    expect(inputs.length).toBe(4);
+    await act(async () => {
+      setInputValue(inputs[0], 'Example User');
+      setInputValue(inputs[1], 'user@example.test');
+      setInputValue(inputs[2], 'password123');
+      setInputValue(inputs[3], 'password999');
+      container
+        .querySelector('form')
+        ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+
+    expect(authMocks.signUpEmail).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('Passwords do not match.');
+    await act(async () => root.unmount());
+  });
+
+  it('recovers from a mismatch once the confirm field is corrected', async () => {
+    const SignupPage = (await import('./signup/page')).default;
+    const container = document.createElement('div');
+    const root = createRoot(container);
+
+    await act(async () => root.render(createElement(SignupPage)));
+    const inputs = container.querySelectorAll('input');
+    await act(async () => {
+      setInputValue(inputs[0], 'Example User');
+      setInputValue(inputs[1], 'user@example.test');
+      setInputValue(inputs[2], 'password123');
+      setInputValue(inputs[3], 'password999');
+      container
+        .querySelector('form')
+        ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+    await act(async () => {
+      setInputValue(inputs[3], 'password123');
+      container
+        .querySelector('form')
+        ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+
+    expect(authMocks.signUpEmail).toHaveBeenCalledTimes(1);
+    expect(container.textContent).not.toContain('Passwords do not match.');
     await act(async () => root.unmount());
   });
 

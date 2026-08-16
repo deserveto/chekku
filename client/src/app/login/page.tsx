@@ -77,6 +77,9 @@ function LoginContent() {
               placeholder="••••••••"
             />
           </label>
+          <p className="auth-foot">
+            <Link href="/forgot-password">Forgot password?</Link>
+          </p>
           <button className="auth-primary" type="submit" disabled={pending}>
             {pending ? 'Signing in…' : 'Sign in'}
           </button>
