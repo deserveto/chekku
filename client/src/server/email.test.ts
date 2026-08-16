@@ -123,3 +123,72 @@ describe('sendVerificationEmail', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe('sendResetPasswordEmail', () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it('posts to Resend with the reset subject and link when RESEND_API_KEY is set', async () => {
+    vi.stubEnv('RESEND_API_KEY', 'rk_test');
+    vi.stubEnv('RESEND_FROM_EMAIL', 'no-reply@chekku.test');
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response('{}', { status: 200 }));
+    globalThis.fetch = fetchMock;
+
+    const { sendResetPasswordEmail } = await import('./email');
+    await sendResetPasswordEmail({
+      to: 'user@example.test',
+      url: 'https://app.test/api/auth/reset-password/tok?callbackURL=%2Freset-password',
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, init] = fetchMock.mock.calls[0]!;
+    const body = JSON.parse(init!.body as string);
+    expect(body.subject).toBe('Reset your Chekku password');
+    expect(body.to).toEqual(['user@example.test']);
+    expect(body.html).toContain(
+      'https://app.test/api/auth/reset-password/tok?callbackURL=%2Freset-password',
+    );
+  });
+
+  it('logs the url and skips Resend when RESEND_API_KEY is unset', async () => {
+    vi.stubEnv('RESEND_API_KEY', '');
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const { sendResetPasswordEmail } = await import('./email');
+    await sendResetPasswordEmail({
+      to: 'user@example.test',
+      url: 'https://app.test/reset?token=y',
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining('https://app.test/reset?token=y'),
+    );
+  });
+
+  it('throws a fixed message when Resend rejects', async () => {
+    vi.stubEnv('RESEND_API_KEY', 'rk_test');
+    vi.stubEnv('RESEND_FROM_EMAIL', 'no-reply@chekku.test');
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response('boom', { status: 500 }));
+    globalThis.fetch = fetchMock;
+
+    const { sendResetPasswordEmail } = await import('./email');
+    await expect(
+      sendResetPasswordEmail({
+        to: 'u@e.test',
+        url: 'https://app.test/reset?token=z',
+      }),
+    ).rejects.toThrow('Failed to send reset password email.');
+  });
+});
