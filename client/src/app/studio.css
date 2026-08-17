@@ -2267,7 +2267,6 @@ body.studio-sidebar-resizing * {
   height: 100dvh;
   min-height: 100dvh;
   display: grid;
-  place-content: center;
   padding: clamp(20px, 4vw, 52px);
   overflow-y: auto;
   background:
@@ -2277,6 +2276,10 @@ body.studio-sidebar-resizing * {
 }
 
 .auth-frame {
+  /* Auto margins center the card when it fits and collapse to zero when the
+     form outgrows the viewport, so a growing card stays anchored and fully
+     scrollable instead of overflowing past an unreachable centered fold. */
+  margin: auto;
   width: min(1120px, calc(100vw - clamp(40px, 8vw, 104px)));
   min-height: min(760px, calc(100dvh - clamp(40px, 8vw, 104px)));
   display: grid;
@@ -2305,9 +2308,12 @@ body.studio-sidebar-resizing * {
 .auth-visual-shade {
   position: absolute;
   inset: 0;
+  /* Fixed-length stops keep the scrim matched to the fixed-size brand and
+     quote content; percentage stops tied the scrim to the panel height, which
+     left the quote nearly unshaded on short panels. */
   background:
-    linear-gradient(180deg, rgb(20 16 13 / 58%) 0%, transparent 30%),
-    linear-gradient(0deg, rgb(20 16 13 / 78%) 0%, transparent 44%);
+    linear-gradient(180deg, rgb(20 16 13 / 58%) 0%, rgb(20 16 13 / 0%) 200px),
+    linear-gradient(0deg, rgb(20 16 13 / 78%) 0%, rgb(20 16 13 / 0%) 340px);
 }
 
 .auth-visual-brand {
@@ -2630,7 +2636,7 @@ body.studio-sidebar-resizing * {
   }
 }
 
-@media (max-height: 800px) and (min-width: 761px) {
+@media (max-height: 950px) and (min-width: 761px) {
   .auth-shell {
     place-content: start center;
     padding-block: 20px;

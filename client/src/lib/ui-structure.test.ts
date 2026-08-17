@@ -253,7 +253,7 @@ describe('requested UI structure', () => {
     expect(reducedMotion).toContain('transition: none');
 
     const shortAuth = css.match(
-      /@media \(max-height: 800px\) and \(min-width: 761px\)\s*\{([\s\S]*?)\n\}/,
+      /@media \(max-height: 950px\) and \(min-width: 761px\)\s*\{([\s\S]*?)\n\}/,
     )?.[1] ?? '';
     expect(shortAuth).toMatch(/\.auth-shell\s*\{[^}]*place-content:\s*start center/s);
   });

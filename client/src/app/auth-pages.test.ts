@@ -216,13 +216,26 @@ describe('signup page', () => {
     expect(markup).toContain('Build a studio that thinks with you.');
   });
 
-  it('fits the split composition inside short desktop viewports', () => {
-    expect(studioCss).toContain('@media (max-height: 800px) and (min-width: 761px)');
-    expect(studioCss).toMatch(/max-height: 800px[\s\S]*\.auth-visual\s*\{[^}]*min-height:\s*0/);
+  it('compacts the split composition so laptop viewports fit even with form errors', () => {
+    expect(studioCss).toContain('@media (max-height: 950px) and (min-width: 761px)');
+    expect(studioCss).toMatch(/max-height: 950px[\s\S]*\.auth-visual\s*\{[^}]*min-height:\s*0/);
   });
 
   it('keeps tall mobile signup content scrollable inside the viewport', () => {
     expect(studioCss).toMatch(/\.auth-shell\s*\{[^}]*height:\s*100dvh[^}]*overflow-y:\s*auto/);
+  });
+
+  it('anchors oversized auth cards to the top so growing forms stay reachable', () => {
+    expect(studioCss).toMatch(/\.auth-frame\s*\{[^}]*margin:\s*auto/);
+    const shellBlock = studioCss.match(/\.auth-shell\s*\{[^}]*\}/)?.[0] ?? '';
+    expect(shellBlock).not.toContain('place-content: center');
+  });
+
+  it('pins the visual scrim to fixed lengths so the quote keeps contrast at any card height', () => {
+    const shadeBlock = studioCss.match(/\.auth-visual-shade\s*\{[^}]*\}/)?.[0] ?? '';
+    expect(shadeBlock).not.toContain('transparent');
+    expect(shadeBlock).toContain('200px');
+    expect(shadeBlock).toContain('340px');
   });
 
   it('keeps the verification-success state in the shared auth composition', () => {
