@@ -113,12 +113,29 @@ function normalizeMessage(value: unknown): StudioMemoryMessage | undefined {
   };
 }
 
+/**
+ * Resolve the message parts from either persisted shape: legacy V1 rows keep
+ * parts as a plain array on `content`, while Mastra V2 rows wrap them in
+ * `content: { format: 2, parts: [...] }`.
+ */
+function partsFromContent(content: unknown): unknown[] {
+  if (Array.isArray(content)) return content;
+  if (content && typeof content === 'object') {
+    const parts = (content as Record<string, unknown>).parts;
+    if (Array.isArray(parts)) return parts;
+  }
+  return [];
+}
+
 function messageHasToolParts(content: unknown): boolean {
-  if (!Array.isArray(content)) return false;
-  return content.some((part) => {
+  return partsFromContent(content).some((part) => {
     if (!part || typeof part !== 'object') return false;
     const type = (part as Record<string, unknown>).type;
-    return type === 'tool-call' || type === 'tool-result';
+    return (
+      type === 'tool-call' ||
+      type === 'tool-result' ||
+      type === 'tool-invocation'
+    );
   });
 }
 
@@ -144,10 +161,12 @@ function unwrapToolOutput(
 }
 
 /**
- * Harvest tool-call and tool-result parts from every raw memory row (any role)
- * and merge them by `toolCallId` into `ToolEvent` records. Each event is
- * attached to the assistant message that emitted the tool call so it renders
- * under the right chat bubble after a reload.
+ * Harvest tool parts from every raw memory row (any role) and merge them by
+ * `toolCallId` into `ToolEvent` records. Handles both persisted shapes: V2
+ * `tool-invocation` parts (data nested under `part.toolInvocation`) and the
+ * legacy V1 `tool-call`/`tool-result` flat parts. Each event is attached to
+ * the assistant message that emitted the tool call so it renders under the
+ * right chat bubble after a reload.
  */
 function extractToolEvents(rows: unknown[]): ToolEvent[] {
   const byCallId = new Map<string, ToolEvent>();
@@ -166,11 +185,48 @@ function extractToolEvents(rows: unknown[]): ToolEvent[] {
     const rec = row as Record<string, unknown>;
     const messageId = typeof rec.id === 'string' ? rec.id : '';
     const role = rec.role;
-    const parts = Array.isArray(rec.content) ? rec.content : [];
+    const parts = partsFromContent(rec.content);
 
     for (const part of parts) {
       if (!part || typeof part !== 'object') continue;
       const p = part as Record<string, unknown>;
+
+      // Mastra V2: a single `tool-invocation` part carries the call and its
+      // outcome nested under `toolInvocation`, with `state` marking progress.
+      if (p.type === 'tool-invocation' && p.toolInvocation) {
+        const invocation = p.toolInvocation as Record<string, unknown>;
+        const toolCallId =
+          typeof invocation.toolCallId === 'string'
+            ? invocation.toolCallId
+            : '';
+        if (!toolCallId) continue;
+        const toolName =
+          typeof invocation.toolName === 'string' && invocation.toolName
+            ? invocation.toolName
+            : 'tool';
+        const state = invocation.state;
+        let status: ToolEventStatus = 'running';
+        let result: unknown;
+        if (state === 'result') {
+          status = 'complete';
+          result = invocation.result;
+        } else if (state === 'output-error') {
+          status = 'error';
+          result = invocation.errorText ?? invocation.result;
+        }
+        touch(toolCallId, {
+          id: toolCallId,
+          messageId: role === 'assistant' ? messageId : '',
+          toolCallId,
+          toolName,
+          status,
+          args: invocation.args,
+          result,
+        });
+        continue;
+      }
+
+      // Legacy V1 fallback: flat `tool-call` / `tool-result` parts.
       const type = p.type;
       const toolCallId =
         typeof p.toolCallId === 'string' ? p.toolCallId : '';
