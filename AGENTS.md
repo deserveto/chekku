@@ -52,6 +52,16 @@ npx vitest run path/to/file.test.ts
 
 A task is not complete until affected tests pass. Before finalizing any repository-level change, run the full `npm run check` and `npm run build` commands.
 
+Toolchain facts:
+
+- Node `>=22.22.0` is pinned in `.nvmrc` and every workspace `engines`. CI runs `npm run check` and `npm run build` with `NODE_OPTIONS=--max-old-space-size=8192`; typecheck and build can exhaust the default heap.
+- Run `npm ci` from the root after every pull. Stale workspace symlinks make Mastra fail with `Invalid Version: ^1.14.0`-style errors.
+- `npm run check` order is typecheck (`@chekku/storage` then `agent` then `client`) → lint → test. `npm run lint` covers the `client` workspace only.
+- Root `package.json` `overrides` pin `@mastra/core`, `@mastra/pg`, and `zod` for all workspaces.
+- `npm run dev:sh` provisions the local Garage, SearXNG, Reader, and Postgres containers before starting both workspaces; plain `npm run dev` starts only the workspaces and assumes services are up.
+- `npm run db:migrate` applies the Better Auth schema to `chekku_auth`; it needs Postgres running and is safe to re-run.
+- `agent` scripts map to the Mastra CLI (`mastra dev` / `mastra build` / `mastra start`); `mastra build` installs generated-bundle dependencies and needs npm registry access.
+
 ## Architecture invariants
 
 ### One Mastra runtime
@@ -332,6 +342,13 @@ Add regression tests for behavior changes, especially:
 - Social agent roles, Telegram slash registration, email delivery behavior, and the scheduled social-drafts workflow.
 
 Tests use Vitest. Keep tests alongside the relevant module or in the existing `__tests__` folder. Do not add a second test runner for new tests.
+
+Test-runner quirks:
+
+- Root `npm test` runs three vitest invocations: the main suite (excluding `scripts/dev.test.ts` and `scripts/prod.test.ts`), then each of those two script tests in isolation. Run one file with `npx vitest run <path>` from the root.
+- Root `vitest.config.ts` discovers tests only as `*.test.ts`/`*.test.tsx` under `agent/src`, `client/src`, `scripts`, and `storage/src`. Default environment is `node`; DOM tests opt in per file with `// @vitest-environment jsdom`. The `@/` alias maps to `client/src/`; timeout is 15 seconds.
+- `vitest.setup.js` pins `WEB_URL` and swaps `@mastra/pg`'s `PostgresStore` for an in-memory store, so unit tests import the Mastra composition root without a running Postgres.
+- `npm run test:web-reader:live` is a live smoke test that activates only under its own script name (`npm_lifecycle_event` guard); it never runs in `npm test` or CI.
 
 ## Documentation rules
 
