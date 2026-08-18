@@ -291,7 +291,7 @@ The next `npm run dev:sh` recreates the container and re-runs the init script. S
 - Local SearXNG service credentials stay in ignored generated `searxng/.env.local`; they are not application configuration and must not be copied into tracked environment examples, logs, or tickets.
 - Keep `.env`, local databases, logs, and browser artifacts out of commits.
 - No tool requires approval; browser, mobile, Garage, and email actions all run directly.
-- Identity resolves from the Better Auth session: sign up at `/signup`, verify via email, sign in at `/login`.
+- Identity resolves from the Better Auth session: sign up at `/signup`, verify via email, sign in at `/login`. Forgot your password? `/forgot-password` emails a single-use reset link valid for one hour.
 
 ## Documentation
 

@@ -134,13 +134,14 @@ Flow:
 1. Sign up at `/signup` with email and password. Better Auth creates the user (unverified) and sends a verification email.
 2. Verify the email. In production with `RESEND_API_KEY` set, the link is delivered through Resend. In local dev without `RESEND_API_KEY`, the verification URL is logged to the server console.
 3. Sign in at `/login`. Better Auth rejects unverified accounts and resends the verification email on attempt.
-4. After verification and sign-in, the session cookie identifies the user. `getUserId()` / `requireUserId()` in `client/src/server/auth.ts` resolve `session.user.id` server-side; unauthenticated requests hit `/login` (or 403 on storage APIs).
+4. Password reset: request a link at `/forgot-password`; the reset link is valid for one hour and can be used once. In dev the link is printed to the server console when `RESEND_API_KEY` is unset. A signed-in user must sign out before opening a reset link — session-carrying browsers are redirected from `/reset-password` to `/agents` (intentional, and asserted in the auth-rate-limit tests). The reset token transits the URL query (`?token=...`) on the page GET, so it can reach browser history and access logs; exposure is mitigated by the token's 62^24 entropy, single use, one-hour expiry, and full session revocation on use.
+5. After verification and sign-in, the session cookie identifies the user. `getUserId()` / `requireUserId()` in `client/src/server/auth.ts` resolve `session.user.id` server-side; unauthenticated requests hit `/login` (or 403 on storage APIs).
 
 **Production:** inject `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `AUTH_DATABASE_URL`, and (for real email delivery) `RESEND_API_KEY` / `RESEND_FROM_EMAIL` via the hosting platform's secret or env configuration — not via committed files. Set `BETTER_AUTH_URL` to the real **HTTPS** origin so Better Auth issues `secure` session cookies. Run `npm run db:migrate` as a deploy release step.
 
 #### Rate limiting
 
-Signup, sign-in, and verification-email resend are throttled in-process at 5 requests / 60s per scope. By default the limiter does **not** trust `x-forwarded-for` (it is attacker-controlled when the deployment is not behind a trusted reverse proxy that overwrites the header); every anonymous client shares one bucket per scope, which keeps the cap enforced but is stricter than ideal in dev.
+Signup, sign-in, verification-email resend, and password-reset requests are throttled in-process at 5 requests / 60s per scope. By default the limiter does **not** trust `x-forwarded-for` (it is attacker-controlled when the deployment is not behind a trusted reverse proxy that overwrites the header); every anonymous client shares one bucket per scope, which keeps the cap enforced but is stricter than ideal in dev.
 
 Set `RATE_LIMIT_TRUST_PROXY=true` in `client/.env.local` only when Chekku sits behind a trusted proxy that supplies a verifiable client IP in `x-forwarded-for` (e.g. most managed Node hosts, Cloudflare, or an nginx config that sets the header to `$remote_addr`). Without that guarantee, leave it unset. The limiter is in-memory per process and intended for single-instance v1 deployments; distributed rate limiting is deferred.
 
