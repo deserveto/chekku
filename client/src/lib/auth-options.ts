@@ -30,6 +30,19 @@ export function buildAuthOptions(args: BuildAuthOptionsArgs) {
     baseURL: args.baseURL,
     secret: args.secret,
     database: new Pool({ connectionString: args.connectionString }),
+    advanced: {
+      // Without a handler, Better Auth's `runInBackgroundOrAwait` degrades to
+      // a plain await: the reset endpoint then waits out the Resend round
+      // trip for existing accounts only, a response-time oracle that
+      // distinguishes registered emails. Registering the task runs the send
+      // fire-and-forget; send failures stay swallowed server-side (Better
+      // Auth pre-catches, and the local catch guards against a raw promise).
+      backgroundTasks: {
+        handler: (task: Promise<unknown>) => {
+          task.catch(() => {});
+        },
+      },
+    },
     emailAndPassword: {
       enabled: true,
       requireEmailVerification: true,
