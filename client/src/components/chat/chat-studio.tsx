@@ -55,15 +55,23 @@ import {
   isOwnedThreadId,
 } from '@/lib/thread-id';
 import {
+  appendTextDelta,
+  groupAssistantParts,
+  upsertToolPart,
+} from '@/lib/assistant-parts';
+import {
   MAIN_AGENT_ID,
   QA_WEB_AGENT_ID,
   QA_ANDROID_AGENT_ID,
+  type AssistantPart,
   type ChatMessage,
   type ChekkuAgentSummary,
-  type ToolEvent,
+  type ToolAssistantPart,
+  type ToolEventStatus,
 } from '@/lib/types';
 
-function safeDisplay(value: unknown): string {  if (value === undefined) return '';
+function safeDisplay(value: unknown): string {
+  if (value === undefined) return '';
   if (typeof value === 'string') return value;
 
   try {
@@ -78,10 +86,39 @@ function messageFromMemory(
     id: string;
     role: 'user' | 'assistant';
     content: string;
+    parts?: AssistantPart[];
     createdAt: number;
   },
 ): ChatMessage {
   return { ...value };
+}
+
+function TypingIndicator() {
+  return (
+    <div className="chat-message-content markdown">
+      <span className="chat-typing">
+        <i />
+        <i />
+        <i />
+      </span>
+    </div>
+  );
+}
+
+function ToolCallCard({ tool }: { tool: ToolAssistantPart }) {
+  return (
+    <details className={`chat-tool-card ${tool.status}`}>
+      <summary>
+        <span />
+        <strong>{tool.toolName.replaceAll('_', ' ')}</strong>
+        <small>{tool.status}</small>
+        <i>⌄</i>
+      </summary>
+
+      {tool.args !== undefined && <pre>{safeDisplay(tool.args)}</pre>}
+      {tool.result !== undefined && <pre>{safeDisplay(tool.result)}</pre>}
+    </details>
+  );
 }
 
 export function ChatStudio({
@@ -110,7 +147,6 @@ export function ChatStudio({
   const [agents, setAgents] = useState<ChekkuAgentSummary[]>([]);
   const [threads, setThreads] = useState<StudioThread[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [tools, setTools] = useState<ToolEvent[]>([]);
   const [input, setInput] = useState('');
   const [commandOpen, setCommandOpen] = useState(false);
   const [commandIndex, setCommandIndex] = useState(0);
@@ -152,22 +188,6 @@ export function ChatStudio({
     }
   }, [agentId, resourceId]);
 
-  const upsertTool = (event: ToolEvent) => {
-    setTools((current) => {
-      const exists = current.some(
-        (item) => item.toolCallId === event.toolCallId,
-      );
-
-      return exists
-        ? current.map((item) =>
-            item.toolCallId === event.toolCallId
-              ? { ...item, ...event }
-              : item,
-          )
-        : [...current, event];
-    });
-  };
-
   const applyRunEvent = useCallback((event: AgentRunEvent, assistantId: string) => {
     setSubscriptionState('connected');
 
@@ -191,7 +211,11 @@ export function ChatStudio({
             ];
         return base.map((message) =>
           message.id === assistantId
-            ? { ...message, content: message.content + text }
+            ? {
+                ...message,
+                content: message.content + text,
+                parts: appendTextDelta(message.parts ?? [], text),
+              }
             : message,
         );
       });
@@ -206,19 +230,51 @@ export function ChatStudio({
       const toolCallId = String(
         event.payload.toolCallId || crypto.randomUUID(),
       );
-      upsertTool({
-        id: toolCallId,
-        messageId: assistantId,
-        toolCallId,
-        toolName: String(event.payload.toolName || 'tool'),
-        status:
-          event.type === 'tool-result'
-            ? 'complete'
-            : event.type === 'tool-error'
-              ? 'error'
-              : 'running',
-        args: event.payload.args,
-        result: event.payload.result ?? event.payload.error,
+      const status: ToolEventStatus =
+        event.type === 'tool-result'
+          ? 'complete'
+          : event.type === 'tool-error'
+            ? 'error'
+            : 'running';
+      const toolName =
+        event.payload.toolName !== undefined
+          ? String(event.payload.toolName)
+          : undefined;
+      const args = event.payload.args;
+      const result = event.payload.result ?? event.payload.error;
+      const runId =
+        event.payload.runId !== undefined
+          ? String(event.payload.runId)
+          : undefined;
+
+      setMessages((current) => {
+        const exists = current.some((message) => message.id === assistantId);
+        const base = exists
+          ? current
+          : [
+              ...current,
+              {
+                id: assistantId,
+                role: 'assistant' as const,
+                content: '',
+                createdAt: Date.now(),
+              },
+            ];
+        return base.map((message) =>
+          message.id === assistantId
+            ? {
+                ...message,
+                parts: upsertToolPart(message.parts ?? [], {
+                  toolCallId,
+                  status,
+                  toolName,
+                  args,
+                  result,
+                  runId,
+                }),
+              }
+            : message,
+        );
       });
       return;
     }
@@ -232,7 +288,15 @@ export function ChatStudio({
       setMessages((current) =>
         current.map((message) =>
           message.id === assistantId
-            ? { ...message, content: detail, error: true }
+            ? {
+                ...message,
+                content: message.content ? `${message.content}\n\n${detail}` : detail,
+                parts: appendTextDelta(
+                  message.parts ?? [],
+                  message.content ? `\n\n${detail}` : detail,
+                ),
+                error: true,
+              }
             : message,
         ),
       );
@@ -256,7 +320,12 @@ export function ChatStudio({
     setMessages((current) =>
       current.map((message) =>
         message.id === assistantId && !message.content
-          ? { ...message, error: terminal === 'error', content: fallback }
+          ? {
+              ...message,
+              error: terminal === 'error',
+              content: fallback,
+              parts: appendTextDelta(message.parts ?? [], fallback),
+            }
           : message,
       ),
     );
@@ -413,14 +482,13 @@ export function ChatStudio({
       // point thread B's Stop button at thread A's run.
       setActiveRun(null);
       setSubscriptionState('idle');
-      setTools([]);
       lastTerminalRef.current = null;
     };
   }, [agentId, attachToRun, refreshThreads, resourceId, threadId]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, tools]);
+  }, [messages]);
 
   useEffect(() => {
     let cancelled = false;
@@ -522,7 +590,6 @@ export function ChatStudio({
       setError(undefined);
       if (target.id === threadId) {
         setMessages([]);
-        setTools([]);
         setInput('');
         setCommandOpen(false);
         replaceWithNew(agentId);
@@ -616,6 +683,10 @@ export function ChatStudio({
                 ...message,
                 error: true,
                 content: `Could not complete request. ${detail}`,
+                parts: appendTextDelta(
+                  message.parts ?? [],
+                  `Could not complete request. ${detail}`,
+                ),
               }
             : message,
         ),
@@ -878,9 +949,10 @@ export function ChatStudio({
           ) : (
             <div className="chat-message-list">
               {messages.map((message) => {
-                const relatedTools = tools.filter(
-                  (tool) => tool.messageId === message.id,
-                );
+                const partGroups =
+                  message.role === 'assistant' && message.parts?.length
+                    ? groupAssistantParts(message.parts)
+                    : null;
 
                 return (
                   <article
@@ -910,44 +982,37 @@ export function ChatStudio({
                       </time>
                     </div>
 
-                    {relatedTools.length > 0 && (
-                      <div className="chat-tool-timeline">
-                        {relatedTools.map((tool) => (
-                          <details
-                            className={`chat-tool-card ${tool.status}`}
-                            key={tool.id}
+                    {partGroups ? (
+                      partGroups.map((group) =>
+                        group.kind === 'tools' ? (
+                          <div
+                            className="chat-tool-timeline"
+                            key={`tools-${group.parts[0]?.id}`}
                           >
-                            <summary>
-                              <span />
-                              <strong>
-                                {tool.toolName.replaceAll('_', ' ')}
-                              </strong>
-                              <small>{tool.status}</small>
-                              <i>⌄</i>
-                            </summary>
-
-                            {tool.args !== undefined && (
-                              <pre>{safeDisplay(tool.args)}</pre>
-                            )}
-                            {tool.result !== undefined && (
-                              <pre>{safeDisplay(tool.result)}</pre>
-                            )}
-                          </details>
-                        ))}
+                            {group.parts.map((tool) => (
+                              <ToolCallCard key={tool.id} tool={tool} />
+                            ))}
+                          </div>
+                        ) : (
+                          <div
+                            className="chat-message-content markdown"
+                            key={group.part.id}
+                          >
+                            <MarkdownMessage content={group.part.content} />
+                          </div>
+                        ),
+                      )
+                    ) : message.content ? (
+                      <div className="chat-message-content markdown">
+                        <MarkdownMessage content={message.content} />
                       </div>
+                    ) : (
+                      <TypingIndicator />
                     )}
 
-                    <div className="chat-message-content markdown">
-                      {message.content ? (
-                        <MarkdownMessage content={message.content} />
-                      ) : (
-                        <span className="chat-typing">
-                          <i />
-                          <i />
-                          <i />
-                        </span>
-                      )}
-                    </div>
+                    {partGroups && !message.content && runActive && (
+                      <TypingIndicator />
+                    )}
 
                     {message.role === 'assistant' && message.content && (
                       <div className="chat-message-actions">

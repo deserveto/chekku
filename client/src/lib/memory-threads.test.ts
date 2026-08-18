@@ -31,6 +31,7 @@ import {
   listThreadMessages,
   removeThread,
   renameThread,
+  threadTitleFromPrompt,
 } from './memory-threads';
 
 describe('agent-scoped memory threads', () => {
@@ -182,5 +183,259 @@ describe('agent-scoped memory threads', () => {
     await expect(
       listThreadMessages('main-agent', 'main-agent-local-user-a', 'local-user'),
     ).rejects.toThrow('Server error');
+  });
+
+  it('rebuilds tool history from Mastra Memory V2 parts on restore', async () => {
+    threadListMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'stored-user',
+          role: 'user',
+          createdAt: '2026-08-18T10:00:00.000Z',
+          content: {
+            format: 2,
+            parts: [{ type: 'text', text: 'Check the signup form.' }],
+            content: 'Check the signup form.',
+          },
+        },
+        {
+          id: 'stored-assistant',
+          role: 'assistant',
+          createdAt: '2026-08-18T10:00:01.000Z',
+          content: {
+            format: 2,
+            parts: [
+              {
+                type: 'tool-invocation',
+                toolInvocation: {
+                  state: 'result',
+                  toolCallId: 'call-1',
+                  toolName: 'browser_goto',
+                  args: { url: 'https://example.com' },
+                  result: { ok: true },
+                },
+              },
+              { type: 'text', text: 'The page is open.' },
+              {
+                type: 'tool-invocation',
+                toolInvocation: {
+                  state: 'result',
+                  toolCallId: 'call-2',
+                  toolName: 'browser_snapshot',
+                  result: { fields: 4 },
+                },
+              },
+              { type: 'text', text: 'All set.' },
+            ],
+            content: 'The page is open.\nAll set.',
+          },
+        },
+      ],
+    });
+
+    const messages = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    expect(messages).toHaveLength(2);
+    expect(messages[0]).toEqual({
+      id: 'stored-user',
+      role: 'user',
+      content: 'Check the signup form.',
+      createdAt: Date.parse('2026-08-18T10:00:00.000Z'),
+    });
+
+    expect(messages[1]?.parts).toEqual([
+      {
+        type: 'tool',
+        id: 'stored-assistant-t0',
+        toolCallId: 'call-1',
+        toolName: 'browser_goto',
+        status: 'complete',
+        args: { url: 'https://example.com' },
+        result: { ok: true },
+      },
+      {
+        type: 'text',
+        id: 'stored-assistant-x1',
+        content: 'The page is open.',
+      },
+      {
+        type: 'tool',
+        id: 'stored-assistant-t2',
+        toolCallId: 'call-2',
+        toolName: 'browser_snapshot',
+        status: 'complete',
+        result: { fields: 4 },
+      },
+      { type: 'text', id: 'stored-assistant-x3', content: 'All set.' },
+    ]);
+    expect(messages[1]?.content).toBe('The page is open.\nAll set.');
+  });
+
+  it('keeps an assistant turn that persisted only tool parts', async () => {
+    threadListMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'tools-only',
+          role: 'assistant',
+          createdAt: '2026-08-18T10:00:02.000Z',
+          content: {
+            format: 2,
+            parts: [
+              {
+                type: 'tool-invocation',
+                toolInvocation: {
+                  state: 'result',
+                  toolCallId: 'call-1',
+                  toolName: 'browser_click',
+                  result: { clicked: true },
+                },
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    const messages = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.content).toBe('');
+    expect(messages[0]?.parts).toEqual([
+      {
+        type: 'tool',
+        id: 'tools-only-t0',
+        toolCallId: 'call-1',
+        toolName: 'browser_click',
+        status: 'complete',
+        result: { clicked: true },
+      },
+    ]);
+  });
+
+  it('still restores plain legacy string content without parts', async () => {
+    threadListMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'legacy',
+          role: 'assistant',
+          createdAt: '2026-08-18T10:00:03.000Z',
+          content: 'Legacy stored response',
+        },
+      ],
+    });
+
+    const messages = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    expect(messages).toEqual([
+      {
+        id: 'legacy',
+        role: 'assistant',
+        content: 'Legacy stored response',
+        createdAt: Date.parse('2026-08-18T10:00:03.000Z'),
+      },
+    ]);
+  });
+
+  it('merges per-step assistant rows into a single restored turn', async () => {
+    threadListMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'row-user',
+          role: 'user',
+          createdAt: '2026-08-18T10:00:00.000Z',
+          content: {
+            format: 2,
+            parts: [{ type: 'text', text: 'Check the signup form.' }],
+            content: 'Check the signup form.',
+          },
+        },
+        {
+          id: 'row-step-1',
+          role: 'assistant',
+          createdAt: '2026-08-18T10:00:01.000Z',
+          content: {
+            format: 2,
+            parts: [
+              {
+                type: 'tool-invocation',
+                toolInvocation: {
+                  state: 'result',
+                  toolCallId: 'call-1',
+                  toolName: 'browser_goto',
+                  args: { url: 'https://example.com' },
+                  result: { ok: true },
+                },
+              },
+            ],
+          },
+        },
+        {
+          id: 'row-step-2',
+          role: 'assistant',
+          createdAt: '2026-08-18T10:00:02.000Z',
+          content: {
+            format: 2,
+            parts: [
+              { type: 'text', text: 'The page is open.' },
+              {
+                type: 'tool-invocation',
+                toolInvocation: {
+                  state: 'result',
+                  toolCallId: 'call-2',
+                  toolName: 'browser_snapshot',
+                  result: { fields: 4 },
+                },
+              },
+            ],
+          },
+        },
+        {
+          id: 'row-step-3',
+          role: 'assistant',
+          createdAt: '2026-08-18T10:00:03.000Z',
+          content: {
+            format: 2,
+            parts: [{ type: 'text', text: 'All set.' }],
+          },
+        },
+      ],
+    });
+
+    const messages = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    // One user turn + ONE assistant turn carrying the whole timeline.
+    expect(messages).toHaveLength(2);
+    expect(messages[1]?.id).toBe('row-step-1');
+    expect(messages[1]?.createdAt).toBe(
+      Date.parse('2026-08-18T10:00:01.000Z'),
+    );
+    expect(messages[1]?.content).toBe('The page is open.\nAll set.');
+    expect(
+      messages[1]?.parts?.map((part) =>
+        part.type === 'tool' ? part.toolName : 'text',
+      ),
+    ).toEqual(['browser_goto', 'text', 'browser_snapshot', 'text']);
+  });
+
+  it('derives the sidebar title from the first prompt', () => {
+    expect(threadTitleFromPrompt('Short prompt')).toBe('Short prompt');
+    const long = 'a'.repeat(60);
+    expect(threadTitleFromPrompt(long)).toBe(`${'a'.repeat(49)}…`);
   });
 });

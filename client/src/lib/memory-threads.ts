@@ -1,4 +1,9 @@
 import { mastraClient } from './mastra-client';
+import {
+  mergeAdjacentAssistantTurns,
+  restoreAssistantParts,
+} from './assistant-parts';
+import type { AssistantPart } from './types';
 import { isOwnedThreadId } from './thread-id';
 
 export interface StudioThread {
@@ -13,7 +18,20 @@ export interface StudioMemoryMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  /**
+   * Chronological assistant-turn parts rebuilt from Mastra Memory's stored
+   * `tool-invocation` parts, so restored threads keep their tool call
+   * timeline. Absent for user messages and turns without tool activity.
+   */
+  parts?: AssistantPart[];
   createdAt: number;
+}
+
+/** Sidebar title for a new thread, derived from the first prompt. */
+export function threadTitleFromPrompt(prompt: string): string {
+  return prompt.length > 52
+    ? `${prompt.slice(0, 49).trim()}…`
+    : prompt;
 }
 
 function toTimestamp(value: unknown, fallback = Date.now()): number {
@@ -89,16 +107,22 @@ function normalizeMessage(value: unknown): StudioMemoryMessage | undefined {
 
   if (role !== 'user' && role !== 'assistant') return undefined;
 
-  const content = textFromContent(row.content);
-  if (!content && role === 'assistant') return undefined;
+  const id =
+    typeof row.id === 'string' && row.id
+      ? row.id
+      : crypto.randomUUID();
+
+  const restored =
+    role === 'assistant' ? restoreAssistantParts(row.content, id) : undefined;
+  const content = restored ? restored.text : textFromContent(row.content);
+  const parts = restored?.parts.length ? restored.parts : undefined;
+  if (!content && !parts && role === 'assistant') return undefined;
 
   return {
-    id:
-      typeof row.id === 'string' && row.id
-        ? row.id
-        : crypto.randomUUID(),
+    id,
     role,
     content,
+    ...(parts ? { parts } : {}),
     createdAt: toTimestamp(row.createdAt),
   };
 }
@@ -174,10 +198,12 @@ export async function listThreadMessages(
 
   if (!Array.isArray(rows)) return [];
 
-  return rows
-    .map(normalizeMessage)
-    .filter((row): row is StudioMemoryMessage => Boolean(row))
-    .sort((a, b) => a.createdAt - b.createdAt);
+  return mergeAdjacentAssistantTurns(
+    rows
+      .map(normalizeMessage)
+      .filter((row): row is StudioMemoryMessage => Boolean(row))
+      .sort((a, b) => a.createdAt - b.createdAt),
+  );
 }
 
 export async function renameThread(
