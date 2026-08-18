@@ -22,6 +22,14 @@ import { searxngMcpServer } from './mcp/searxng-mcp-server.js';
 import { webReaderMcpServer } from './mcp/web-reader-mcp-server.js';
 import { healthRoute } from './routes/health.js';
 import { modelsRoute } from './routes/models.js';
+import {
+  activeRunRoute,
+  cancelRunRoute,
+  listRunsRoute,
+  runEventsRoute,
+  runStatusRoute,
+  startRunRoute,
+} from './routes/runs.js';
 import { storedAgentTools } from './tools/registry.js';
 import { weeklySocialDrafts } from './workflows/weekly-social-drafts.js';
 
@@ -62,7 +70,16 @@ export const mastra = new Mastra({
     host: env.HOST,
     cors: { origin: env.WEB_URL, credentials: true },
     middleware: [requestIdInjector, requestLogger],
-    apiRoutes: [healthRoute, modelsRoute],
+    apiRoutes: [
+      healthRoute,
+      modelsRoute,
+      startRunRoute,
+      activeRunRoute,
+      listRunsRoute,
+      runStatusRoute,
+      runEventsRoute,
+      cancelRunRoute,
+    ],
   },
 });
 

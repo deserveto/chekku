@@ -8,14 +8,22 @@ const {
   listAgentThreads,
   listThreadMessages,
   removeThread,
-  agentStream,
+  startRun,
+  getActiveRun,
+  listActiveRuns,
+  cancelRun,
+  observeRunEvents,
   router,
 } = vi.hoisted(() => ({
   listAgentSkills: vi.fn(),
   listAgentThreads: vi.fn(),
   listThreadMessages: vi.fn(),
   removeThread: vi.fn(),
-  agentStream: vi.fn(),
+  startRun: vi.fn(),
+  getActiveRun: vi.fn(),
+  listActiveRuns: vi.fn(),
+  cancelRun: vi.fn(),
+  observeRunEvents: vi.fn(),
   router: {
     push: vi.fn(),
     replace: vi.fn(),
@@ -40,14 +48,18 @@ vi.mock('@/lib/memory-threads', () => ({
   removeThread,
   renameThread: vi.fn(),
 }));
-vi.mock('@/lib/mastra-client', () => ({
-  mastraClient: {
-    getAgent: vi.fn(() => ({
-      stream: agentStream,
-      abortThread: vi.fn(),
-    })),
-  },
-}));
+vi.mock('@/lib/agent-runs', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@/lib/agent-runs')>();
+  return {
+    ...actual,
+    startRun,
+    getActiveRun,
+    listActiveRuns,
+    cancelRun,
+    observeRunEvents,
+  };
+});
 vi.mock('@/lib/model-registry', () => ({
   loadModelRegistry: vi.fn(async () => ({
     configured: true,
@@ -159,34 +171,54 @@ beforeEach(async () => {
     },
   ]);
   removeThread.mockResolvedValue(undefined);
-  agentStream.mockResolvedValue({
-    processDataStream: async ({
-      onChunk,
-    }: {
-      onChunk: (chunk: {
-        type: string;
-        payload: Record<string, unknown>;
-      }) => void;
-    }) => {
-      onChunk({
+  startRun.mockResolvedValue({
+    id: 'run_20260101000000_00000001',
+    resourceId: 'local-user',
+    agentId: 'main-agent',
+    threadId: activeThreadId,
+    status: 'running',
+    startedAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
+  });
+  getActiveRun.mockResolvedValue(null);
+  listActiveRuns.mockResolvedValue([]);
+  cancelRun.mockResolvedValue({
+    id: 'run_20260101000000_00000001',
+    resourceId: 'local-user',
+    agentId: 'main-agent',
+    threadId: activeThreadId,
+    status: 'cancelled',
+    startedAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
+  });
+  observeRunEvents.mockImplementation(
+    async (
+      _runId: string,
+      { onEvent }: { onEvent: (event: unknown) => void },
+    ) => {
+      onEvent({
+        sequence: 0,
         type: 'tool-call',
         payload: {
           toolCallId: 'tool-call-1',
           toolName: 'test_tool',
           args: { input: 'value' },
         },
+        createdAt: '',
       });
-      onChunk({
+      onEvent({
+        sequence: 1,
         type: 'tool-result',
         payload: {
           toolCallId: 'tool-call-1',
           toolName: 'test_tool',
           result: { ok: true },
         },
+        createdAt: '',
       });
-      onChunk({ type: 'finish', payload: {} });
+      onEvent({ sequence: 2, type: 'finish', payload: {}, createdAt: '' });
     },
-  });
+  );
   let uuidCounter = 0;
   vi.spyOn(crypto, 'randomUUID').mockImplementation(
     () =>

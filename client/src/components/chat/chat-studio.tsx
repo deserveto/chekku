@@ -32,10 +32,19 @@ import {
   listAgentThreads,
   listThreadMessages,
   removeThread,
-  renameThread,
   type StudioThread,
 } from '@/lib/memory-threads';
-import { mastraClient } from '@/lib/mastra-client';
+import {
+  RunConflictError,
+  cancelRun,
+  getActiveRun,
+  isTerminalRunEvent,
+  listActiveRuns,
+  observeRunEvents,
+  startRun,
+  type AgentRunEvent,
+  type AgentRunSummary,
+} from '@/lib/agent-runs';
 import { loadModelRegistry } from '@/lib/model-registry';
 import {
   ensureStoredAgentUsesServerGateway,
@@ -54,17 +63,7 @@ import {
   type ToolEvent,
 } from '@/lib/types';
 
-function readChunkPayload(chunk: unknown): Record<string, unknown> {
-  if (!chunk || typeof chunk !== 'object') return {};
-
-  const payload = (chunk as Record<string, unknown>).payload;
-  return payload && typeof payload === 'object'
-    ? (payload as Record<string, unknown>)
-    : {};
-}
-
-function safeDisplay(value: unknown): string {
-  if (value === undefined) return '';
+function safeDisplay(value: unknown): string {  if (value === undefined) return '';
   if (typeof value === 'string') return value;
 
   try {
@@ -102,6 +101,11 @@ export function ChatStudio({
   // double-click can fire onConfirm twice. A ref closes that window
   // synchronously; `deletingThreadId` below is for rendering only.
   const deleteInFlightRef = useRef(false);
+  // Authoritative execution state lives on the server (`activeRun`); the
+  // subscription controller only tracks this component's observation of it.
+  const subscriptionRef = useRef<AbortController | null>(null);
+  const lastTerminalRef = useRef<string | null>(null);
+  const sidebarRunsRef = useRef<Record<string, boolean>>({});
 
   const [agents, setAgents] = useState<ChekkuAgentSummary[]>([]);
   const [threads, setThreads] = useState<StudioThread[]>([]);
@@ -113,7 +117,11 @@ export function ChatStudio({
   const [skills, setSkills] = useState<AgentSkillSummary[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
-  const [isStreaming, setIsStreaming] = useState(false);
+  const [activeRun, setActiveRun] = useState<AgentRunSummary | null>(null);
+  const [subscriptionState, setSubscriptionState] = useState<
+    'idle' | 'connecting' | 'connected'
+  >('idle');
+  const [sidebarRuns, setSidebarRuns] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string>();
   const [modelReady, setModelReady] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<StudioThread>();
@@ -121,10 +129,12 @@ export function ChatStudio({
 
   const agentId = initialAgentId;
   const threadId = initialThreadId;
-  const agent = mastraClient.getAgent(agentId);
 
   const currentAgent = agents.find((entry) => entry.id === agentId);
   const threadOwned = isOwnedThreadId(threadId, agentId, resourceId);
+  const runActive = activeRun?.status === 'running';
+  const threadHasActiveRun = (id: string) =>
+    Boolean(sidebarRuns[id]) || (id === threadId && runActive);
 
   const filteredThreads = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -141,6 +151,188 @@ export function ChatStudio({
       setThreads([]);
     }
   }, [agentId, resourceId]);
+
+  const upsertTool = (event: ToolEvent) => {
+    setTools((current) => {
+      const exists = current.some(
+        (item) => item.toolCallId === event.toolCallId,
+      );
+
+      return exists
+        ? current.map((item) =>
+            item.toolCallId === event.toolCallId
+              ? { ...item, ...event }
+              : item,
+          )
+        : [...current, event];
+    });
+  };
+
+  const applyRunEvent = useCallback((event: AgentRunEvent, assistantId: string) => {
+    setSubscriptionState('connected');
+
+    if (
+      event.type === 'text-delta' &&
+      typeof event.payload.text === 'string'
+    ) {
+      const text = event.payload.text;
+      setMessages((current) => {
+        const exists = current.some((message) => message.id === assistantId);
+        const base = exists
+          ? current
+          : [
+              ...current,
+              {
+                id: assistantId,
+                role: 'assistant' as const,
+                content: '',
+                createdAt: Date.now(),
+              },
+            ];
+        return base.map((message) =>
+          message.id === assistantId
+            ? { ...message, content: message.content + text }
+            : message,
+        );
+      });
+      return;
+    }
+
+    if (
+      event.type === 'tool-call' ||
+      event.type === 'tool-result' ||
+      event.type === 'tool-error'
+    ) {
+      const toolCallId = String(
+        event.payload.toolCallId || crypto.randomUUID(),
+      );
+      upsertTool({
+        id: toolCallId,
+        messageId: assistantId,
+        toolCallId,
+        toolName: String(event.payload.toolName || 'tool'),
+        status:
+          event.type === 'tool-result'
+            ? 'complete'
+            : event.type === 'tool-error'
+              ? 'error'
+              : 'running',
+        args: event.payload.args,
+        result: event.payload.result ?? event.payload.error,
+      });
+      return;
+    }
+
+    if (event.type === 'error') {
+      const detail =
+        typeof event.payload.error === 'string' && event.payload.error
+          ? event.payload.error
+          : 'The agent request failed.';
+
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === assistantId
+            ? { ...message, content: detail, error: true }
+            : message,
+        ),
+      );
+      return;
+    }
+
+    if (isTerminalRunEvent(event)) {
+      lastTerminalRef.current = event.type;
+    }
+  }, []);
+
+  const finalizeTerminalMessage = useCallback((assistantId: string) => {
+    const terminal = lastTerminalRef.current;
+    if (terminal !== 'cancelled' && terminal !== 'error') return;
+
+    const fallback =
+      terminal === 'cancelled'
+        ? 'Generation was stopped.'
+        : 'The agent run failed.';
+
+    setMessages((current) =>
+      current.map((message) =>
+        message.id === assistantId && !message.content
+          ? { ...message, error: terminal === 'error', content: fallback }
+          : message,
+      ),
+    );
+  }, []);
+
+  const beginSubscription = useCallback(
+    (runId: string, assistantId: string) => {
+      // Supersede any previous observation; this never cancels the run.
+      subscriptionRef.current?.abort();
+      const controller = new AbortController();
+      subscriptionRef.current = controller;
+      lastTerminalRef.current = null;
+      setSubscriptionState('connecting');
+
+      void observeRunEvents(runId, {
+        signal: controller.signal,
+        offset: 0,
+        onEvent: (event) => applyRunEvent(event, assistantId),
+      }).then(() => {
+        if (subscriptionRef.current !== controller) return;
+        subscriptionRef.current = null;
+        setSubscriptionState('idle');
+        setActiveRun(null);
+        finalizeTerminalMessage(assistantId);
+        void refreshThreads();
+        textareaRef.current?.focus();
+      });
+    },
+    [applyRunEvent, finalizeTerminalMessage, refreshThreads],
+  );
+
+  /**
+   * Attaches this view to an in-flight run it did not start (mount
+   * discovery or a 409 duplicate). Mastra persists the user message only
+   * at turn end, so the run's prompt is synthesized locally and an empty
+   * assistant placeholder is added — replayed tool events then have a
+   * message to render under even before the first text delta arrives.
+   */
+  const attachToRun = useCallback(
+    (run: AgentRunSummary) => {
+      const assistantId = crypto.randomUUID();
+      const startedAt = Date.parse(run.startedAt) || Date.now();
+
+      setMessages((current) => {
+        // Memory may already contain the persisted turn (completed between
+        // loading messages and discovering the run) — then nothing to add.
+        if (
+          current.some(
+            (message) =>
+              message.role === 'user' && message.content === run.prompt,
+          )
+        ) {
+          return current;
+        }
+        return [
+          ...current,
+          {
+            id: crypto.randomUUID(),
+            role: 'user' as const,
+            content: run.prompt,
+            createdAt: startedAt,
+          },
+          {
+            id: assistantId,
+            role: 'assistant' as const,
+            content: '',
+            createdAt: startedAt + 1,
+          },
+        ];
+      });
+
+      setActiveRun(run);
+      beginSubscription(run.id, assistantId);
+    },
+    [beginSubscription],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -183,6 +375,19 @@ export function ChatStudio({
         } catch {
           if (!cancelled) setMessages([]);
         }
+
+        // Reconnect to a run that is still executing for this thread
+        // (started before a navigation or page reload). Subscribing replays
+        // buffered events, so the in-flight output and tool progress are
+        // reconstructed without starting a duplicate run.
+        try {
+          const run = await getActiveRun(agentId, threadId);
+          if (!cancelled && run && run.status === 'running') {
+            attachToRun(run);
+          }
+        } catch {
+          // Run discovery is best-effort; the thread still renders from Memory.
+        }
       } catch (reason) {
         if (!cancelled) {
           setError(
@@ -199,8 +404,19 @@ export function ChatStudio({
     void load();
     return () => {
       cancelled = true;
+      // Dropping the observation never cancels the server-owned run.
+      subscriptionRef.current?.abort();
+      subscriptionRef.current = null;
+      // The component instance survives thread switches (no remount key),
+      // so the previous thread's run state must not leak into the next
+      // thread: a stale activeRun would keep the composer disabled and
+      // point thread B's Stop button at thread A's run.
+      setActiveRun(null);
+      setSubscriptionState('idle');
+      setTools([]);
+      lastTerminalRef.current = null;
     };
-  }, [agentId, refreshThreads, resourceId, threadId]);
+  }, [agentId, attachToRun, refreshThreads, resourceId, threadId]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -215,6 +431,39 @@ export function ChatStudio({
       cancelled = true;
     };
   }, [agentId]);
+
+  // Sidebar run indicators: poll the server's active runs for this agent
+  // so threads keep showing live status while the user views another
+  // thread. When a thread leaves the active set, its run finished and the
+  // thread list needs a refresh (new message / server-side title).
+  useEffect(() => {
+    let stopped = false;
+
+    const poll = async () => {
+      try {
+        const runs = await listActiveRuns(agentId);
+        if (stopped) return;
+        const next: Record<string, boolean> = {};
+        for (const run of runs) next[run.threadId] = true;
+        const previous = sidebarRunsRef.current;
+        const completedElsewhere = Object.keys(previous).some(
+          (id) => next[id] !== true,
+        );
+        sidebarRunsRef.current = next;
+        setSidebarRuns(next);
+        if (completedElsewhere) void refreshThreads();
+      } catch {
+        // Transient polling failures leave the last known status in place.
+      }
+    };
+
+    void poll();
+    const timer = setInterval(() => void poll(), 5_000);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [agentId, refreshThreads]);
 
   const filteredSkills = useMemo(() => {
     const filterText = commandFilterText(input);
@@ -246,14 +495,22 @@ export function ChatStudio({
   );
 
   const openThread = (next: StudioThread) => {
-    if (isStreaming) return;
+    // Navigation is always allowed: a running execution is server-owned
+    // and survives leaving (and returning to) the thread.
     const nextAgentId = next.agentId || agentId;
     router.push(buildChatHref(nextAgentId, next.id));
   };
 
   const deleteThread = async () => {
     const target = pendingDelete;
-    if (isStreaming || !target || deleteInFlightRef.current) return;
+    if (!target || deleteInFlightRef.current) return;
+    if (threadHasActiveRun(target.id)) {
+      setError(
+        'This thread has a running conversation. Stop it before deleting.',
+      );
+      setPendingDelete(undefined);
+      return;
+    }
 
     deleteInFlightRef.current = true;
     setDeletingThreadId(target.id);
@@ -283,136 +540,26 @@ export function ChatStudio({
     }
   };
 
-  const upsertTool = (event: ToolEvent) => {
-    setTools((current) => {
-      const exists = current.some(
-        (item) => item.toolCallId === event.toolCallId,
-      );
-
-      return exists
-        ? current.map((item) =>
-            item.toolCallId === event.toolCallId
-              ? { ...item, ...event }
-              : item,
-          )
-        : [...current, event];
-    });
-  };
-
-  const consumeStream = async (
-    stream: Awaited<ReturnType<typeof agent.stream>>,
-    assistantId: string,
-  ) => {
-    let finished = false;
-    const seen = new Set<string>();
-
-    await stream.processDataStream({
-      onChunk: (chunk) => {
-        const payload = readChunkPayload(chunk);
-
-        if (
-          chunk.type === 'text-delta' &&
-          typeof payload.text === 'string'
-        ) {
-          setMessages((current) =>
-            current.map((message) =>
-              message.id === assistantId
-                ? {
-                    ...message,
-                    content: message.content + payload.text,
-                  }
-                : message,
-            ),
-          );
-        }
-
-        if (
-          ['tool-call', 'tool-result', 'tool-error'].includes(chunk.type)
-        ) {
-          const toolCallId = String(
-            payload.toolCallId || crypto.randomUUID(),
-          );
-          seen.add(toolCallId);
-
-          const status =
-            chunk.type === 'tool-result'
-              ? 'complete'
-              : chunk.type === 'tool-error'
-                ? 'error'
-                : 'running';
-
-          upsertTool({
-            id: toolCallId,
-            messageId: assistantId,
-            toolCallId,
-            toolName: String(payload.toolName || 'tool'),
-            status,
-            args: payload.args,
-            result:
-              payload.result ?? payload.output ?? payload.error,
-            runId: chunk.runId,
-          });
-        }
-
-        if (chunk.type === 'finish' || chunk.type === 'error') {
-          finished = true;
-        }
-
-        if (chunk.type === 'error') {
-          const detail =
-            typeof payload.error === 'string'
-              ? payload.error
-              : 'The agent request failed.';
-
-          setMessages((current) =>
-            current.map((message) =>
-              message.id === assistantId
-                ? { ...message, content: detail, error: true }
-                : message,
-            ),
-          );
-        }
-      },
-    });
-
-    if (!finished) {
-      setMessages((current) =>
-        current.map((message) =>
-          message.id === assistantId && !message.content
-            ? {
-                ...message,
-                error: true,
-                content:
-                  'Generation ended before a final response was produced.',
-              }
-            : message,
-        ),
-      );
-    }
-
-    void seen;
-  };
-
   const sendMessage = async (raw: string) => {
     const prompt = raw.trim();
 
     if (
       !prompt ||
-      isStreaming ||
+      runActive ||
       !threadOwned ||
       !modelReady
     ) {
       return;
     }
 
-    const firstTurn = messages.length === 0;
     const now = Date.now();
+    const userMessageId = crypto.randomUUID();
     const assistantId = crypto.randomUUID();
 
     setMessages((current) => [
       ...current,
       {
-        id: crypto.randomUUID(),
+        id: userMessageId,
         role: 'user',
         content: prompt,
         createdAt: now,
@@ -426,38 +573,37 @@ export function ChatStudio({
     ]);
     setInput('');
     setError(undefined);
-    setIsStreaming(true);
+    setSubscriptionState('connecting');
 
     try {
-      const stream = await agent.stream(prompt, {
-        memory: {
-          thread: threadId,
-          resource: resourceId,
-        },
+      const run = await startRun({
+        agentId,
+        threadId,
+        prompt,
       });
 
-      await consumeStream(stream, assistantId);
-
-      if (firstTurn) {
-        const title =
-          prompt.length > 52
-            ? `${prompt.slice(0, 49).trim()}…`
-            : prompt;
-
-        try {
-          await renameThread(
-            agentId,
-            threadId,
-            resourceId,
-            title,
-          );
-        } catch {
-          // The stream remains successful even if title generation/update fails.
-        }
+      setActiveRun(run);
+      beginSubscription(run.id, assistantId);
+      // The server creates the Memory thread (titled from the prompt)
+      // before the start response, so one refresh surfaces the new thread
+      // in the sidebar immediately instead of after the run completes.
+      void refreshThreads();
+    } catch (reason) {
+      if (reason instanceof RunConflictError && reason.run) {
+        // Another client already started this thread's run (e.g. a second
+        // tab). Drop the optimistic duplicate prompt and attach to the
+        // existing run instead of starting a second execution; the existing
+        // run's prompt is re-synthesized from the run record.
+        setMessages((current) =>
+          current.filter(
+            (message) =>
+              message.id !== userMessageId && message.id !== assistantId,
+          ),
+        );
+        attachToRun(reason.run);
+        return;
       }
 
-      await refreshThreads();
-    } catch (reason) {
       const detail =
         reason instanceof Error
           ? reason.message
@@ -474,18 +620,22 @@ export function ChatStudio({
             : message,
         ),
       );
-    } finally {
-      setIsStreaming(false);
-      textareaRef.current?.focus();
+      setSubscriptionState('idle');
     }
   };
 
   const stop = async () => {
-    await agent.abortThread({
-      resourceId,
-      threadId,
-    });
-    setIsStreaming(false);
+    const run = activeRun;
+    if (!run) return;
+    try {
+      await cancelRun(run.id);
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : 'Could not stop the running conversation.',
+      );
+    }
   };
 
   const submit = (event: FormEvent) => {
@@ -597,7 +747,6 @@ export function ChatStudio({
           className="studio-primary-action"
           type="button"
           onClick={() => startNew(agentId)}
-          disabled={isStreaming}
           aria-label="New chat"
           title={collapsed ? 'New chat' : undefined}
         >
@@ -609,7 +758,6 @@ export function ChatStudio({
           <span>Active agent</span>
           <select
             value={agentId}
-            disabled={isStreaming}
             onChange={(event) => startNew(event.target.value)}
           >
             {agents.map((entry) => (
@@ -645,17 +793,32 @@ export function ChatStudio({
               <button
                 type="button"
                 onClick={() => openThread(thread)}
-                disabled={isStreaming}
               >
                 <strong>{thread.title}</strong>
-                <small>
-                  {new Date(thread.updatedAt).toLocaleDateString()}
-                </small>
+                {sidebarRuns[thread.id] ? (
+                  <small className="chat-thread-status">
+                    <span
+                      className="chat-thread-running"
+                      aria-label="Agent run in progress"
+                    >
+                      <i />
+                      <i />
+                      <i />
+                    </span>
+                    Running
+                  </small>
+                ) : (
+                  <small>
+                    {new Date(thread.updatedAt).toLocaleDateString()}
+                  </small>
+                )}
               </button>
               <button
                 className="chat-thread-delete"
                 type="button"
-                disabled={isStreaming || Boolean(deletingThreadId)}
+                disabled={
+                  threadHasActiveRun(thread.id) || Boolean(deletingThreadId)
+                }
                 onClick={() => setPendingDelete(thread)}
                 aria-label={`Delete ${thread.title}`}
                 aria-haspopup="dialog"
@@ -846,7 +1009,7 @@ export function ChatStudio({
                     ? `Message ${currentAgent?.name || agentId}…`
                     : 'Configure the server model first…'
                 }
-                disabled={!modelReady || isStreaming}
+                disabled={!modelReady || runActive}
                 rows={1}
               />
             </div>
@@ -863,8 +1026,12 @@ export function ChatStudio({
               </div>
 
               <div>
-                <small>Shift + Enter for new line</small>
-                {isStreaming ? (
+                {runActive && subscriptionState !== 'connected' ? (
+                  <small>Connecting to the running conversation…</small>
+                ) : (
+                  <small>Shift + Enter for new line</small>
+                )}
+                {runActive ? (
                   <button
                     className="chat-stop-button"
                     type="button"
