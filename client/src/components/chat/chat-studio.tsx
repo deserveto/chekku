@@ -819,7 +819,7 @@ export function ChatStudio({
                     <div className="chat-message-content markdown">
                       {message.content ? (
                         <MarkdownMessage content={message.content} />
-                      ) : relatedTools.length === 0 && isStreaming ? (
+                      ) : relatedTools.length === 0 ? (
                         <span className="chat-typing">
                           <i />
                           <i />
