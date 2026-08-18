@@ -314,6 +314,54 @@ describe('ChatStudio run reconnection', () => {
     expect(cancelRun).not.toHaveBeenCalled();
   });
 
+  it('resets run state when switching threads so thread B is not blocked by thread A', async () => {
+    await enterComposerText('long task');
+    await submitComposer();
+
+    // Thread A has a running run: composer disabled, Stop button visible.
+    expect(
+      container.querySelector<HTMLTextAreaElement>('textarea')!.disabled,
+    ).toBe(true);
+    expect(
+      container.querySelector('[aria-label="Stop generation"]'),
+    ).not.toBeNull();
+
+    // router.push re-renders the same ChatStudio instance with new props
+    // (no remount key) — simulate exactly that.
+    startRun.mockImplementation(async () =>
+      runningRun('run_20260101000000_00000002', otherThreadId, 'next task'),
+    );
+    await act(async () => {
+      root!.render(
+        <ChatStudio
+          resourceId="local-user"
+          initialAgentId="main-agent"
+          initialThreadId={otherThreadId}
+        />,
+      );
+    });
+    await flushEffects();
+
+    // The stale run from thread A must not keep thread B's composer
+    // disabled or show a Stop button that would cancel thread A's run.
+    expect(
+      container.querySelector<HTMLTextAreaElement>('textarea')!.disabled,
+    ).toBe(false);
+    expect(
+      container.querySelector('[aria-label="Stop generation"]'),
+    ).toBeNull();
+    expect(cancelRun).not.toHaveBeenCalled();
+
+    // Thread B accepts a new prompt immediately.
+    await enterComposerText('next task');
+    await submitComposer();
+
+    const lastCall = startRun.mock.calls[startRun.mock.calls.length - 1];
+    expect(lastCall[0]).toEqual(
+      expect.objectContaining({ threadId: otherThreadId }),
+    );
+  });
+
   it('attaches to the existing run when a duplicate start is rejected', async () => {
     startRun.mockRejectedValueOnce(
       new RunConflictError(

@@ -269,16 +269,23 @@ export async function observeRunEvents(
       const parser = new RunEventStreamParser();
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const events = parser.push(decoder.decode(value));
+      const deliver = (events: AgentRunEvent[]): void => {
         for (const event of events) {
           cursor = Math.max(cursor, event.sequence + 1);
           options.onEvent(event);
           if (isTerminalRunEvent(event)) terminalReached = true;
         }
+      };
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        // `{ stream: true }` keeps multi-byte characters intact when a
+        // network chunk boundary splits their UTF-8 bytes; without it each
+        // half decodes to U+FFFD and corrupts the accumulated message.
+        deliver(parser.push(decoder.decode(value, { stream: true })));
       }
+      // Flush any trailing bytes the streaming decoder still holds.
+      deliver(parser.push(decoder.decode()));
     } catch {
       if (signal.aborted) return;
     }

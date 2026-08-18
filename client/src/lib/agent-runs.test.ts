@@ -44,6 +44,25 @@ function sseResponse(blocks: string[]): Response {
   );
 }
 
+/**
+ * SSE response whose raw UTF-8 bytes are cut at an arbitrary index —
+ * including the middle of a multi-byte character — to emulate network
+ * chunk boundaries.
+ */
+function sseResponseSplitAt(text: string, splitIndex: number): Response {
+  const bytes = new TextEncoder().encode(text);
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(bytes.slice(0, splitIndex));
+        controller.enqueue(bytes.slice(splitIndex));
+        controller.close();
+      },
+    }),
+    { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+  );
+}
+
 beforeEach(() => {
   fetchMock = vi.fn().mockResolvedValue(jsonResponse({ run }));
   vi.stubGlobal('fetch', fetchMock);
@@ -263,6 +282,39 @@ describe('observeRunEvents', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const secondUrl = String(fetchMock.mock.calls[1][0]);
     expect(secondUrl).toContain('offset=1');
+  });
+
+  it('decodes multi-byte characters split across network chunks intact', async () => {
+    // JSON.stringify leaves non-ASCII unescaped, so text-delta payloads
+    // carry raw UTF-8. Cut inside the emoji's 4-byte sequence: without
+    // { stream: true } each half decodes to U+FFFD and corrupts the text.
+    const textBlock = `data: ${JSON.stringify({
+      sequence: 0,
+      type: 'text-delta',
+      payload: { text: 'say 😀 now' },
+      createdAt: '',
+    })}\n\n`;
+    const finishBlock = `data: ${JSON.stringify({
+      sequence: 1,
+      type: 'finish',
+      payload: {},
+      createdAt: '',
+    })}\n\n`;
+    const raw = textBlock + finishBlock;
+    const emojiByteIndex = raw.indexOf('😀');
+    expect(emojiByteIndex).toBeGreaterThan(0);
+    // First chunk ends after the emoji's first UTF-8 byte (0xF0).
+    const splitIndex = emojiByteIndex + 1;
+    fetchMock.mockResolvedValueOnce(sseResponseSplitAt(raw, splitIndex));
+
+    const seen: string[] = [];
+    await observeRunEvents(run.id, {
+      onEvent: (e) => {
+        if (e.type === 'text-delta') seen.push(String(e.payload.text));
+      },
+    });
+
+    expect(seen).toEqual(['say 😀 now']);
   });
 
   it('stops without reconnecting when aborted', async () => {
