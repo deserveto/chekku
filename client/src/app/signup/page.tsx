@@ -107,6 +107,7 @@ export default function SignupPage() {
               required
               autoComplete="new-password"
               minLength={8}
+              maxLength={128}
               placeholder="At least 8 characters"
             />
           </label>
@@ -119,6 +120,7 @@ export default function SignupPage() {
               required
               autoComplete="new-password"
               minLength={8}
+              maxLength={128}
               placeholder="Repeat your password"
             />
           </label>

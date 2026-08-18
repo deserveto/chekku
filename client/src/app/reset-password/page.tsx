@@ -9,6 +9,10 @@ import { authClient } from '@/lib/auth-client';
 
 const INVALID_LINK_MESSAGE =
   'This reset link is invalid or has expired. Request a new link and try again.';
+// Better Auth enforces 8-128 password characters server-side
+// (`PASSWORD_TOO_SHORT` / `PASSWORD_TOO_LONG`); surface that distinctly so an
+// oversized passphrase is not mislabeled as a broken link.
+const PASSWORD_LENGTH_MESSAGE = 'Password must be 8-128 characters.';
 
 function ResetPasswordContent() {
   const search = useSearchParams();
@@ -34,7 +38,11 @@ function ResetPasswordContent() {
     });
     setPending(false);
     if (error) {
-      setError(INVALID_LINK_MESSAGE);
+      setError(
+        error.code === 'PASSWORD_TOO_SHORT' || error.code === 'PASSWORD_TOO_LONG'
+          ? PASSWORD_LENGTH_MESSAGE
+          : INVALID_LINK_MESSAGE,
+      );
       return;
     }
     setDone(true);
@@ -74,25 +82,27 @@ function ResetPasswordContent() {
     <form className="auth-form" onSubmit={onSubmit}>
       <label className="studio-field">
         <span>New password</span>
-        <input
+          <input
           type="password"
           value={newPassword}
           onChange={(event) => setNewPassword(event.target.value)}
           required
           autoComplete="new-password"
           minLength={8}
+          maxLength={128}
           placeholder="At least 8 characters"
         />
       </label>
       <label className="studio-field">
         <span>Confirm password</span>
-        <input
+          <input
           type="password"
           value={confirmPassword}
           onChange={(event) => setConfirmPassword(event.target.value)}
           required
           autoComplete="new-password"
           minLength={8}
+          maxLength={128}
           placeholder="Repeat your new password"
         />
       </label>

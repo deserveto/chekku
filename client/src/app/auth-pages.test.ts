@@ -67,6 +67,8 @@ describe('login page', () => {
     expect(markup).toContain('type="email"');
     expect(markup).toContain('type="password"');
     expect(markup).toContain('href="/signup"');
+    // Mirror Better Auth's server-side password limit on the client.
+    expect(markup.match(/maxLength="128"/g)).toHaveLength(1);
   });
 
   it('shows that email verification succeeded when redirected from the verification link', async () => {
@@ -126,6 +128,8 @@ describe('signup page', () => {
     expect(markup).toContain('type="email"');
     expect(markup).toContain('type="password"');
     expect(markup).toContain('href="/login"');
+    // Mirror Better Auth's server-side password limit on the client.
+    expect(markup.match(/maxLength="128"/g)).toHaveLength(2);
   });
 
   it('sends successful email verification back to login', async () => {
@@ -342,6 +346,31 @@ describe('forgot-password page', () => {
     );
     await act(async () => root.unmount());
   });
+
+  it('shows a bounded failure note when the reset email cannot be sent', async () => {
+    authMocks.requestPasswordReset.mockResolvedValueOnce({
+      error: { code: 'INTERNAL_SERVER_ERROR', message: 'raw provider detail' },
+    });
+    const ForgotPage = (await import('./forgot-password/page')).default;
+    const container = document.createElement('div');
+    const root = createRoot(container);
+
+    await act(async () => root.render(createElement(ForgotPage)));
+    const input = container.querySelector('input');
+    await act(async () => {
+      if (input) setInputValue(input, 'user@example.test');
+      container
+        .querySelector('form')
+        ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+
+    expect(container.textContent).toContain(
+      'Failed to send reset email. Try again in a minute.',
+    );
+    expect(container.textContent).not.toContain('INTERNAL_SERVER_ERROR');
+    expect(container.textContent).not.toContain('raw provider detail');
+    await act(async () => root.unmount());
+  });
 });
 
 describe('reset-password page', () => {
@@ -352,6 +381,9 @@ describe('reset-password page', () => {
     expect(markup).toContain('type="password"');
     expect(markup).toContain('New password');
     expect(markup).toContain('Confirm password');
+    // Mirror Better Auth's server-side password limit on the client so an
+    // oversized managed passphrase cannot dead-end against PASSWORD_TOO_LONG.
+    expect(markup.match(/maxLength="128"/g)).toHaveLength(2);
   });
 
   it('shows a bounded invalid-link panel without a token and never renders raw error codes', async () => {
@@ -430,7 +462,65 @@ describe('reset-password page', () => {
     });
 
     expect(container.textContent).toContain('Your password has been reset.');
+    // Pin the session-revocation copy so it cannot silently drift.
+    expect(container.textContent).toContain(
+      'Every signed-in session was signed out.',
+    );
     expect(container.textContent).toContain('sign in');
+    await act(async () => root.unmount());
+  });
+
+  it('maps a failed reset submit to the bounded invalid-link message, never raw provider detail', async () => {
+    navigationMocks.searchParams = new URLSearchParams('token=tok123');
+    authMocks.resetPassword.mockResolvedValueOnce({
+      error: { code: 'INVALID_TOKEN', message: 'raw provider detail' },
+    });
+    const ResetPage = (await import('./reset-password/page')).default;
+    const container = document.createElement('div');
+    const root = createRoot(container);
+
+    await act(async () => root.render(createElement(ResetPage)));
+    const inputs = container.querySelectorAll('input[type="password"]');
+    await act(async () => {
+      setInputValue(inputs[0] as HTMLInputElement, 'password123');
+      setInputValue(inputs[1] as HTMLInputElement, 'password123');
+      container
+        .querySelector('form')
+        ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+
+    expect(container.textContent).toContain(
+      'This reset link is invalid or has expired. Request a new link and try again.',
+    );
+    expect(container.textContent).not.toContain('INVALID_TOKEN');
+    expect(container.textContent).not.toContain('raw provider detail');
+    await act(async () => root.unmount());
+  });
+
+  it('distinguishes password-length failures from a broken reset link', async () => {
+    navigationMocks.searchParams = new URLSearchParams('token=tok123');
+    authMocks.resetPassword.mockResolvedValueOnce({
+      error: { code: 'PASSWORD_TOO_LONG', message: 'Password too long' },
+    });
+    const ResetPage = (await import('./reset-password/page')).default;
+    const container = document.createElement('div');
+    const root = createRoot(container);
+
+    await act(async () => root.render(createElement(ResetPage)));
+    const inputs = container.querySelectorAll('input[type="password"]');
+    await act(async () => {
+      setInputValue(inputs[0] as HTMLInputElement, 'password123');
+      setInputValue(inputs[1] as HTMLInputElement, 'password123');
+      container
+        .querySelector('form')
+        ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+
+    expect(container.textContent).toContain('Password must be 8-128 characters.');
+    expect(container.textContent).not.toContain(
+      'This reset link is invalid or has expired',
+    );
+    expect(container.textContent).not.toContain('Password too long');
     await act(async () => root.unmount());
   });
 });
