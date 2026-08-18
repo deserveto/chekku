@@ -2637,8 +2637,10 @@ body.studio-sidebar-resizing * {
 }
 
 @media (max-height: 950px) and (min-width: 761px) {
+  /* No container alignment here: .auth-frame's `margin: auto` absorbs all
+     free space, so grid alignment properties never apply. Short-viewport
+     behavior is carried by padding-block and the frame's min-height. */
   .auth-shell {
-    place-content: start center;
     padding-block: 20px;
   }
 

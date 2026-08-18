@@ -255,7 +255,14 @@ describe('requested UI structure', () => {
     const shortAuth = css.match(
       /@media \(max-height: 950px\) and \(min-width: 761px\)\s*\{([\s\S]*?)\n\}/,
     )?.[1] ?? '';
-    expect(shortAuth).toMatch(/\.auth-shell\s*\{[^}]*place-content:\s*start center/s);
+    // Short-viewport alignment is carried by the shell padding and the
+    // frame's min-height: `.auth-frame { margin: auto }` absorbs all free
+    // space, so any place-content here would be inert.
+    expect(shortAuth).toMatch(/\.auth-shell\s*\{[^}]*padding-block:\s*20px/s);
+    expect(shortAuth).toMatch(
+      /\.auth-frame\s*\{[^}]*min-height:\s*calc\(100dvh - 40px\)/s,
+    );
+    expect(shortAuth).not.toMatch(/place-content/);
   });
 
   it('renders the competitive slides route through the shared client component and never touches Garage directly', () => {
