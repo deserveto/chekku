@@ -407,6 +407,14 @@ export function ChatStudio({
       // Dropping the observation never cancels the server-owned run.
       subscriptionRef.current?.abort();
       subscriptionRef.current = null;
+      // The component instance survives thread switches (no remount key),
+      // so the previous thread's run state must not leak into the next
+      // thread: a stale activeRun would keep the composer disabled and
+      // point thread B's Stop button at thread A's run.
+      setActiveRun(null);
+      setSubscriptionState('idle');
+      setTools([]);
+      lastTerminalRef.current = null;
     };
   }, [agentId, attachToRun, refreshThreads, resourceId, threadId]);
 

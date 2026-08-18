@@ -1,6 +1,7 @@
 import { registerApiRoute } from '@mastra/core/server';
 import {
   RUN_TERMINAL_EVENT_TYPES,
+  RunCapacityError,
   RunConflictError,
   agentRunRegistry,
   createRunId,
@@ -159,6 +160,10 @@ export const startRunRoute = registerApiRoute('/runs', {
           409,
         );
       }
+      if (error instanceof RunCapacityError) {
+        // Fixed bounded message from the registry; no diagnostics.
+        return c.json({ error: error.message }, 429);
+      }
       return c.json({ error: 'Could not start the run' }, 500);
     }
 
@@ -293,17 +298,24 @@ export const runEventsRoute = registerApiRoute('/runs/:runId/events', {
           }
         };
 
+        // The heartbeat must exist before replay: subscribeFrom replays
+        // buffered events synchronously, and a replayed terminal event
+        // closes the stream immediately — cleanup then clears the interval.
+        // Assigning it afterwards would leave an uncleared interval behind
+        // for the process lifetime (every later close path early-returns
+        // on `closed`).
+        heartbeat = setInterval(() => {
+          if (!closed) {
+            controller.enqueue(encoder.encode(': ping\n\n'));
+          }
+        }, 15_000);
+
         const subscription = agentRunRegistry.subscribeFrom(runId, offset, send);
         if (!subscription) {
           close();
           return;
         }
         unsubscribe = () => subscription.unsubscribe();
-        heartbeat = setInterval(() => {
-          if (!closed) {
-            controller.enqueue(encoder.encode(': ping\n\n'));
-          }
-        }, 15_000);
         c.req.raw.signal.addEventListener('abort', close);
       },
       cancel() {

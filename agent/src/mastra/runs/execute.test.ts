@@ -107,6 +107,34 @@ describe('chunkToRunEvent', () => {
     ).toBe('tool-error');
   });
 
+  it('maps the distinct tool-error chunk type the same way', () => {
+    // @mastra/core emits tool failures as their own `tool-error` chunk
+    // (ToolErrorPayload), not only as tool-result + isError. Dropping it
+    // leaves the client's tool card stuck on "running".
+    expect(
+      chunkToRunEvent({
+        type: 'tool-error',
+        payload: {
+          toolCallId: 'tc-9',
+          toolName: 'search_web',
+          args: { q: 'x' },
+          error: 'engine exploded',
+        },
+      }),
+    ).toEqual({
+      type: 'tool-error',
+      payload: {
+        toolCallId: 'tc-9',
+        toolName: 'search_web',
+        error: 'engine exploded',
+      },
+    });
+
+    expect(
+      chunkToRunEvent({ type: 'tool-error', payload: {} }),
+    ).toBeNull();
+  });
+
   it('sanitizes error chunks and ignores unrelated chunk types', () => {
     expect(
       chunkToRunEvent({ type: 'error', payload: { error: 'model down' } }),
@@ -129,6 +157,22 @@ describe('buildThreadTitle', () => {
     const title = buildThreadTitle(long);
     expect(title.length).toBe(50);
     expect(title.endsWith('…')).toBe(true);
+  });
+
+  it('does not split surrogate pairs when truncating', () => {
+    // 48 BMP chars + one astral emoji + 10 more: the 49-code-point cut
+    // lands right after the emoji, where a UTF-16 slice(0, 49) would have
+    // kept only the high surrogate.
+    const prompt = `${'a'.repeat(48)}😀${'b'.repeat(10)}`;
+
+    expect(buildThreadTitle(prompt)).toBe(`${'a'.repeat(48)}😀…`);
+  });
+
+  it('keeps astral prompts within the character budget untruncated', () => {
+    // 52 code points (one astral) is 53 UTF-16 units; the budget counts
+    // characters, so it must not be truncated.
+    const prompt = `${'a'.repeat(51)}😀`;
+    expect(buildThreadTitle(prompt)).toBe(prompt);
   });
 });
 
@@ -278,6 +322,38 @@ describe('runExecution', () => {
     const final = registry.getRun(run.id);
     expect(final?.status).toBe('failed');
     expect(final?.error).toBe('The agent run reported an error.');
+  });
+
+  it('emits tool-error events from distinct tool-error chunks without failing the run', async () => {
+    const registry = new RunRegistry();
+    const { memory } = makeMemory(true);
+    const { agent } = makeAgent(
+      [
+        { type: 'tool-call', payload: { toolCallId: 'tc-1', toolName: 'search_web' } },
+        { type: 'tool-error', payload: { toolCallId: 'tc-1', toolName: 'search_web', error: 'engine exploded' } },
+        { type: 'text-delta', payload: { text: 'recovered' } },
+      ],
+      memory,
+    );
+    const run = registry.createRun({
+      id: createRunId(),
+      ...TUPLE,
+      prompt: 'tool failure',
+      requestAbort: () => undefined,
+    });
+
+    await runExecution(registry, agent, {
+      runId: run.id,
+      ...TUPLE,
+      prompt: 'tool failure',
+      abortSignal: new AbortController().signal,
+    });
+
+    const events: string[] = [];
+    registry.subscribeFrom(run.id, 0, (event) => events.push(event.type));
+    expect(events).toEqual(['tool-call', 'tool-error', 'text-delta', 'finish']);
+    // A failed tool call does not fail the run itself; the model recovered.
+    expect(registry.getRun(run.id)?.status).toBe('completed');
   });
 
   it('marks the run cancelled when the abort signal already fired', async () => {

@@ -1,9 +1,40 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  RUN_CAPACITY_PER_RESOURCE_MESSAGE,
+  RunRegistry,
+  createRunId,
+} from '../runs/run-registry.js';
 import {
   MAX_PROMPT_UTF8_BYTES,
+  cancelRunRoute,
   parseStartRunRequest,
   resolveAgent,
+  runEventsRoute,
+  runStatusRoute,
+  startRunRoute,
 } from './runs.js';
+
+// The run routes close over the module-level `agentRunRegistry` singleton.
+// Swap it for a fresh registry per test so handler-level tests exercise
+// real registry behavior without global state leaking between cases.
+const registryState = vi.hoisted(() => ({
+  registry: undefined as unknown as RunRegistry,
+}));
+
+vi.mock('../runs/run-registry.js', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../runs/run-registry.js')>();
+  return {
+    ...actual,
+    get agentRunRegistry() {
+      return registryState.registry;
+    },
+  };
+});
+
+beforeEach(() => {
+  registryState.registry = new RunRegistry();
+});
 
 const VALID = {
   agentId: 'main-agent',
@@ -112,5 +143,227 @@ describe('parseStartRunRequest', () => {
       ok: false,
       error: 'prompt exceeds the maximum length',
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Handler-level tests: invoke the registered route handlers directly with a
+// minimal context double and the per-test registry installed above.
+// ---------------------------------------------------------------------------
+
+type RouteHandler = (c: unknown) => Response | Promise<Response>;
+
+/** ApiRoute is a union of static-handler and createHandler routes; narrow it. */
+function handlerOf(route: { handler?: unknown; createHandler?: unknown }): RouteHandler {
+  if (typeof route.handler !== 'function') {
+    throw new Error('Expected a route with a static handler');
+  }
+  return route.handler as RouteHandler;
+}
+
+const startHandler = handlerOf(startRunRoute);
+const statusHandler = handlerOf(runStatusRoute);
+const eventsHandler = handlerOf(runEventsRoute);
+const cancelHandler = handlerOf(cancelRunRoute);
+
+const runnableAgent = {
+  stream: async () => ({
+    fullStream: new ReadableStream({
+      start(controller) {
+        controller.close();
+      },
+    }),
+  }),
+  getMemory: async () => undefined,
+};
+
+type HandlerContextOverrides = {
+  body?: unknown;
+  params?: Record<string, string>;
+  query?: Record<string, string>;
+  signal?: AbortSignal;
+  mastra?: unknown;
+};
+
+function makeContext(overrides: HandlerContextOverrides = {}) {
+  return {
+    req: {
+      json: async () => overrides.body ?? null,
+      param: (name: string) => overrides.params?.[name],
+      query: (name: string) => overrides.query?.[name],
+      raw: { signal: overrides.signal ?? new AbortController().signal },
+    },
+    get: (key: string) => (key === 'mastra' ? overrides.mastra : undefined),
+    json: (body: unknown, status?: number) =>
+      new Response(JSON.stringify(body), {
+        status: status ?? 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+  };
+}
+
+const FOREIGN_RESOURCE = 'user-2';
+
+function seedRunningRun(
+  resourceId: string = 'user-1',
+  threadId: string = 'main-agent-user-1-uuid-a',
+) {
+  return registryState.registry.createRun({
+    id: createRunId(),
+    agentId: 'main-agent',
+    threadId,
+    resourceId,
+    prompt: 'seeded prompt',
+    requestAbort: () => undefined,
+  });
+}
+
+describe('run routes: ownership collapses foreign runs to 404', () => {
+  it('status, events, and cancel routes return 404 for another resource', async () => {
+    const run = seedRunningRun();
+    const query = { resourceId: FOREIGN_RESOURCE };
+
+    const status = await statusHandler(
+      makeContext({ params: { runId: run.id }, query }) as never,
+    );
+    expect(status.status).toBe(404);
+    expect(await status.json()).toEqual({ error: 'Run not found' });
+
+    const events = await eventsHandler(
+      makeContext({
+        params: { runId: run.id },
+        query: { ...query, offset: '0' },
+      }) as never,
+    );
+    expect(events.status).toBe(404);
+
+    const cancel = await cancelHandler(
+      makeContext({ params: { runId: run.id }, query }) as never,
+    );
+    expect(cancel.status).toBe(404);
+
+    // The 404 must not have aborted or exposed the foreign run.
+    expect(registryState.registry.getRun(run.id)?.status).toBe('running');
+  });
+
+  it('status and cancel routes return 404 for unknown run ids', async () => {
+    const unknown = 'run_20260101000000_00000000';
+    const query = { resourceId: 'user-1' };
+
+    expect(
+      (
+        await statusHandler(
+          makeContext({ params: { runId: unknown }, query }) as never,
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await cancelHandler(
+          makeContext({ params: { runId: unknown }, query }) as never,
+        )
+      ).status,
+    ).toBe(404);
+  });
+});
+
+describe('run routes: concurrency cap surfaces as 429', () => {
+  function startContext(threadId: string, resourceId: string) {
+    return makeContext({
+      body: { agentId: 'main-agent', threadId, resourceId, prompt: 'task' },
+      mastra: { getAgentById: () => runnableAgent },
+    }) as never;
+  }
+
+  it('rejects the 5th concurrent run for a resource without corrupting state', async () => {
+    for (let i = 0; i < 4; i++) {
+      seedRunningRun('user-1', `main-agent-user-1-uuid-${i}`);
+    }
+
+    const response = await startHandler(
+      startContext('main-agent-user-1-uuid-new', 'user-1'),
+    );
+
+    expect(response.status).toBe(429);
+    const body = (await response.json()) as { error?: string };
+    expect(body.error).toBe(RUN_CAPACITY_PER_RESOURCE_MESSAGE);
+
+    // Registry state stays intact and another user is unaffected.
+    expect(registryState.registry.listActiveRuns('user-1')).toHaveLength(4);
+    const other = await startHandler(
+      startContext('main-agent-user-2-uuid-a', FOREIGN_RESOURCE),
+    );
+    expect(other.status).toBe(202);
+  });
+
+  it('still returns 409 with the active run for a duplicate thread start at cap', async () => {
+    const run = seedRunningRun();
+    for (let i = 1; i < 4; i++) {
+      seedRunningRun('user-1', `main-agent-user-1-uuid-${i}`);
+    }
+
+    const response = await startHandler(
+      startContext('main-agent-user-1-uuid-a', 'user-1'),
+    );
+
+    expect(response.status).toBe(409);
+    const body = (await response.json()) as { run?: { id?: string } };
+    expect(body.run?.id).toBe(run.id);
+  });
+});
+
+describe('run events route: heartbeat lifecycle', () => {
+  it('replaying a completed run closes the stream and leaves no interval behind', async () => {
+    vi.useFakeTimers();
+    try {
+      const run = seedRunningRun();
+      registryState.registry.finishRun(run.id, 'completed');
+
+      const response = await eventsHandler(
+        makeContext({
+          params: { runId: run.id },
+          query: { resourceId: 'user-1', offset: '0' },
+        }) as never,
+      );
+
+      expect(response.status).toBe(200);
+      const text = await response.text();
+      expect(text).toContain('"type":"finish"');
+      // subscribeFrom replays the terminal event synchronously, closing
+      // the stream before subscribe returns; the heartbeat scheduled for
+      // the stream must be cleared, not orphaned for the process life.
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears the heartbeat when the request aborts on a live run', async () => {
+    vi.useFakeTimers();
+    try {
+      const run = seedRunningRun();
+      registryState.registry.appendEvent(run.id, 'text-delta', {
+        text: 'partial',
+      });
+      const controller = new AbortController();
+
+      const response = await eventsHandler(
+        makeContext({
+          params: { runId: run.id },
+          query: { resourceId: 'user-1', offset: '0' },
+          signal: controller.signal,
+        }) as never,
+      );
+
+      expect(response.status).toBe(200);
+      // No terminal replay: the heartbeat keeps the connection alive...
+      expect(vi.getTimerCount()).toBe(1);
+
+      controller.abort();
+      // ...and the abort listener closes the stream, clearing it.
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

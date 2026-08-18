@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  RUN_CAPACITY_GLOBAL_MESSAGE,
+  RUN_CAPACITY_PER_RESOURCE_MESSAGE,
+  RUN_MAX_DURATION_MESSAGE,
+  RunCapacityError,
   RunConflictError,
   RunRegistry,
   createRunId,
@@ -41,6 +45,167 @@ describe('createRunId', () => {
     expect(isRunId('run_1_ab')).toBe(false);
     expect(isRunId('pmr_20260101000000_deadbeef')).toBe(false);
     expect(isRunId('')).toBe(false);
+  });
+});
+
+function startRun(
+  registry: RunRegistry,
+  overrides: Partial<{ agentId: string; threadId: string; resourceId: string }> = {},
+  requestAbort: () => void = () => undefined,
+) {
+  return registry.createRun({
+    id: createRunId(),
+    agentId: overrides.agentId ?? TUPLE.agentId,
+    threadId: overrides.threadId ?? TUPLE.threadId,
+    resourceId: overrides.resourceId ?? TUPLE.resourceId,
+    prompt: TUPLE.prompt,
+    requestAbort,
+  });
+}
+
+describe('RunRegistry concurrency caps', () => {
+  it('rejects the 5th concurrent running run for one resource with 4', () => {
+    const { registry } = makeRegistry();
+    for (let i = 0; i < 4; i++) {
+      startRun(registry, { threadId: `main-agent-user-1-uuid-${i}` });
+    }
+
+    expect(() => startRun(registry, { threadId: 'main-agent-user-1-uuid-x' }))
+      .toThrowError(RunCapacityError);
+    try {
+      startRun(registry, { threadId: 'main-agent-user-1-uuid-x' });
+    } catch (error) {
+      expect((error as RunCapacityError).message).toBe(
+        RUN_CAPACITY_PER_RESOURCE_MESSAGE,
+      );
+    }
+
+    // Registry state stays intact: the four running runs remain and other
+    // users are unaffected.
+    expect(registry.listActiveRuns('user-1')).toHaveLength(4);
+    expect(
+      registry.findActiveRun('main-agent', 'main-agent-user-1-uuid-0', 'user-1'),
+    ).not.toBeNull();
+    expect(() =>
+      startRun(registry, {
+        resourceId: 'user-2',
+        threadId: 'main-agent-user-2-uuid-a',
+      }),
+    ).not.toThrow();
+  });
+
+  it('rejects starts above the global concurrent cap across resources', () => {
+    const { registry } = makeRegistry({ maxConcurrentRuns: 3 });
+    for (let i = 0; i < 3; i++) {
+      startRun(registry, {
+        resourceId: `user-${i}`,
+        threadId: `main-agent-user-${i}-uuid-a`,
+      });
+    }
+
+    try {
+      startRun(registry, {
+        resourceId: 'user-9',
+        threadId: 'main-agent-user-9-uuid-a',
+      });
+      throw new Error('expected RunCapacityError');
+    } catch (error) {
+      expect(error).toBeInstanceOf(RunCapacityError);
+      expect((error as RunCapacityError).message).toBe(
+        RUN_CAPACITY_GLOBAL_MESSAGE,
+      );
+    }
+  });
+
+  it('still reports the 409 conflict (not capacity) for a duplicate start', () => {
+    const { registry } = makeRegistry({ maxConcurrentRunsPerResource: 1 });
+    const first = startRun(registry);
+
+    try {
+      startRun(registry);
+      throw new Error('expected RunConflictError');
+    } catch (error) {
+      // The client must receive the active run to attach to, even at cap.
+      expect(error).toBeInstanceOf(RunConflictError);
+      expect((error as RunConflictError).run.id).toBe(first.id);
+    }
+  });
+
+  it('does not count terminal runs against the caps', () => {
+    const { registry } = makeRegistry({ maxConcurrentRunsPerResource: 2 });
+    const first = startRun(registry, { threadId: 'main-agent-user-1-uuid-0' });
+    startRun(registry, { threadId: 'main-agent-user-1-uuid-1' });
+    registry.finishRun(first.id, 'completed');
+
+    expect(() =>
+      startRun(registry, { threadId: 'main-agent-user-1-uuid-2' }),
+    ).not.toThrow();
+  });
+});
+
+describe('RunRegistry max-duration watchdog', () => {
+  it('force-fails over-duration running runs and releases the thread lock', () => {
+    const { registry, clock } = makeRegistry({ maxRunDurationMs: 60_000 });
+    const aborted: string[] = [];
+    const run = startRun(
+      registry,
+      { threadId: 'main-agent-user-1-uuid-w' },
+      () => aborted.push(run.id),
+    );
+
+    // The injected clock ticks on every now() read; keep comfortable
+    // margins on both sides of the 60s cap.
+    clock.advance(50_000);
+    registry.getRun(run.id);
+    expect(registry.getRun(run.id)?.status).toBe('running');
+
+    clock.advance(20_000); // past the 60s duration cap
+    const final = registry.getRun(run.id);
+
+    expect(final?.status).toBe('failed');
+    expect(final?.error).toBe(RUN_MAX_DURATION_MESSAGE);
+    expect(aborted).toEqual([run.id]);
+    // The thread's active-run 409 lock is released: a new run can start.
+    expect(
+      registry.findActiveRun('main-agent', 'main-agent-user-1-uuid-w', 'user-1'),
+    ).toBeNull();
+    expect(() =>
+      startRun(registry, { threadId: 'main-agent-user-1-uuid-w' }),
+    ).not.toThrow();
+  });
+
+  it('appends the terminal error event so subscribers and replay see the failure', () => {
+    const { registry, clock } = makeRegistry({ maxRunDurationMs: 1_000 });
+    const run = startRun(registry);
+
+    clock.advance(2_000);
+    const seen: string[] = [];
+    registry.subscribeFrom(run.id, 0, (event) => seen.push(event.type));
+
+    expect(seen).toEqual(['error']);
+  });
+
+  it('a late execution finalize after the watchdog is a no-op', () => {
+    const { registry, clock } = makeRegistry({ maxRunDurationMs: 1_000 });
+    const run = startRun(registry);
+
+    clock.advance(2_000);
+    // Any run API touch performs the reap; the execution loop waking up
+    // afterwards must not overwrite the watchdog's terminal state.
+    registry.getRun(run.id);
+    const late = registry.finishRun(run.id, 'completed');
+
+    expect(late?.status).toBe('failed');
+    expect(late?.error).toBe(RUN_MAX_DURATION_MESSAGE);
+  });
+
+  it('leaves runs within the duration untouched', () => {
+    const { registry, clock } = makeRegistry({ maxRunDurationMs: 60_000 });
+    const run = startRun(registry);
+
+    clock.advance(30_000);
+    registry.listActiveRuns('user-1');
+    expect(registry.getRun(run.id)?.status).toBe('running');
   });
 });
 
