@@ -180,8 +180,13 @@ describe('compositor — composeVisual', () => {
     expect(clamped.length).toBeLessThan(longHeadline.length);
     expect(ctx.measureText(clamped).width).toBeLessThanOrEqual(maxWidth);
 
-    // A fitting string passes through unchanged.
-    expect(clampToWidth(ctx, 'AI Factory di Batam', maxWidth)).toBe('AI Factory di Batam');
+    // A fitting string passes through unchanged. The column width is derived
+    // from the measured text so the assertion holds under whatever default
+    // sans-serif font the environment resolves (Windows Segoe UI is narrower
+    // than CI Linux DejaVu Sans at the same nominal size and weight).
+    const fitting = 'AI Factory di Batam';
+    const fitWidth = ctx.measureText(fitting).width + 1;
+    expect(clampToWidth(ctx, fitting, fitWidth)).toBe(fitting);
 
     // A degenerate zero-width column never returns unbounded text.
     expect(clampToWidth(ctx, 'anything', 0)).toBe('');
