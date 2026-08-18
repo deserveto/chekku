@@ -63,6 +63,23 @@ export class RunConflictError extends Error {
   }
 }
 
+/** Fixed bounded messages; surface as HTTP 429 without diagnostics. */
+export const RUN_CAPACITY_PER_RESOURCE_MESSAGE =
+  'Too many concurrent runs for this user. Stop a running conversation before starting another.';
+
+export const RUN_CAPACITY_GLOBAL_MESSAGE =
+  'Too many concurrent runs on this server. Try again shortly.';
+
+export const RUN_MAX_DURATION_MESSAGE =
+  'The run exceeded the maximum duration and was stopped.';
+
+export class RunCapacityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RunCapacityError';
+  }
+}
+
 interface AgentRunRecord {
   summary: AgentRunSummary;
   events: AgentRunEvent[];
@@ -79,6 +96,12 @@ export interface RunRegistryOptions {
   maxEventsPerRun?: number;
   maxEventBufferBytes?: number;
   terminalTtlMs?: number;
+  /** Cap on concurrent `running` runs per resourceId. */
+  maxConcurrentRunsPerResource?: number;
+  /** Cap on concurrent `running` runs across all resources. */
+  maxConcurrentRuns?: number;
+  /** Watchdog: running runs older than this are force-failed. */
+  maxRunDurationMs?: number;
 }
 
 const DEFAULTS = {
@@ -86,6 +109,9 @@ const DEFAULTS = {
   maxEventsPerRun: 10_000,
   maxEventBufferBytes: 4 * 1024 * 1024,
   terminalTtlMs: 30 * 60 * 1000,
+  maxConcurrentRunsPerResource: 4,
+  maxConcurrentRuns: 64,
+  maxRunDurationMs: 30 * 60 * 1000,
 };
 
 function approximateEventBytes(event: AgentRunEvent): number {
@@ -123,6 +149,9 @@ export class RunRegistry {
   private readonly maxEventsPerRun: number;
   private readonly maxEventBufferBytes: number;
   private readonly terminalTtlMs: number;
+  private readonly maxConcurrentRunsPerResource: number;
+  private readonly maxConcurrentRuns: number;
+  private readonly maxRunDurationMs: number;
 
   constructor(options: RunRegistryOptions = {}) {
     this.now = options.now ?? (() => Date.now());
@@ -131,6 +160,13 @@ export class RunRegistry {
     this.maxEventBufferBytes =
       options.maxEventBufferBytes ?? DEFAULTS.maxEventBufferBytes;
     this.terminalTtlMs = options.terminalTtlMs ?? DEFAULTS.terminalTtlMs;
+    this.maxConcurrentRunsPerResource =
+      options.maxConcurrentRunsPerResource ??
+      DEFAULTS.maxConcurrentRunsPerResource;
+    this.maxConcurrentRuns =
+      options.maxConcurrentRuns ?? DEFAULTS.maxConcurrentRuns;
+    this.maxRunDurationMs =
+      options.maxRunDurationMs ?? DEFAULTS.maxRunDurationMs;
   }
 
   /**
@@ -160,6 +196,10 @@ export class RunRegistry {
     if (existing) {
       throw new RunConflictError(existing);
     }
+
+    // Conflict wins over capacity: a duplicate start still receives the
+    // active run so the client can attach instead of being locked out.
+    this.assertCapacity(params.resourceId);
 
     const startedAt = new Date(this.now()).toISOString();
     const record: AgentRunRecord = {
@@ -344,6 +384,9 @@ export class RunRegistry {
   }
 
   private evictExpired(): void {
+    // Reap stalled runs first so an over-duration run becomes terminal
+    // (with a fresh completedAt) before terminal-TTL eviction runs.
+    this.reapStalledRuns();
     const nowMs = this.now();
     for (const [id, record] of this.records) {
       const { summary } = record;
@@ -354,6 +397,44 @@ export class RunRegistry {
       ) {
         this.records.delete(id);
       }
+    }
+  }
+
+  /**
+   * Watchdog: force-finalizes running runs older than `maxRunDurationMs`.
+   * A hung gateway stream would otherwise keep a run `running` forever and
+   * permanently hold the thread's active-run 409 lock. Reaping aborts the
+   * execution signal and marks the run failed with a fixed message; a late
+   * execution-loop finalize is a no-op (first finish wins).
+   */
+  private reapStalledRuns(): void {
+    const nowMs = this.now();
+    for (const [id, record] of this.records) {
+      if (record.summary.status !== 'running') continue;
+      if (
+        Date.parse(record.summary.startedAt) + this.maxRunDurationMs >
+        nowMs
+      ) {
+        continue;
+      }
+      record.requestAbort();
+      this.finishRun(id, 'failed', RUN_MAX_DURATION_MESSAGE);
+    }
+  }
+
+  private assertCapacity(resourceId: string): void {
+    let global = 0;
+    let perResource = 0;
+    for (const record of this.records.values()) {
+      if (record.summary.status !== 'running') continue;
+      global += 1;
+      if (record.summary.resourceId === resourceId) perResource += 1;
+    }
+    if (perResource >= this.maxConcurrentRunsPerResource) {
+      throw new RunCapacityError(RUN_CAPACITY_PER_RESOURCE_MESSAGE);
+    }
+    if (global >= this.maxConcurrentRuns) {
+      throw new RunCapacityError(RUN_CAPACITY_GLOBAL_MESSAGE);
     }
   }
 

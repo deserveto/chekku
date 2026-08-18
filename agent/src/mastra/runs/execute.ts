@@ -99,6 +99,22 @@ export function chunkToRunEvent(
         },
       };
     }
+    // @mastra/core emits tool failures as a distinct `tool-error` chunk
+    // (ToolErrorPayload), not only as `tool-result` with `isError: true`.
+    // Without this case the chunk falls through to `default` and the
+    // client's tool card stays stuck on "running".
+    case 'tool-error': {
+      const payload = chunkPayload(chunk);
+      if (typeof payload.toolCallId !== 'string') return null;
+      return {
+        type: 'tool-error',
+        payload: {
+          toolCallId: payload.toolCallId,
+          toolName: String(payload.toolName ?? 'tool'),
+          error: payload.error ?? payload.result,
+        },
+      };
+    }
     case 'error': {
       const payload = chunkPayload(chunk);
       return {
@@ -112,9 +128,11 @@ export function chunkToRunEvent(
 }
 
 export function buildThreadTitle(prompt: string): string {
-  return prompt.length > 52
-    ? `${prompt.slice(0, 49).trim()}…`
-    : prompt;
+  // Truncate on Unicode code points, not UTF-16 code units: slicing a
+  // surrogate pair in half would end the title in a lone surrogate.
+  const characters = Array.from(prompt);
+  if (characters.length <= 52) return prompt;
+  return `${characters.slice(0, 49).join('').trim()}…`;
 }
 
 /**
