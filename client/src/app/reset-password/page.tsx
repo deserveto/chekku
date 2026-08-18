@@ -82,7 +82,7 @@ function ResetPasswordContent() {
     <form className="auth-form" onSubmit={onSubmit}>
       <label className="studio-field">
         <span>New password</span>
-          <input
+        <input
           type="password"
           value={newPassword}
           onChange={(event) => setNewPassword(event.target.value)}
@@ -95,7 +95,7 @@ function ResetPasswordContent() {
       </label>
       <label className="studio-field">
         <span>Confirm password</span>
-          <input
+        <input
           type="password"
           value={confirmPassword}
           onChange={(event) => setConfirmPassword(event.target.value)}
