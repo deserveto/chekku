@@ -185,7 +185,7 @@ Chat execution is server-owned. Each prompt creates a run on the agent server th
 
 Browser-facing endpoints (identity derived from the Better Auth session by the Next.js seam):
 
-- `POST /api/runs` — start a run (`{ agentId, threadId, prompt }`); responds `202 { run }` or `409 { run }`. On a first turn the server creates the Memory thread record titled from the prompt (52-character truncation) before responding, so the thread shows up in the sidebar with a real name immediately, and the run summary in the response carries the `prompt`.
+- `POST /api/runs` — start a run (`{ agentId, threadId, prompt }`); responds `202 { run }`, `409 { run }` when this thread already has an active run, or `429 { error }` when a concurrency cap is reached. The prompt is capped at 65,536 UTF-8 bytes (larger prompts get `400`). On a first turn the server creates the Memory thread record titled from the prompt (52-character truncation) before responding, so the thread shows up in the sidebar with a real name immediately, and the run summary in the response carries the `prompt`.
 - `GET /api/runs/active?agentId&threadId` — the thread's active run, or `204`.
 - `GET /api/runs/list[?agentId]` — active runs for sidebar status polling.
 - `GET /api/runs/<runId>/events?offset=N` — SSE replay-then-live event stream; closes on the terminal event.
@@ -197,6 +197,8 @@ Operational limits to know:
 - Mastra persists a turn's user message only when the turn completes. While a run is in flight, the chat UI shows the user turn and live tool/text progress from the run record (`prompt` + event replay), not from Memory.
 - Terminal runs stay replayable for 30 minutes; afterwards only Memory messages remain and tool-timeline detail for that run is gone.
 - Run event buffers are capped (4 MiB / 10 000 events per run). Extremely long runs may replay with a gap in the middle; the run summary carries `evicted: true`.
+- Concurrent running runs are capped at 4 per user and 64 across the server (registry constants, no environment override). A start above either cap receives `429` with a fixed message and the registry stays intact; a duplicate start on a busy thread still receives `409` so the client can attach.
+- A running run older than 30 minutes is force-failed by the registry watchdog (fixed message `The run exceeded the maximum duration and was stopped.`), which aborts its execution signal and releases the thread's active-run lock even when the model gateway stream hangs. Any run API touch performs the reap; there is no background timer.
 - Foreign or malformed run IDs collapse to `404`; unauthenticated calls to `/api/runs/*` return `403`.
 
 ## SearXNG search
