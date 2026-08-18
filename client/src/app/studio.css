@@ -1144,6 +1144,13 @@ body.studio-sidebar-resizing * {
   color: var(--studio-body);
   font-size: 11px;
   line-height: 18px;
+  /* Long descriptions (e.g. the Strategist's routing contract) must not
+     stretch the card: clamp every agent card to three lines. The full text
+     stays in the DOM. */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .studio-agent-meta {
