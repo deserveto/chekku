@@ -157,6 +157,25 @@ describe('visual-content-agent (identity and tools)', () => {
   });
 });
 
+describe('social-media-supervisor-agent (instructions env gating)', () => {
+  it('production instructions never propose the dev-only preview_image tool', async () => {
+    const { buildSupervisorInstructions } = await import('../social-media-supervisor-agent.js');
+    const text = buildSupervisorInstructions('production');
+    expect(text).not.toContain('preview_image');
+    expect(text).not.toContain('previewId');
+    expect(text).not.toContain('standalone preview');
+    // The production delegation rule still steers toward the registered tool.
+    expect(text).toContain('"Use generate_image with postId <id>"');
+  });
+
+  it('non-production instructions keep the ad-hoc preview delegation path', async () => {
+    const { buildSupervisorInstructions } = await import('../social-media-supervisor-agent.js');
+    const text = buildSupervisorInstructions('development');
+    expect(text).toContain('"Use preview_image (no postId)"');
+    expect(text).toContain('standalone preview');
+  });
+});
+
 describe('social-media-supervisor-agent (three sub-agents and routing)', () => {
   it('attaches the Content Writer, Strategist, and Visual Content Agent as sub-agents', () => {
     const supervisor = socialMediaSupervisorAgent as unknown as {

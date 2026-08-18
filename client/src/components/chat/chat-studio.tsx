@@ -42,6 +42,7 @@ import {
   listAllAgents,
 } from '@/lib/stored-agents';
 import { extractImageUrl } from '@/lib/tool-result';
+import { isSafeImageSrc } from '@/lib/safe-image-src';
 import {
   createOwnedThreadId,
   isOwnedThreadId,
@@ -755,10 +756,15 @@ export function ChatStudio({
                     {relatedTools.length > 0 && (
                       <div className="chat-tool-timeline">
                         {relatedTools.map((tool) => {
-                          const imageUrl =
+                          const extracted =
                             tool.result !== undefined
                               ? extractImageUrl(tool.result)
                               : null;
+                          // Same scheme allowlist as the markdown renderer —
+                          // tool results are model-influenced, so a
+                          // non-http(s)/same-origin/data URL is dropped.
+                          const imageUrl =
+                            extracted && isSafeImageSrc(extracted) ? extracted : null;
                           return (
                             <details
                               className={`chat-tool-card ${tool.status}`}

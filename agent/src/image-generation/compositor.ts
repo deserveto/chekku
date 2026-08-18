@@ -125,6 +125,13 @@ export async function composeVisual({
 
   // 1. Background (Cover without stretching)
   const bgImage = await loadImage(Buffer.from(backgroundBytes));
+  // Pixel-dimension guard: the bytes are provider-trusted, but a small-but-
+  // dense image declaring huge dimensions would make @napi-rs/canvas attempt
+  // a giant allocation. Bound the decode result before any drawing math.
+  const MAX_BACKGROUND_PIXELS = 40_000_000; // e.g. ~6300×6300
+  if (bgImage.width * bgImage.height > MAX_BACKGROUND_PIXELS) {
+    throw new Error('Background image dimensions exceed the compositor limit.');
+  }
   const scale = Math.max(plan.width / bgImage.width, plan.height / bgImage.height);
   const drawW = bgImage.width * scale;
   const drawH = bgImage.height * scale;
@@ -812,11 +819,15 @@ function wrapText(
     const test = line ? `${line} ${words[i]}` : words[i]!;
     const width = ctx.measureText(test).width;
     if (width > maxWidth && line) {
-      ctx.fillText(line, x, y + lineCount * lineHeight);
+      ctx.fillText(clampToWidth(ctx, line, maxWidth), x, y + lineCount * lineHeight);
       line = words[i]!;
       lineCount += 1;
       if (lineCount >= maxLines - 1) {
-        const remaining = words.slice(i).join(' ');
+        // Final line: collapse the remaining words and HARD-CLAMP to the
+        // column width with an ellipsis. Without the clamp, a schema-valid
+        // but over-long headline renders ~1600px of text on a 1024px canvas
+        // and is silently raster-clipped at the canvas edge.
+        const remaining = clampToWidth(ctx, words.slice(i).join(' '), maxWidth);
         ctx.fillText(remaining, x, y + lineCount * lineHeight);
         return;
       }
@@ -824,7 +835,24 @@ function wrapText(
       line = test;
     }
   }
-  if (line) ctx.fillText(line, x, y + lineCount * lineHeight);
+  if (line) ctx.fillText(clampToWidth(ctx, line, maxWidth), x, y + lineCount * lineHeight);
+}
+
+/**
+ * Truncate `text` to fit `maxWidth` at the context's current font, appending a
+ * single ellipsis character when truncation occurs. Used by {@link wrapText}
+ * so every rendered line — including the final collapsed line of an over-long
+ * headline, context, or fact body — stays inside its column.
+ */
+export function clampToWidth(ctx: SKRSContext2D, text: string, maxWidth: number): string {
+  if (maxWidth <= 0) return '';
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  const suffix = '…';
+  let clipped = text;
+  while (clipped.length > 0 && ctx.measureText(`${clipped}${suffix}`).width > maxWidth) {
+    clipped = clipped.slice(0, -1);
+  }
+  return clipped ? `${clipped}${suffix}` : suffix;
 }
 
 function countWrappedLines(ctx: SKRSContext2D, text: string, maxWidth: number): number {

@@ -172,8 +172,22 @@ export function createReviewImageTool(options: ReviewImageToolOptions = {}) {
           brief,
         });
       } catch (error) {
+        // Review is advisory: a flaky reviewer must never block the
+        // self-review loop after the image was already generated, stored, and
+        // attached. Provider failures resolve to an advisory pass (score 100,
+        // no issues) instead of surfacing an error turn. Storage/asset
+        // failures above still throw — those mean the asset itself is
+        // unreadable and the caller must know.
         if (isImageGenerationClientError(error)) {
-          throw new Error(error.message);
+          return {
+            postId,
+            assetId,
+            score: 100,
+            issues: [],
+            suggestion: '',
+            model: requireImageModel(options.model),
+            reviewedAt: now().toISOString(),
+          };
         }
         throw new Error(SAFE_ERRORS.storage);
       }

@@ -1,6 +1,8 @@
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
+import { isSafeImageSrc } from '@/lib/safe-image-src';
+
 export function MarkdownMessage({ content }: { content: string }) {
   return (
     <ReactMarkdown
@@ -13,12 +15,7 @@ export function MarkdownMessage({ content }: { content: string }) {
         img: ({ src, alt, node, ...props }) => {
           void node;
           const srcUrl = typeof src === 'string' ? src : '';
-          if (
-            !srcUrl.startsWith('http://') &&
-            !srcUrl.startsWith('https://') &&
-            !srcUrl.startsWith('/') &&
-            !srcUrl.startsWith('data:')
-          ) {
+          if (!isSafeImageSrc(srcUrl)) {
             return null;
           }
           return (

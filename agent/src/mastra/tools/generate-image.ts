@@ -183,7 +183,6 @@ export function createGenerateImageTool(options: GenerateImageToolOptions = {}) 
       },
     },
     execute: async (raw) => {
-      console.warn(`[generate_image] execute invoked. postId=${raw.postId} pillar=${raw.contentPillar}`);
       requireImageModel(options.model);
       const store = socialStore(options);
       await store.ensureReady?.();
@@ -254,19 +253,15 @@ export function createGenerateImageTool(options: GenerateImageToolOptions = {}) 
         });
       } catch (error) {
         if (isImageGenerationClientError(error)) {
-          console.warn(`[generate_image] image client error: ${error.message}`);
           throw new Error(error.message);
         }
-        console.warn(`[generate_image] image client unexpected error: ${error instanceof Error ? error.message : String(error)}`);
         throw new Error(SAFE_ERRORS.storage);
       }
-      console.warn(`[generate_image] image generated. bytes=${generated.imageBytes.byteLength} mime=${generated.mimeType}`);
 
       let logoBytes: Uint8Array;
       try {
         logoBytes = loadBrandLogoBytes(options.logoPath);
-      } catch (e) {
-        console.warn(`[generate_image] logo load failed: ${e instanceof Error ? e.message : String(e)}`);
+      } catch {
         throw new Error(SAFE_ERRORS.composition);
       }
 

@@ -1,9 +1,10 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { composeVisual, loadBrandLogoBytes, resolveBrandLogoPath, __resetBrandLogoCacheForTests, BRAND_LOGO_RELATIVE_PATH } from './compositor.js';
+import { clampToWidth, composeVisual, loadBrandLogoBytes, resolveBrandLogoPath, __resetBrandLogoCacheForTests, BRAND_LOGO_RELATIVE_PATH } from './compositor.js';
 import { COMPOSITION_PLANS, type VisualBrief } from './visual-brief.js';
 
 const TEST_LOGO_PATH = 'agent/src/assets/__test-logo.png';
@@ -59,18 +60,17 @@ describe('compositor — brand asset resolver', () => {
     expect(() => loadBrandLogoBytes('agent/src/assets/__does-not-exist.png')).toThrow();
   });
 
-  it('walks up from a nested CWD to find the real brand logo (regression: mastra dev sets CWD to agent/src/mastra/public)', () => {
+  it('walks up from a nested CWD to find the real brand logo (regression: mastra dev sets CWD deep inside the agent workspace)', () => {
     // The real logo lives at agent/src/assets/image.png (relative to repo root).
     // mastra dev has been observed running tool execute with CWD set deep inside
-    // the agent workspace (e.g. `agent/src/mastra/public`). The resolver must
-    // walk up the directory tree and find the logo regardless of CWD depth.
+    // the agent workspace. The resolver must walk up the directory tree and
+    // find the logo regardless of CWD depth. The nested directory is derived
+    // from THIS test file's own location so the regression always runs — an
+    // existsSync-guarded fixture path silently self-skips when the fixture is
+    // absent, which is exactly what happened with agent/src/mastra/public.
     const originalCwd = process.cwd();
-    const nestedDir = resolve('agent/src/mastra/public');
-    if (!existsSync(nestedDir)) {
-      // Skip on environments where the nested path doesn't exist; the regression
-      // is only meaningful on a real checkout.
-      return;
-    }
+    const nestedDir = dirname(fileURLToPath(import.meta.url));
+    expect(existsSync(nestedDir)).toBe(true);
     try {
       process.chdir(nestedDir);
       __resetBrandLogoCacheForTests();
@@ -163,6 +163,49 @@ describe('compositor — composeVisual', () => {
       expect(composed.byteLength).toBeGreaterThan(0);
       expect(composed[0]).toBe(0x89);
     }
+  });
+
+  it('clamps every wrapped line to its column width with an ellipsis (no silent canvas-edge clipping)', async () => {
+    const { createCanvas } = await import('@napi-rs/canvas');
+    const canvas = createCanvas(1024, 256);
+    const ctx = canvas.getContext('2d');
+    ctx.font = '900 77px sans-serif';
+
+    // A schema-valid 120-char headline far exceeds the ~594px headline column
+    // at this font; the clamp must return an ellipsized string that fits.
+    const longHeadline = 'Indonesia Sedang Membangun Otot AI Nasional Terbesar di Asia Tenggara Dengan Investasi Puluhan Triliun Rupiah dan Ribuan GPU';
+    const maxWidth = 1024 * 0.58;
+    const clamped = clampToWidth(ctx, longHeadline, maxWidth);
+    expect(clamped.endsWith('…')).toBe(true);
+    expect(clamped.length).toBeLessThan(longHeadline.length);
+    expect(ctx.measureText(clamped).width).toBeLessThanOrEqual(maxWidth);
+
+    // A fitting string passes through unchanged.
+    expect(clampToWidth(ctx, 'AI Factory di Batam', maxWidth)).toBe('AI Factory di Batam');
+
+    // A degenerate zero-width column never returns unbounded text.
+    expect(clampToWidth(ctx, 'anything', 0)).toBe('');
+  });
+
+  it('still composes a valid PNG when the headline exceeds the layout zone', async () => {
+    const bg = await syntheticBackground(1024, 1024, '#0a1628');
+    const logo = readFileSync(resolve(TEST_LOGO_PATH));
+    const composed = await composeVisual({
+      brief: makeBrief({
+        headline:
+          'Indonesia Sedang Membangun Otot AI Nasional Terbesar di Asia Tenggara Dengan Investasi Puluhan Triliun Rupiah dan Ribuan GPU Modern di Beberapa Provinsi',
+        facts: [
+          '170.000 AI accelerators dalam satu fase pembangunan awal yang sangat besar',
+          '360 MW rencana kapasitas listrik untuk mendukung operasional penuh fasilitas',
+          'Q1 2027 target operasional awal dengan skala ekspansi berkelanjutan bertahap',
+        ],
+      }),
+      backgroundBytes: bg,
+      logoBytes: new Uint8Array(logo),
+      canvasSize: 1024,
+    });
+    expect(composed.byteLength).toBeGreaterThan(0);
+    expect(composed[0]).toBe(0x89);
   });
 
   it('renders without a source line when the brief source is empty (celebration pillar)', async () => {

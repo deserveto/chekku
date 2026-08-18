@@ -88,7 +88,10 @@ export async function getChatPreviewForUser(
   const store = asBinaryObjectStorage(createNamespacedObjectStorage(root, SOCIAL_MEDIA_AGENT_ID));
   try {
     const result = await store.getBytes(objectKey);
-    return { value: result.value, contentType: result.contentType ?? contentType };
+    // Always serve the allowlisted extension-derived Content-Type, never the
+    // stored one — a foreign/future writer storing e.g. text/html metadata
+    // must not get app-origin HTML served from this route.
+    return { value: result.value, contentType };
   } catch (error) {
     if (error instanceof ObjectStorageError) {
       if (error.code === 'not-found') {

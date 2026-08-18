@@ -3,8 +3,29 @@ import { describe, it, expect } from 'vitest';
 import { mastra } from '../../mastra/index.js';
 import {
   VISUAL_CONTENT_AGENT_ID,
+  buildInstructions,
   visualContentAgent,
 } from '../visual-content-agent.js';
+
+describe('visual-content-agent (instructions env gating)', () => {
+  it('production instructions contain no preview_image mention', () => {
+    const text = buildInstructions('production');
+    expect(text).not.toContain('preview_image');
+    expect(text).not.toContain('previewId');
+    expect(text).not.toContain('Gambar preview');
+    // The production delegation rule, workflow, and worked example steer only
+    // toward the registered post-bound tool.
+    expect(text).toContain('Use generate_image with postId <id>');
+    expect(text).toContain('smp_20260817120000_a1b2c3d4');
+  });
+
+  it('non-production instructions keep the dev-only preview_image guidance', () => {
+    const text = buildInstructions('development');
+    expect(text).toContain('Use preview_image (no postId)');
+    expect(text).toContain('Gambar preview sudah jadi');
+    expect(text).toContain('## Ad-hoc chat visuals (no post)');
+  });
+});
 
 describe('visual-content-agent (registration and identity)', () => {
   it('exposes the stable agent id constant', () => {

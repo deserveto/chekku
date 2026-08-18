@@ -334,7 +334,10 @@ describe('review_image tool — asset verification', () => {
 });
 
 describe('review_image tool — failure normalization', () => {
-  it('maps a provider review-failed error to the fixed message', async () => {
+  it('resolves a provider review-failed error to an advisory pass (score 100)', async () => {
+    // Review is advisory: a flaky reviewer must never block the self-review
+    // loop after the image was already generated and attached. The provider
+    // failure resolves to a pass instead of an error turn.
     const client: ImageReviewClient = {
       async review() {
         throw new ImageGenerationClientError('review-failed');
@@ -350,10 +353,15 @@ describe('review_image tool — failure normalization', () => {
       now: FIXED_NOW,
     });
 
-    await expect(tool.execute!(
+    const result = (await tool.execute!(
       { postId: seeded.metadata.postId, assetId, brief: 'brief' },
       {} as never,
-    )).rejects.toThrow('Image review is unavailable. Try again later.');
+    )) as { score: number; issues: string[]; suggestion: string; postId: string; assetId: string };
+    expect(result.score).toBe(100);
+    expect(result.issues).toEqual([]);
+    expect(result.suggestion).toBe('');
+    expect(result.postId).toBe(seeded.metadata.postId);
+    expect(result.assetId).toBe(assetId);
   });
 
   it('maps a non-ImageGenerationClientError thrown by the client to storage', async () => {

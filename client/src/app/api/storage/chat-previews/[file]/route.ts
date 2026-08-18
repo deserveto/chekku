@@ -24,8 +24,10 @@ export async function GET(
     const headers = new Headers({
       'Content-Type': asset.contentType,
       // Preview ids are timestamp + random and never change once written, so a
-      // short immutable cache keeps the route cheap to reload.
-      'Cache-Control': 'public, max-age=300, immutable',
+      // short immutable cache keeps the route cheap to reload. `private`
+      // because the route is session-gated (any signed-in user may fetch a
+      // preview id, but shared/browser caches must not retain it).
+      'Cache-Control': 'private, max-age=300, immutable',
     });
     return new Response(Buffer.from(asset.value), { status: 200, headers });
   } catch (error) {

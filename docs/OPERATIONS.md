@@ -90,7 +90,7 @@ LLM_IMAGE_MODEL=gemini-3.1-flash-image
 #LLM_IMAGE_ENDPOINT_PATH=/images/generations
 ```
 
-`LLM_IMAGE_MODEL` is the fixed model id invoked by the `generate_image` tool; it never comes from tool or model input. Empty/unset fails closed with `Image generation is not configured.` without preventing other agent features from starting. `LLM_IMAGE_ENDPOINT_PATH` defaults to the OpenAI Images API standard path (`/images/generations`); override it only when the configured gateway exposes image generation under a different path. Both use the existing `LLM_BASE_URL` and `LLM_API_KEY`; no second key is required.
+`LLM_IMAGE_MODEL` is the fixed model id invoked by the Visual Content Agent's image tools — generation output in `generate_image` (and the dev-only `preview_image`) plus multimodal vision input in `review_image` (the self-review loop, capped server-side at `MAX_VISUAL_ASSETS_PER_POST = 3` assets per post); it never comes from tool or model input. Empty/unset fails closed with `Image generation is not configured.` without preventing other agent features from starting. `LLM_IMAGE_ENDPOINT_PATH` defaults to the OpenAI Images API standard path (`/images/generations`); override it only when the configured gateway exposes image generation under a different path. Both use the existing `LLM_BASE_URL` and `LLM_API_KEY`; no second key is required.
 
 The image-generation HTTP adapter assumes the OpenAI Images API standard contract (`POST {LLM_BASE_URL}/images/generations` with `response_format: b64_json`). If the live gateway does not implement that contract, only `agent/src/image-generation/client.ts` needs adjustment.
 

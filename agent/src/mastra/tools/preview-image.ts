@@ -189,7 +189,6 @@ export function createPreviewImageTool(options: PreviewImageToolOptions = {}) {
       },
     },
     execute: async (raw) => {
-      console.warn(`[preview_image] execute invoked. pillar=${raw.contentPillar} headline=${JSON.stringify(raw.headline).slice(0, 60)}`);
       requireImageModel(options.model);
       const {
         contentPillar,
@@ -231,19 +230,15 @@ export function createPreviewImageTool(options: PreviewImageToolOptions = {}) {
         });
       } catch (error) {
         if (isImageGenerationClientError(error)) {
-          console.warn(`[preview_image] image client error: ${error.message}`);
           throw new Error(error.message);
         }
-        console.warn(`[preview_image] image client unexpected error: ${error instanceof Error ? error.message : String(error)}`);
         throw new Error(SAFE_ERRORS.storage);
       }
-      console.warn(`[preview_image] image generated. bytes=${generated.imageBytes.byteLength} mime=${generated.mimeType}`);
 
       let logoBytes: Uint8Array;
       try {
         logoBytes = loadBrandLogoBytes(options.logoPath);
-      } catch (e) {
-        console.warn(`[preview_image] logo load failed: ${e instanceof Error ? e.message : String(e)}`);
+      } catch {
         throw new Error(SAFE_ERRORS.composition);
       }
 
