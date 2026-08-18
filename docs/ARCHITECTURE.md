@@ -505,10 +505,16 @@ Chat report links use URL-encoded relative `/reports/<reportId>` or `/reports/co
 Password reset uses Better Auth's native flow: `/forgot-password` calls
 `authClient.requestPasswordReset({ email, redirectTo: '/reset-password' })`;
 the emailed link (`/api/auth/reset-password/:token`) redirects to
-`/reset-password?token=...` for a single-use, one-hour token. A successful
+`/reset-password?token=...` for a single-use, one-hour token. The token
+transits the URL query on the page GET (browser-history/access-log exposure,
+mitigated by 62^24 entropy, single use, expiry, and session revocation).
+Signed-in browsers are redirected from `/reset-password` to `/agents`, so a
+user must sign out before opening a reset link. A successful
 reset revokes every session for the user (`revokeSessionsOnPasswordReset`).
 Requests to `POST /request-password-reset` are rate-limited (5/min) by the
-middleware `password-reset` scope. The reset mail reuses the Resend transport
+middleware `password-reset` scope; the reset mail itself is sent
+fire-and-forget via `advanced.backgroundTasks` so response timing does not
+reveal whether an address is registered. The reset mail reuses the Resend transport
 (`RESEND_API_KEY` / `RESEND_FROM_EMAIL`, dev console fallback when unset).
 Signup requires typing the password twice; the match check is client-side
 only and never reaches `signUp.email` on mismatch.

@@ -54,7 +54,7 @@ A task is not complete until affected tests pass. Before finalizing any reposito
 
 Toolchain facts:
 
-- Node `>=22.22.0` is pinned in `.nvmrc` and every workspace `engines`. CI runs `npm run check` and `npm run build` with `NODE_OPTIONS=--max-old-space-size=8192`; typecheck and build can exhaust the default heap.
+- Node `>=22.22.0` is pinned in `.nvmrc` and in the `engines` fields of the root and `agent` package manifests (`client` and `storage` declare no `engines`). CI runs `npm run check` and `npm run build` with `NODE_OPTIONS=--max-old-space-size=8192`; typecheck and build can exhaust the default heap.
 - Run `npm ci` from the root after every pull. Stale workspace symlinks make Mastra fail with `Invalid Version: ^1.14.0`-style errors.
 - `npm run check` order is typecheck (`@chekku/storage` then `agent` then `client`) → lint → test. `npm run lint` covers the `client` workspace only.
 - Root `package.json` `overrides` pin `@mastra/core`, `@mastra/pg`, and `zod` for all workspaces.
