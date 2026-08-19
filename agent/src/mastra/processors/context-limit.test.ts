@@ -378,7 +378,7 @@ describe('char-budget guard (estimator-independent backstop)', () => {
     expect(result).toBe(prompt);
   });
 
-  it('never slices binary payload fields even when they are the longest strings', () => {
+  it('drops binary parts whole instead of slicing them when they block the budget', () => {
     const imageData = 'i'.repeat(4_100); // longer than the estimate so it would top the sort
     const hugeText = 'h'.repeat(500);
     const prompt: CharBudgetPrompt = [
@@ -395,9 +395,69 @@ describe('char-budget guard (estimator-independent backstop)', () => {
 
     const parts = (result[1] ?? result[0]).content as Array<{ type: string; text?: string; data?: string }>;
     const filePart = parts.find((p) => p.type === 'file');
+    // The 4,000-char vision estimate can never fit a 100-char budget, so the
+    // part is dropped WHOLE — its payload is never sliced into garbage.
+    expect(filePart).toBeUndefined();
     const textPart = parts.find((p) => p.type === 'text');
-    expect(filePart?.data).toBe(imageData);
     expect(textPart?.text?.length).toBeLessThan(hugeText.length);
+    const totalChars = result.reduce((n, m) => n + messageChars(m), 0);
+    expect(totalChars).toBeLessThanOrEqual(100);
+  });
+
+  it('enforces the budget when binary payloads dominate the surviving newest turn', () => {
+    const budget = 10_000;
+    const prompt: CharBudgetPrompt = [
+      sys('s'),
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'look at these' },
+          ...Array.from({ length: 10 }, () => ({
+            type: 'file',
+            data: 'x'.repeat(10),
+            mediaType: 'image/png',
+            filename: 'p.png',
+          })),
+        ],
+      },
+    ];
+    // 10 image parts at the fixed 4,000-char vision estimate far exceed the
+    // budget, and the single group cannot be dropped (it is the newest).
+    const result = prunePromptToCharBudget(prompt, budget);
+
+    const total = result.reduce((n, m) => n + messageChars(m), 0);
+    expect(total).toBeLessThanOrEqual(budget);
+    const content = result[result.length - 1].content as Array<{ type: string; data?: string }>;
+    const fileParts = content.filter((p) => p.type === 'file');
+    // Surviving parts are intact (never sliced); the rest were dropped whole.
+    expect(fileParts.length).toBe(2);
+    for (const part of fileParts) {
+      expect(part.data).toBe('x'.repeat(10));
+    }
+  });
+
+  it('drops binary items nested in tool-result output without orphaning the tool call', () => {
+    const budget = 5_000;
+    const prompt: CharBudgetPrompt = [
+      sys('s'),
+      assistantToolCall('c1', 'screenshot', {}),
+      toolMedia('c1', 'screenshot', 'm'.repeat(50_000)),
+    ];
+    const result = prunePromptToCharBudget(prompt, budget);
+
+    const total = result.reduce((n, m) => n + messageChars(m), 0);
+    expect(total).toBeLessThanOrEqual(budget);
+
+    const toolMessage = result.find((m) => m.role === 'tool');
+    expect(toolMessage).toBeDefined();
+    const toolResult = (toolMessage?.content as Array<{ type: string; toolCallId?: string; output?: { type: string; value?: unknown } }>)[0];
+    expect(toolResult?.toolCallId).toBe('c1');
+    // The tool-result itself survives (its tool-call pairing stays intact);
+    // only the oversized binary item inside its output was dropped.
+    expect(toolResult?.output?.type).toBe('content');
+    const assistantMessage = result.find((m) => m.role === 'assistant');
+    const toolCall = (assistantMessage?.content as Array<{ type: string; toolCallId?: string }>)[0];
+    expect(toolCall?.toolCallId).toBe('c1');
   });
 });
 

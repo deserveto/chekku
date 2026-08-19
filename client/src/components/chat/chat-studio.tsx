@@ -233,6 +233,7 @@ export function ChatStudio({
   const subscriptionRef = useRef<AbortController | null>(null);
   const lastTerminalRef = useRef<string | null>(null);
   const sidebarRunsRef = useRef<Record<string, boolean>>({});
+  const dragDepthRef = useRef(0);
 
   const [agents, setAgents] = useState<ChekkuAgentSummary[]>([]);
   const [threads, setThreads] = useState<StudioThread[]>([]);
@@ -776,7 +777,12 @@ export function ChatStudio({
   const addFiles = (files: File[]) => {
     if (runActive || !modelReady) return;
 
-    const room = MAX_ATTACHMENTS_PER_MESSAGE - uploads.length;
+    // Error chips stay visible until dismissed but never consume an
+    // attachment slot, so rejected files cannot block further adds.
+    const activeCount = uploads.filter(
+      (upload) => upload.status !== 'error',
+    ).length;
+    const room = MAX_ATTACHMENTS_PER_MESSAGE - activeCount;
     if (room <= 0) {
       setError(
         `Up to ${MAX_ATTACHMENTS_PER_MESSAGE} attachments are allowed per message.`,
@@ -823,6 +829,7 @@ export function ChatStudio({
     const now = Date.now();
     const userMessageId = crypto.randomUUID();
     const assistantId = crypto.randomUUID();
+    const sentInput = input;
 
     setMessages((current) => [
       ...current,
@@ -887,6 +894,19 @@ export function ChatStudio({
             ? appendErrorDetail(message, `Could not complete request. ${detail}`)
             : message,
         ),
+      );
+      // The send failed before any run existed: put the drafted input and
+      // the prepared attachments back so retrying does not force the user
+      // to re-pick and re-process every file.
+      setInput(sentInput);
+      setUploads(
+        readyUploads.map((prepared) => ({
+          id: prepared.id,
+          filename: prepared.filename,
+          kind: prepared.kind,
+          status: 'ready' as const,
+          prepared,
+        })),
       );
       setSubscriptionState('idle');
     }
@@ -955,13 +975,22 @@ export function ChatStudio({
   };
 
   const paste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
-    const files = Array.from(event.clipboardData?.files ?? []).filter(
-      (file) => classifyAttachment(file) !== 'unsupported',
-    );
+    const files = Array.from(event.clipboardData?.files ?? []);
     if (files.length > 0) {
       event.preventDefault();
+      // Unsupported clipboard files flow through addFiles too, so paste
+      // surfaces the same error chips as drop and the file picker instead
+      // of silently dropping them.
       addFiles(files);
     }
+  };
+
+  const dragEnterForm = (event: DragEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    // Count dragenter/dragleave crossings so the highlight survives moving
+    // across child elements instead of flickering on every boundary.
+    dragDepthRef.current += 1;
+    setDragOver(true);
   };
 
   const dragOverForm = (event: DragEvent<HTMLFormElement>) => {
@@ -969,8 +998,14 @@ export function ChatStudio({
     setDragOver(true);
   };
 
+  const dragLeaveForm = () => {
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setDragOver(false);
+  };
+
   const dropForm = (event: DragEvent<HTMLFormElement>) => {
     event.preventDefault();
+    dragDepthRef.current = 0;
     setDragOver(false);
     addFiles(Array.from(event.dataTransfer?.files ?? []));
   };
@@ -1314,7 +1349,8 @@ export function ChatStudio({
             className={`chat-composer${dragOver ? ' drag-over' : ''}`}
             onSubmit={submit}
             onDragOver={dragOverForm}
-            onDragLeave={() => setDragOver(false)}
+            onDragEnter={dragEnterForm}
+            onDragLeave={dragLeaveForm}
             onDrop={dropForm}
           >
             <div className="chat-composer__input">

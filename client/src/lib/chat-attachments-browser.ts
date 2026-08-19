@@ -4,7 +4,11 @@ import type {
   PdfProcessingDeps,
 } from './chat-attachments';
 
-function bytesToBase64(bytes: Uint8Array): string {
+/**
+ * Chunked `btoa` so large payloads never blow the function-argument limit of
+ * `String.fromCharCode(...bytes)`.
+ */
+export function bytesToBase64(bytes: Uint8Array): string {
   let binary = '';
   const chunkSize = 0x8000;
   for (let i = 0; i < bytes.length; i += chunkSize) {

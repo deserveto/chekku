@@ -145,6 +145,57 @@ describe('chunkToRunEvent', () => {
     expect(chunkToRunEvent({ payload: { text: 'no type' } })).toBeNull();
     expect(chunkToRunEvent({ type: 'text-delta', payload: {} })).toBeNull();
   });
+
+  it('maps tripwire chunks to a visible assistant error with the reason', () => {
+    expect(
+      chunkToRunEvent({
+        type: 'tripwire',
+        payload: {
+          reason:
+            'TokenLimiterProcessor: No messages fit within the remaining token budget.',
+        },
+      }),
+    ).toEqual({
+      type: 'error',
+      payload: {
+        error:
+          'Request stopped by a safety limit. TokenLimiterProcessor: No messages fit within the remaining token budget.',
+      },
+    });
+  });
+
+  it('falls back to a fixed tripwire reason when the payload has none', () => {
+    expect(
+      chunkToRunEvent({ type: 'tripwire', payload: {} }),
+    ).toEqual({
+      type: 'error',
+      payload: { error: 'Request stopped by a safety limit. The request exceeded a processing limit.' },
+    });
+    expect(
+      chunkToRunEvent({ type: 'tripwire', payload: { reason: '   ' } }),
+    ).toEqual({
+      type: 'error',
+      payload: { error: 'Request stopped by a safety limit. The request exceeded a processing limit.' },
+    });
+  });
+
+  it('keeps the tripwire prefix and bounds oversized reasons', () => {
+    const mapped = chunkToRunEvent({
+      type: 'tripwire',
+      payload: { reason: 'r'.repeat(1_000) },
+    });
+    expect(mapped).toEqual({
+      type: 'error',
+      payload: { error: expect.any(String) },
+    });
+    const text = (
+      mapped as unknown as { payload: { error: string } }
+    ).payload.error;
+    expect(text.startsWith('Request stopped by a safety limit. ')).toBe(true);
+    expect(text.length).toBeLessThanOrEqual(
+      'Request stopped by a safety limit. '.length + 500,
+    );
+  });
 });
 
 describe('buildThreadTitle', () => {

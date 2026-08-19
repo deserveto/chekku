@@ -56,7 +56,7 @@ export class RunConflictError extends Error {
 
 export type AgentRunUserContent = Array<
   | { type: 'text'; text: string }
-  | { type: 'image'; image: string; mimeType: string }
+  | { type: 'image'; image: string; mimeType: string; filename?: string }
 >;
 
 const RUN_EVENT_TYPES = new Set<AgentRunEventType>([

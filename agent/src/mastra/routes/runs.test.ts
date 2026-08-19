@@ -5,6 +5,10 @@ import {
   createRunId,
 } from '../runs/run-registry.js';
 import {
+  MAX_CONTENT_FILENAME_CHARS,
+  MAX_CONTENT_IMAGE_BASE64_CHARS,
+  MAX_CONTENT_PARTS,
+  MAX_CONTENT_TEXT_CHARS,
   MAX_PROMPT_UTF8_BYTES,
   cancelRunRoute,
   parseStartRunRequest,
@@ -123,6 +127,103 @@ describe('parseStartRunRequest', () => {
         content: [{ type: 'image', image: 'QUJD', mimeType: 'text/plain' }],
       }),
     ).toEqual({
+      ok: false,
+      error: 'content must be valid multimodal message parts',
+    });
+  });
+
+  it('accepts a bounded filename on image parts', () => {
+    const result = parseStartRunRequest({
+      ...VALID,
+      content: [
+        { type: 'image', image: 'QUJD', mimeType: 'image/png', filename: 'a.png' },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.content).toEqual([
+        { type: 'image', image: 'QUJD', mimeType: 'image/png', filename: 'a.png' },
+      ]);
+    }
+  });
+
+  it('rejects content that exceeds the part or size caps', () => {
+    const image = { type: 'image', image: 'QUJD', mimeType: 'image/png' };
+    const tooManyParts = parseStartRunRequest({
+      ...VALID,
+      content: Array.from({ length: MAX_CONTENT_PARTS + 1 }, () => image),
+    });
+    expect(tooManyParts).toEqual({
+      ok: false,
+      error: 'content must be valid multimodal message parts',
+    });
+
+    const hugeImage = 'Q'.repeat(MAX_CONTENT_IMAGE_BASE64_CHARS + 1);
+    expect(
+      parseStartRunRequest({
+        ...VALID,
+        content: [{ type: 'image', image: hugeImage, mimeType: 'image/png' }],
+      }).ok,
+    ).toBe(false);
+
+    const perPart = 'Q'.repeat(1_700_000);
+    const overTotal = parseStartRunRequest({
+      ...VALID,
+      content: Array.from({ length: 5 }, () => ({
+        type: 'image',
+        image: perPart,
+        mimeType: 'image/png',
+      })),
+    });
+    expect(overTotal).toEqual({
+      ok: false,
+      error: 'content must be valid multimodal message parts',
+    });
+
+    const hugeText = 'Q'.repeat(MAX_CONTENT_TEXT_CHARS + 1);
+    expect(
+      parseStartRunRequest({
+        ...VALID,
+        content: [{ type: 'text', text: hugeText }],
+      }).ok,
+    ).toBe(false);
+
+    const hugeFilename = 'f'.repeat(MAX_CONTENT_FILENAME_CHARS + 1);
+    expect(
+      parseStartRunRequest({
+        ...VALID,
+        content: [
+          {
+            type: 'image',
+            image: 'QUJD',
+            mimeType: 'image/png',
+            filename: hugeFilename,
+          },
+        ],
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('rejects data: URL image values', () => {
+    expect(
+      parseStartRunRequest({
+        ...VALID,
+        content: [
+          {
+            type: 'image',
+            image: 'data:image/png;base64,QUJD',
+            mimeType: 'image/png',
+          },
+        ],
+      }),
+    ).toEqual({
+      ok: false,
+      error: 'content must be valid multimodal message parts',
+    });
+  });
+
+  it('rejects an empty content array the same as malformed content', () => {
+    expect(parseStartRunRequest({ ...VALID, content: [] })).toEqual({
       ok: false,
       error: 'content must be valid multimodal message parts',
     });

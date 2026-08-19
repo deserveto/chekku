@@ -116,8 +116,16 @@ function neutralizeVisionParts(
  * The base class types `countInputMessageTokens` private, but it is a regular
  * prototype method at runtime, so the vision-aware counter shadows it as an
  * own property and delegates to the base implementation with image payloads
- * neutralized. Everything else (keep-newest input pruning, output truncation,
- * tripwires) is inherited unchanged.
+ * neutralized. Everything else (keep-newest input pruning, tripwires) is
+ * inherited unchanged; Chekku wires this only into `inputProcessors`, so the
+ * base class's output-truncation path never runs here.
+ *
+ * Upgrade note: this interception is verified against the pinned
+ * `@mastra/core` version. If an upgrade renames, removes, or re-privatizes
+ * `countInputMessageTokens` (or stops dispatching `processInputStep` through
+ * it dynamically), every input step either throws loudly or silently reverts
+ * to raw-base64 counting — re-run the `context-limit` suite and re-inspect
+ * the base implementation whenever `@mastra/core` moves.
  */
 export class VisionAwareTokenLimiterProcessor extends TokenLimiterProcessor {
   constructor(options: number | { limit: number }) {
@@ -310,6 +318,74 @@ function truncatePromptMessages(messages: CharBudgetMessage[], budget: number): 
   return clone;
 }
 
+/**
+ * A binary payload unit the budget loop may drop whole (never slice):
+ * user-message image file parts, standalone media parts, and binary items
+ * nested inside tool-result output content arrays. Dropping the nested item
+ * keeps the tool-result (and its tool-call pairing) intact.
+ */
+function isImageFilePart(part: CharBudgetPart): boolean {
+  if (part.type !== 'file') return false;
+  if (typeof part.mediaType === 'string' && part.mediaType.startsWith('image/')) {
+    return true;
+  }
+  return typeof part.data === 'string' && part.data.startsWith('data:image/');
+}
+
+function dropBinaryUnitsToBudget(
+  messages: CharBudgetMessage[],
+  budget: number,
+): CharBudgetMessage[] {
+  const clone: CharBudgetMessage[] = structuredClone(messages);
+
+  for (let iteration = 0; iteration < 10_000; iteration++) {
+    if (totalPromptChars(clone) <= budget) break;
+
+    let dropped = false;
+    // Oldest-first: preserve the newest context as long as possible.
+    outer: for (const message of clone) {
+      if (message.role === 'system') continue;
+      if (!Array.isArray(message.content)) continue;
+      for (let p = 0; p < message.content.length; p++) {
+        const part = message.content[p] as CharBudgetPart;
+        if (isImageFilePart(part) || part.type === 'media') {
+          message.content.splice(p, 1);
+          dropped = true;
+          break outer;
+        }
+        if (part.type === 'tool-result') {
+          const output = part.output as
+            | { type?: string; value?: unknown }
+            | undefined;
+          if (output?.type === 'content' && Array.isArray(output.value)) {
+            const items = output.value as Array<{ type?: string; data?: unknown }>;
+            for (let v = 0; v < items.length; v++) {
+              const item = items[v];
+              if (
+                item &&
+                (item.type === 'media' || item.type === 'file') &&
+                (typeof item.data === 'string' || item.data instanceof Uint8Array)
+              ) {
+                items.splice(v, 1);
+                dropped = true;
+                break outer;
+              }
+            }
+          }
+        }
+      }
+    }
+    if (!dropped) break;
+  }
+
+  // Dropping units can empty a non-system message; empty messages would be
+  // rejected by providers, so remove them.
+  return clone.filter((message) => {
+    if (message.role === 'system') return true;
+    return !(Array.isArray(message.content) && message.content.length === 0);
+  });
+}
+
 export function prunePromptToCharBudget(prompt: CharBudgetPrompt, budget: number): CharBudgetPrompt {
   if (budget <= 0) return prompt;
   if (totalPromptChars(prompt) <= budget) return prompt;
@@ -334,7 +410,20 @@ export function prunePromptToCharBudget(prompt: CharBudgetPrompt, budget: number
   }
 
   if (totalPromptChars(survivors) > budget) {
-    return truncatePromptMessages(survivors, budget);
+    // Text handles shrink first; binary payloads are never sliceable.
+    const truncated = truncatePromptMessages(survivors, budget);
+    // When the overage lives in unsliceable binary payloads (uploaded image
+    // parts, tool-result screenshots), slicing text alone cannot reach the
+    // budget — drop whole binary units oldest-first so the guard still
+    // enforces its bound instead of silently returning an oversized prompt.
+    if (totalPromptChars(truncated) > budget) {
+      const dropped = dropBinaryUnitsToBudget(truncated, budget);
+      if (totalPromptChars(dropped) > budget) {
+        return truncatePromptMessages(dropped, budget);
+      }
+      return dropped;
+    }
+    return truncated;
   }
   return survivors;
 }
@@ -345,8 +434,10 @@ export function prunePromptToCharBudget(prompt: CharBudgetPrompt, budget: number
  * output (notably base64 screenshots), so heavy multi-step turns can exceed the
  * real model window even when the estimate says they fit. This guard runs last,
  * drops oldest non-system turns (keeping each assistant tool-call with its
- * tool-result so the provider never sees an orphan), and truncates any single
- * message that still exceeds the budget.
+ * tool-result so the provider never sees an orphan), truncates oversized text,
+ * and — when the remaining overage lives in unsliceable binary payloads —
+ * drops whole binary units (image file parts, media parts, binary items
+ * inside tool-result output) oldest-first so the budget is still enforced.
  */
 export function createCharBudgetGuard(): InputProcessor {
   const budget = getCharBudget(env.LLM_DEFAULT_MODEL);

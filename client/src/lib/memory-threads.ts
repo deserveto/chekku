@@ -4,6 +4,7 @@ import {
   restoreAssistantParts,
   type FlatToolResult,
 } from './assistant-parts';
+import { stripAttachmentBlocks } from './chat-attachments';
 import type { AssistantPart } from './types';
 import { isOwnedThreadId } from './thread-id';
 
@@ -36,6 +37,22 @@ export interface StudioMemoryMessage {
 }
 
 const MAX_RESTORED_ATTACHMENTS = 24;
+/**
+ * Restore-path byte bounds. Postgres can hold attachment payloads far larger
+ * than anything worth materializing as `data:` URLs in the browser, so thread
+ * reads skip oversized payloads and stop once the per-message or per-thread
+ * budgets are exhausted. The per-attachment bound matches the send-side total
+ * base64 cap; skipping (not truncating) keeps broken images out of the UI.
+ */
+const MAX_RESTORED_ATTACHMENT_CHARS = 8 * 1024 * 1024;
+const MAX_RESTORED_MESSAGE_ATTACHMENT_CHARS = 8 * 1024 * 1024;
+const MAX_RESTORED_THREAD_ATTACHMENT_CHARS = 24 * 1024 * 1024;
+/**
+ * Display text cap per restored message. Live user bubbles only ever show the
+ * typed prompt; legacy rows without attachment sentinels can still carry the
+ * full wrapped blob, so the restore path bounds what it renders.
+ */
+const MAX_RESTORED_TEXT_CHARS = 128 * 1024;
 
 function toTimestamp(value: unknown, fallback = Date.now()): number {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -104,8 +121,12 @@ function normalizeThread(
   };
 }
 
-function attachmentsFromContent(content: unknown): StudioMemoryAttachment[] {
+function attachmentsFromContent(
+  content: unknown,
+  budget: { remaining: number },
+): StudioMemoryAttachment[] {
   const attachments: StudioMemoryAttachment[] = [];
+  let messageTotal = 0;
   for (const part of partsFromContent(content)) {
     if (!part || typeof part !== 'object') continue;
     const record = part as Record<string, unknown>;
@@ -114,6 +135,12 @@ function attachmentsFromContent(content: unknown): StudioMemoryAttachment[] {
     if (!mimeType.startsWith('image/')) continue;
     const data = typeof record.data === 'string' ? record.data : '';
     if (!data) continue;
+    const chars = data.length;
+    if (chars > MAX_RESTORED_ATTACHMENT_CHARS) continue;
+    if (messageTotal + chars > MAX_RESTORED_MESSAGE_ATTACHMENT_CHARS) break;
+    if (budget.remaining - chars < 0) break;
+    messageTotal += chars;
+    budget.remaining -= chars;
     attachments.push({
       mimeType,
       dataUrl: data.startsWith('data:') ? data : `data:${mimeType};base64,${data}`,
@@ -126,9 +153,15 @@ function attachmentsFromContent(content: unknown): StudioMemoryAttachment[] {
   return attachments;
 }
 
+function clampRestoredText(text: string): string {
+  if (text.length <= MAX_RESTORED_TEXT_CHARS) return text;
+  return `${text.slice(0, MAX_RESTORED_TEXT_CHARS)}…[message truncated]`;
+}
+
 function normalizeMessage(
   value: unknown,
   flatToolResults?: ReadonlyMap<string, FlatToolResult>,
+  attachmentBudget: { remaining: number } = { remaining: MAX_RESTORED_THREAD_ATTACHMENT_CHARS },
 ): StudioMemoryMessage | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const row = value as Record<string, unknown>;
@@ -145,9 +178,16 @@ function normalizeMessage(
     role === 'assistant'
       ? restoreAssistantParts(row.content, id, flatToolResults)
       : undefined;
-  const content = restored ? restored.text : textFromContent(row.content);
+  // User bubbles restore the display prompt: attachment sentinels and the
+  // wrapped file bodies they delimit are transport, not chat display.
+  const content =
+    role === 'user'
+      ? clampRestoredText(stripAttachmentBlocks(textFromContent(row.content)))
+      : restored
+        ? restored.text
+        : textFromContent(row.content);
   const parts = restored?.parts.length ? restored.parts : undefined;
-  const attachments = attachmentsFromContent(row.content);
+  const attachments = attachmentsFromContent(row.content, attachmentBudget);
   if (!content && !parts && role === 'assistant') return undefined;
   if (role === 'user' && !content && attachments.length === 0) return undefined;
 
@@ -295,10 +335,11 @@ export async function listThreadMessages(
 
   const rowArray = rows;
   const flatToolResults = collectFlatToolResults(rowArray);
+  const attachmentBudget = { remaining: MAX_RESTORED_THREAD_ATTACHMENT_CHARS };
 
   return mergeAdjacentAssistantTurns(
     rowArray
-      .map((row) => normalizeMessage(row, flatToolResults))
+      .map((row) => normalizeMessage(row, flatToolResults, attachmentBudget))
       .filter((row): row is StudioMemoryMessage => Boolean(row))
       .sort((a, b) => a.createdAt - b.createdAt),
   );

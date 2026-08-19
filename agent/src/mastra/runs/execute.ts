@@ -19,7 +19,7 @@ type StreamChunk = {
 
 export type RunUserContent = Array<
   | { type: 'text'; text: string }
-  | { type: 'image'; image: string; mimeType: string }
+  | { type: 'image'; image: string; mimeType: string; filename?: string }
 >;
 
 export type RunStreamInput =

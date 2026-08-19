@@ -188,6 +188,72 @@ describe('POST /api/runs proxy', () => {
     });
   });
 
+  it('forwards multimodal content with the run start', async () => {
+    const content = [
+      { type: 'text', text: 'hello' },
+      { type: 'image', image: 'aGk=', mimeType: 'image/png' },
+    ];
+    const response = await postHandler(
+      request('', {
+        method: 'POST',
+        body: JSON.stringify({
+          agentId: 'main-agent',
+          threadId: ownedThreadId,
+          prompt: 'hello',
+          content,
+        }),
+      }),
+      context([]),
+    );
+
+    expect(response.status).toBe(200);
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body)).toEqual({
+      agentId: 'main-agent',
+      threadId: ownedThreadId,
+      prompt: 'hello',
+      resourceId: userId,
+      content,
+    });
+  });
+
+  it('drops an empty content array and rejects non-array content', async () => {
+    const empty = await postHandler(
+      request('', {
+        method: 'POST',
+        body: JSON.stringify({
+          agentId: 'main-agent',
+          threadId: ownedThreadId,
+          prompt: 'hello',
+          content: [],
+        }),
+      }),
+      context([]),
+    );
+    expect(empty.status).toBe(200);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      agentId: 'main-agent',
+      threadId: ownedThreadId,
+      prompt: 'hello',
+      resourceId: userId,
+    });
+
+    const invalid = await postHandler(
+      request('', {
+        method: 'POST',
+        body: JSON.stringify({
+          agentId: 'main-agent',
+          threadId: ownedThreadId,
+          prompt: 'hello',
+          content: { type: 'text', text: 'not an array' },
+        }),
+      }),
+      context([]),
+    );
+    expect(invalid.status).toBe(400);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects threads owned by another user', async () => {
     const response = await postHandler(
       request('', {

@@ -127,7 +127,8 @@ Secrets are injected exclusively through Compose `environment:` interpolation; n
 - `MastraEditor` with database storage;
 - `OpenAICompatibleGateway`;
 - structured logging and request middleware;
-- `/healthz` and `/models` custom routes.
+- `/healthz` and `/models` custom routes;
+- the server-owned agent-run routes (`/runs`, `/runs/active`, `/runs/list`, `/runs/:runId`, `/runs/:runId/events`, `/runs/:runId/cancel`).
 
 Mastra provides native agent, Memory, skill, and editor APIs. Next.js separately provides `/reports/*`, `/api/storage/pm-reports/*`, and `/api/storage/competitive-analyses/*` through focused server-only services; those PM storage interfaces are not Mastra APIs. Chekku does not maintain a parallel custom conversation or agent database.
 
@@ -430,13 +431,15 @@ The client validates this prefix before listing, reading, renaming, or deleting 
 
 The chat composer accepts text files, images, and PDFs. All processing is client-side (`client/src/lib/chat-attachments.ts` + `chat-attachments-browser.ts`):
 
-1. **Text formats** (txt, md, csv, tsv, json, log, xml, yml/yaml) are read as UTF-8, capped at 256 KiB, and inlined into the user message as fenced blocks labeled untrusted data.
-2. **Images** (png/jpeg/webp) are passed through when small (≤1568 px long edge, ≤600 KB) or downscaled/re-encoded to JPEG in a canvas, then sent as native multimodal image parts (raw base64 + `mimeType`).
+1. **Text formats** (txt, md, csv, tsv, json, log, xml, yml/yaml) are read as UTF-8, capped at 256 Ki UTF-16 chars each, and inlined into the user message as fenced blocks labeled untrusted data.
+2. **Images** (png/jpeg/webp) are passed through when small (≤1568 px long edge, ≤600 KB) or downscaled/re-encoded to JPEG in a canvas, then sent as native multimodal image parts (raw base64 + `mimeType`, optional display `filename`).
 3. **PDFs** are rendered to page images with `pdfjs-dist` in the browser (≤20 pages, ≤1580 px long edge per page) — the OpenAI-compatible gateway only accepts `image/*` file parts, so page images are the only PDF transport.
 
-The multimodal message (one text part with prompt, wrapped text blocks, and per-image markers, followed by image parts) is sent as transient `content` on `POST /api/runs`. The run registry keeps only the bounded display `prompt`; the execution driver passes `content` directly to `agent.stream()`, and Mastra Memory persists it with the completed turn. The agent server's `bodySizeLimit` is 12 MiB to accommodate base64-inflated payloads; the client caps totals at 8 MiB of base64 and 8 attachments per message. Uploads are never written to Garage — they persist only as message parts in Postgres through Mastra Memory, and thread history restores image attachments from the persisted parts.
+The multimodal message (one text part with the prompt, an untrusted-data note, wrapped text blocks, and per-image markers inside `<!-- chekku-attachments-begin -->` … `<!-- chekku-attachments-end -->` sentinels, followed by image parts) is sent as transient `content` on `POST /api/runs`. The Next.js `/api/runs` proxy forwards `content` as an array-only passthrough; the agent server's `parseStartRunRequest` owns full validation (≤200 parts, ≤2.5 Mi chars per text part, ≤2 Mi chars per image part and ≤8 Mi chars of image base64 total, no `data:` URL values, filenames ≤256 chars) and rejects violations with a fixed 400. The run registry keeps only the bounded display `prompt`; the execution driver passes `content` directly to `agent.stream()`, and Mastra Memory persists it with the completed turn. The agent server's `bodySizeLimit` is 12 MiB and the production nginx template matches it with `client_max_body_size 12m`; worst-case legitimate messages (8 MiB of base64 plus wrapped text attachments plus the prompt) can approach that ceiling, so the two values must be raised together. The client caps totals at 8 MiB of base64 and 8 attachments per message, and sanitizes every stored filename (control characters collapsed, 120 code points max). Uploads are never written to Garage — they persist only as message parts in Postgres through Mastra Memory.
 
-On the agent side, both context-bounding layers are vision-aware: the char-budget guard counts user-message image file parts at a fixed vision-cost estimate (`VISION_PART_ESTIMATE_CHARS`) instead of base64 length and never slices binary payload fields during truncation, so uploaded images cannot be corrupted by context pruning; and the token limiter (`VisionAwareTokenLimiterProcessor` from `createAgentContextLimiter()`) applies the same estimate because the stock Mastra limiter tokenizes the full base64 of non-text parts and would reject multi-page uploads with a tripwire before generation starts. `tripwire` stream chunks surface as visible assistant errors in the chat UI rather than a silently ended stream.
+Thread restore shows the display prompt again: `normalizeMessage` cuts the text part at the first attachment sentinel instead of dumping the wrapped blob, clamps legacy sentinel-free blobs to 128 Ki chars, and restores attachments from the persisted image parts (carrying their filenames) bounded to 24 per message, 8 Mi chars per attachment and per message, and 24 Mi chars per thread read — oversized payloads are skipped whole rather than truncated into broken images.
+
+On the agent side, both context-bounding layers are vision-aware: the char-budget guard counts user-message image file parts at a fixed vision-cost estimate (`VISION_PART_ESTIMATE_CHARS`) instead of base64 length and never slices binary payload fields during truncation — when only unsliceable binary remains over budget, it drops whole binary units (image file parts, media parts, binary items inside tool-result output) oldest-first so the budget is always enforced; and the token limiter (`VisionAwareTokenLimiterProcessor` from `createAgentContextLimiter()`) applies the same estimate because the stock Mastra limiter tokenizes the full base64 of non-text parts and would reject multi-page uploads with a tripwire before generation starts. `tripwire` stream chunks surface as visible assistant errors in the chat UI rather than a silently ended stream.
 
 ## Agent run lifecycle
 
@@ -448,13 +451,13 @@ ChatStudio ──POST /api/runs──────────▶ Next.js identit
 ChatStudio ◀──SSE /api/runs/:runId/events── Next.js proxy ◀── run registry ◀── agent.stream()
 ```
 
-- **Ownership.** The run manager lives in `agent/src/mastra/runs/`: an in-memory registry plus an execution driver that consumes `agent.stream()` with a server-owned `AbortController`. Navigating away, reloading, or closing the tab only drops observation; the run continues.
-- **Concurrency.** At most one non-terminal run per `(agentId, threadId, resourceId)`; duplicates receive `409 Conflict` with the active run so the client attaches instead of duplicating.
-- **Reconnection.** `GET /api/runs/:runId/events?offset=N` replays buffered events and then streams live. The client reconnects from the last sequence and never restarts the prompt.
-- **Cancellation.** `POST /api/runs/:runId/cancel` aborts exactly that run's signal and is idempotent for terminal runs.
-- **First-turn titles.** The server creates a missing Memory thread titled from the display prompt before responding. For attachment-only turns the first filename becomes that prompt.
-- **Identity.** The Next.js `/api/runs/*` seam derives `resourceId` from the Better Auth session, discards client-supplied values, and validates thread ownership.
-- **Limits.** Event buffers are bounded to 4 MiB / 10,000 events, terminal runs are retained 30 minutes, and an agent-server restart kills in-flight runs with the in-memory registry.
+- **Ownership.** The run manager lives in `agent/src/mastra/runs/`: an in-memory registry plus an execution driver that consumes `agent.stream()` with a server-owned `AbortController`. Navigating away, reloading, or closing the tab only drops observation; the run continues. An agent-server restart kills in-flight runs together with the registry — no stale state survives, and partial output of an interrupted run is not persisted (Mastra skips persistence on abort).
+- **Concurrency.** At most one non-terminal run per `(agentId, threadId, resourceId)`; duplicates receive `409 Conflict` with the active run so the client attaches instead of duplicating. Concurrent running runs are additionally capped at 4 per `resourceId` and 64 across the server (registry constants); a start above either cap receives `429` with a fixed bounded message.
+- **Reconnection.** `GET /api/runs/:runId/events?offset=N` replays buffered events and then streams live (SSE with heartbeats). The client reconnects with `offset = lastSequence + 1`, so events are delivered exactly once across drops; it never restarts the prompt. Mastra persists a turn's user message only at turn end, so a client attaching to an in-flight run synthesizes the user turn and an assistant placeholder from the run summary's `prompt` and replays tool/text events onto them.
+- **Cancellation.** `POST /api/runs/:runId/cancel` aborts exactly that run's signal and is idempotent for terminal runs. Stop in the UI targets the active run id, not the thread.
+- **First-turn titles.** The server creates a missing Memory thread record titled from the display prompt (52-character truncation) before the 202 start response is sent, so the thread appears in listings with a real name the moment the prompt is sent; the browser never owns renaming. For attachment-only turns the first (sanitized) filename becomes that prompt.
+- **Identity.** The Next.js `/api/runs/*` seam derives `resourceId` from the Better Auth session, discards client-supplied values, and validates thread ownership before forwarding. Unauthenticated calls to `/api/runs/*` return `403`; unknown or foreign run IDs collapse to `404`.
+- **Limits.** The `prompt` is capped at 65,536 UTF-8 bytes (400 on overflow). Event buffers are bounded to 4 MiB / 10,000 events per run with oldest-eviction and an `evicted` flag — extremely long runs may replay with a gap in the middle, and the run summary carries `evicted: true` when that happened. Terminal runs stay replayable for 30 minutes, then only Mastra Memory messages remain. A watchdog force-fails running runs older than 30 minutes (fixed message, aborts the execution signal, releases the thread's active-run lock); any run API touch performs the reap — there is no background timer.
 
 ## Client boundaries
 
@@ -502,6 +505,10 @@ Chat report links use URL-encoded relative `/reports/<reportId>` or `/reports/co
 - `/social-posts` lists scheduled Instagram drafts newest first.
 - `/social-posts/[postId]` renders caption, metadata, and brief.
 - `/api/agent/[...path]` proxies Mastra HTTP requests.
+- `POST /api/runs` starts a server-owned agent run for the signed-in user (resourceId derived from the session; thread ownership validated; multimodal `content` forwarded as an array-only passthrough).
+- `GET /api/runs/active?agentId&threadId` returns the thread's active run (204 when none).
+- `GET /api/runs/list[?agentId]` returns the user's active runs for sidebar status.
+- `GET /api/runs/[...path]` proxies run status, SSE event streams (`/runs/:runId/events?offset=N`), and cancellation (`/runs/:runId/cancel`) with the session-derived resourceId appended.
 - `GET /api/storage/pm-reports` returns report metadata after identity validation.
 - `GET /api/storage/pm-reports/[reportId]` returns one report after identity and ID validation.
 - `GET /api/storage/competitive-analyses` returns competitive metadata after identity validation.
@@ -532,6 +539,11 @@ only and never reaches `signUp.email` on mismatch.
 
 - `/healthz` reports service status.
 - `/models` reports model configuration, canonical default, and available models.
+- `/runs` (POST) creates a server-owned run and returns `202` with the run summary, or `409` with the active run when one already exists for the thread.
+- `/runs/active` (GET) and `/runs/list` (GET) discover active runs for a resource.
+- `/runs/:runId` (GET) returns run metadata; unknown or foreign runs collapse to 404.
+- `/runs/:runId/events` (GET) streams replayed-then-live run events over SSE.
+- `/runs/:runId/cancel` (POST) aborts exactly the target run, idempotently.
 
 ## Extension points
 

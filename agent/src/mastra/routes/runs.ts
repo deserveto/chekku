@@ -23,6 +23,19 @@ import {
 
 export const MAX_PROMPT_UTF8_BYTES = 65_536;
 
+/**
+ * Server-side bounds for the optional multimodal `content` array. The client
+ * contract (8 attachments, each PDF up to 20 pages, 8 MiB total base64, text
+ * files wrapped into one text part) sets the legitimate maximum at 1 text
+ * part + 160 image parts, so the part cap leaves headroom above it while
+ * still bounding what a scripted client can push into Mastra Memory.
+ */
+export const MAX_CONTENT_PARTS = 200;
+export const MAX_CONTENT_TEXT_CHARS = 2_621_440;
+export const MAX_CONTENT_IMAGE_BASE64_CHARS = 2_097_152;
+export const MAX_CONTENT_TOTAL_IMAGE_BASE64_CHARS = 8_388_608;
+export const MAX_CONTENT_FILENAME_CHARS = 256;
+
 export interface StartRunInput {
   agentId: string;
   threadId: string;
@@ -38,8 +51,10 @@ function utf8Bytes(value: string): number {
 function parseRunContent(value: unknown): RunUserContent | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value) || value.length === 0) return undefined;
+  if (value.length > MAX_CONTENT_PARTS) return undefined;
 
   const parts: RunUserContent = [];
+  let totalImageChars = 0;
   for (const part of value) {
     if (!part || typeof part !== 'object' || Array.isArray(part)) {
       return undefined;
@@ -47,6 +62,7 @@ function parseRunContent(value: unknown): RunUserContent | undefined {
     const record = part as Record<string, unknown>;
     if (record.type === 'text') {
       if (typeof record.text !== 'string' || !record.text) return undefined;
+      if (record.text.length > MAX_CONTENT_TEXT_CHARS) return undefined;
       parts.push({ type: 'text', text: record.text });
       continue;
     }
@@ -54,15 +70,29 @@ function parseRunContent(value: unknown): RunUserContent | undefined {
       if (
         typeof record.image !== 'string' ||
         !record.image ||
+        record.image.startsWith('data:') ||
         typeof record.mimeType !== 'string' ||
         !record.mimeType.startsWith('image/')
       ) {
+        return undefined;
+      }
+      if (record.image.length > MAX_CONTENT_IMAGE_BASE64_CHARS) return undefined;
+      totalImageChars += record.image.length;
+      if (totalImageChars > MAX_CONTENT_TOTAL_IMAGE_BASE64_CHARS) {
+        return undefined;
+      }
+      const filename =
+        typeof record.filename === 'string' && record.filename
+          ? record.filename
+          : undefined;
+      if (filename && filename.length > MAX_CONTENT_FILENAME_CHARS) {
         return undefined;
       }
       parts.push({
         type: 'image',
         image: record.image,
         mimeType: record.mimeType,
+        ...(filename ? { filename } : {}),
       });
       continue;
     }

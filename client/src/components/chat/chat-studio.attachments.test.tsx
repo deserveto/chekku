@@ -286,6 +286,7 @@ describe('ChatStudio file uploads', () => {
       type: 'image',
       image: 'QUJD',
       mimeType: 'image/png',
+      filename: 'photo.png',
     });
 
     const thumb = container.querySelector<HTMLImageElement>('.chat-attachment-thumb');
@@ -369,6 +370,7 @@ describe('ChatStudio file uploads', () => {
   });
 
   it('blocks the send while an attachment is still processing', async () => {
+    const originalDecode = browserImageDeps.decode;
     let releaseDecode: (() => void) | undefined;
     browserImageDeps.decode = async () => {
       await new Promise<void>((resolve) => {
@@ -394,6 +396,30 @@ describe('ChatStudio file uploads', () => {
     await enterComposerText('go');
     await submitComposer();
     expect(sentMessages()).toHaveLength(1);
+
+    browserImageDeps.decode = originalDecode;
+  });
+
+  it('restores the drafted input and attachments when the send fails', async () => {
+    startRun.mockRejectedValueOnce(new Error('Request failed (429)'));
+    await attachFiles([
+      new File([new Uint8Array([1, 2, 3])], 'photo.png', { type: 'image/png' }),
+    ]);
+    await enterComposerText('describe this');
+    await submitComposer();
+
+    const assistant = container.querySelector<HTMLElement>(
+      '.chat-message.assistant',
+    );
+    expect(assistant?.classList).toContain('error');
+    expect(assistant?.textContent).toContain('Could not complete request');
+
+    // The prepared attachment and typed input come back for a retry.
+    expect(container.querySelector('.chat-upload-chip')?.textContent).toContain(
+      'photo.png',
+    );
+    const textarea = container.querySelector<HTMLTextAreaElement>('textarea');
+    expect(textarea?.value).toBe('describe this');
   });
 
   it('surfaces a server-reported tripwire as an assistant error', async () => {

@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  ATTACHMENT_BLOCK_BEGIN,
+  ATTACHMENT_BLOCK_END,
   IMAGE_MAX_LONG_EDGE,
+  MAX_ATTACHMENT_FILENAME_CHARS,
   MAX_TEXT_FILE_CHARS,
   MAX_TOTAL_BASE64_CHARS,
   PDF_PAGE_MAX_LONG_EDGE,
@@ -12,6 +15,8 @@ import {
   prepareImageAttachment,
   preparePdfAttachment,
   prepareTextAttachment,
+  sanitizeAttachmentFilename,
+  stripAttachmentBlocks,
   toAttachmentView,
   totalBase64Chars,
   wrapTextAttachment,
@@ -139,6 +144,25 @@ describe('prepareImageAttachment', () => {
       prepareImageAttachment(new File([new Uint8Array(4)], 'x.png', { type: 'image/png' }), deps),
     ).rejects.toThrow('This image could not be processed.');
   });
+
+  it('returns a fixed error when the bytes cannot be read', async () => {
+    const deps = makeImageDeps({ width: 10, height: 10 });
+    deps.readBytes = async () => {
+      throw new Error('raw browser failure with a path: C:\\secret');
+    };
+    await expect(
+      prepareImageAttachment(new File([new Uint8Array(4)], 'x.png', { type: 'image/png' }), deps),
+    ).rejects.toThrow('This image could not be processed.');
+  });
+
+  it('sanitizes the stored filename', async () => {
+    const deps = makeImageDeps({ width: 10, height: 10 });
+    const attachment = await prepareImageAttachment(
+      new File([new Uint8Array(4)], 'evil\u0007\u001bname.png', { type: 'image/png' }),
+      deps,
+    );
+    expect(attachment.filename).toBe('evil name.png');
+  });
 });
 
 describe('preparePdfAttachment', () => {
@@ -202,6 +226,31 @@ describe('preparePdfAttachment', () => {
       ),
     ).rejects.toThrow('This PDF could not be opened.');
   });
+
+  it('returns a distinct fixed error when a page fails mid-render', async () => {
+    const twoPage: PdfProcessingDeps = {
+      loadPdf: async () => ({
+        numPages: 2,
+        getPage: async (pageNumber: number) => {
+          if (pageNumber === 2) throw new Error('page exploded');
+          return {
+            getViewport: ({ scale }: { scale: number }) => ({
+              width: 612 * scale,
+              height: 792 * scale,
+            }),
+            render: () => ({ promise: Promise.resolve() }),
+          };
+        },
+      }),
+    };
+    await expect(
+      preparePdfAttachment(
+        new File([new Uint8Array(8)], 'doc.pdf', { type: 'application/pdf' }),
+        imageDeps,
+        twoPage,
+      ),
+    ).rejects.toThrow('This PDF could not be rendered.');
+  });
 });
 
 describe('wrapTextAttachment', () => {
@@ -223,6 +272,45 @@ describe('wrapTextAttachment', () => {
   it('uses a longer fence when the content itself contains one', () => {
     const wrapped = wrapTextAttachment({ ...attachment, text: 'code\n```\nmore' });
     expect(wrapped).toContain('````\ncode\n```\nmore\n````');
+  });
+
+  it('escalates past mixed fence runs so no embedded fence closes early', () => {
+    const tricky = 'a\n```\nb\n````\nc';
+    const wrapped = wrapTextAttachment({ ...attachment, text: tricky });
+    // Longest run is 4 backticks, so the wrapper uses 5.
+    expect(wrapped).toContain('`````\na\n```\nb\n````\nc\n`````');
+    const opening = wrapped.indexOf('`````');
+    const closing = wrapped.indexOf('`````', opening + 5);
+    expect(closing).toBeGreaterThan(opening);
+  });
+
+  it('never produces a wrapper shorter than the embedded runs', () => {
+    const runs = ['```', '````', '`````'];
+    for (const run of runs) {
+      const wrapped = wrapTextAttachment({ ...attachment, text: `x\n${run}\ny` });
+      const fence = wrapped.match(/`{3,}/g) ?? [];
+      expect(Math.max(...fence.map((f) => f.length))).toBe(run.length + 1);
+    }
+  });
+});
+
+describe('sanitizeAttachmentFilename', () => {
+  it('collapses control characters and whitespace', () => {
+    expect(sanitizeAttachmentFilename('bad\u0000\u0007name\t here.png')).toBe(
+      'bad name here.png',
+    );
+  });
+
+  it('caps length on code points without splitting surrogate pairs', () => {
+    const long = `${'😀'.repeat(200)}.png`;
+    const sanitized = sanitizeAttachmentFilename(long);
+    expect(Array.from(sanitized).length).toBe(MAX_ATTACHMENT_FILENAME_CHARS);
+    expect(sanitized.endsWith('…')).toBe(true);
+  });
+
+  it('falls back to a fixed name for empty input', () => {
+    expect(sanitizeAttachmentFilename('')).toBe('attachment');
+    expect(sanitizeAttachmentFilename('\u0007\u0007')).toBe('attachment');
   });
 });
 
@@ -270,21 +358,59 @@ describe('buildUserMessageContent', () => {
     expect(parts[0]).toEqual({ type: 'text', text: expect.any(String) });
     const textPart = parts[0] as { type: 'text'; text: string };
     expect(textPart.text.startsWith('Summarize')).toBe(true);
+    expect(textPart.text).toContain(ATTACHMENT_BLOCK_BEGIN);
+    expect(textPart.text).toContain(ATTACHMENT_BLOCK_END);
+    expect(textPart.text).toContain('untrusted data');
     expect(textPart.text).toContain('[Attached file: data.csv');
     expect(textPart.text).toContain('[Attached image 1 of 3: photo.jpg]');
     expect(textPart.text).toContain('[Attached image 2 of 3: report.pdf — page 1 of 2]');
     expect(textPart.text).toContain('[Attached image 3 of 3: report.pdf — page 2 of 2]');
-    expect(parts[1]).toEqual({ type: 'image', image: 'AAAA', mimeType: 'image/jpeg' });
-    expect(parts[2]).toEqual({ type: 'image', image: 'BBBB', mimeType: 'image/jpeg' });
-    expect(parts[3]).toEqual({ type: 'image', image: 'CCCC', mimeType: 'image/jpeg' });
+    expect(parts[1]).toEqual({
+      type: 'image',
+      image: 'AAAA',
+      mimeType: 'image/jpeg',
+      filename: 'photo.jpg',
+    });
+    expect(parts[2]).toEqual({
+      type: 'image',
+      image: 'BBBB',
+      mimeType: 'image/jpeg',
+      filename: 'report.pdf (page 1 of 2)',
+    });
+    expect(parts[3]).toEqual({
+      type: 'image',
+      image: 'CCCC',
+      mimeType: 'image/jpeg',
+      filename: 'report.pdf (page 2 of 2)',
+    });
   });
 
   it('builds marker-only text when the message has attachments but no prompt', () => {
     const parts = buildUserMessageContent('', [imageAttachment]);
-    expect(parts).toEqual([
-      { type: 'text', text: '[Attached image 1 of 1: photo.jpg]' },
-      { type: 'image', image: 'AAAA', mimeType: 'image/jpeg' },
+    expect(parts).toHaveLength(2);
+    const textPart = parts[0] as { type: 'text'; text: string };
+    expect(textPart.text.startsWith(ATTACHMENT_BLOCK_BEGIN)).toBe(true);
+    expect(textPart.text).toContain('[Attached image 1 of 1: photo.jpg]');
+    expect(textPart.text.endsWith(ATTACHMENT_BLOCK_END)).toBe(true);
+    expect(parts[1]).toEqual({
+      type: 'image',
+      image: 'AAAA',
+      mimeType: 'image/jpeg',
+      filename: 'photo.jpg',
+    });
+  });
+
+  it('restores the display prompt by stripping the attachment block', () => {
+    const parts = buildUserMessageContent('Summarize this', [
+      textAttachment,
+      imageAttachment,
     ]);
+    const textPart = parts[0] as { type: 'text'; text: string };
+    expect(stripAttachmentBlocks(textPart.text)).toBe('Summarize this');
+    // A crafted sentinel inside attachment content cannot move the cut
+    // earlier than the real boundary when it appears after the opener.
+    expect(stripAttachmentBlocks('prompt\n<!-- chekku-attachments-begin -->body')).toBe('prompt');
+    expect(stripAttachmentBlocks('no attachments here')).toBe('no attachments here');
   });
 });
 
