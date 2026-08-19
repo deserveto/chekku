@@ -7,7 +7,6 @@ import {
   listSocialPosts,
   ObjectStorageError,
   readVisualAssetBytes,
-  updateSocialPostStatus,
   VISUAL_ASSET_ID_RE,
   type ObjectStorage,
   type SocialPostMetadata,
@@ -23,13 +22,15 @@ export type SocialPostServiceErrorCode =
   | 'forbidden'
   | 'invalid-post-id'
   | 'invalid-asset-id'
+  | 'invalid-status'
+  | 'job-trigger-failed'
   | 'not-found'
   | 'storage-unavailable';
 
 export class SocialPostServiceError extends Error {
   constructor(
     readonly code: SocialPostServiceErrorCode,
-    readonly status: 400 | 403 | 404 | 503,
+    readonly status: 400 | 403 | 404 | 409 | 502 | 503,
     message: string,
   ) {
     super(message);
@@ -43,7 +44,6 @@ export interface SocialPostServiceDependencies {
   listPosts?: (store: ObjectStorage) => Promise<SocialPostMetadata[]>;
   getPost?: (store: ObjectStorage, postId: string) => Promise<SocialPostReadResult>;
   readVisualAsset?: (store: ObjectStorage, postId: string, assetId: string) => Promise<VisualAssetBytes>;
-  approvePost?: (store: ObjectStorage, postId: string) => Promise<SocialPostMetadata>;
 }
 
 async function requireIdentity(resolveUserId: () => Promise<string | null>): Promise<void> {
@@ -123,32 +123,6 @@ export async function getSocialPostVisualAssetForUser(
       postId,
       assetId,
     );
-  } catch (error) {
-    if (error instanceof ObjectStorageError) throw mapStorageError(error);
-    throw error;
-  }
-}
-
-/**
- * Approve a DRAFT social post, transitioning it to APPROVED so the Visual
- * Content Agent's `generate_image` tool can generate visuals for it. Requires
- * the same server identity seam as the other social-post operations and
- * validates the canonical post id before storage access.
- */
-export async function approveSocialPostForUser(
-  postId: string,
-  dependencies: SocialPostServiceDependencies = {},
-): Promise<SocialPostMetadata> {
-  await requireIdentity(dependencies.getServerUserId ?? getServerUserId);
-  if (!POST_ID_RE.test(postId)) {
-    throw new SocialPostServiceError('invalid-post-id', 400, 'Invalid social post id.');
-  }
-
-  const approve = dependencies.approvePost
-    ?? ((store: ObjectStorage, id: string) => updateSocialPostStatus(store, id, 'APPROVED'));
-
-  try {
-    return await approve(socialStore(dependencies), postId);
   } catch (error) {
     if (error instanceof ObjectStorageError) throw mapStorageError(error);
     throw error;

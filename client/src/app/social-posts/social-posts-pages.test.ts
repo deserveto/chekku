@@ -34,11 +34,6 @@ vi.mock('@/server/social-posts', () => {
   return {
     getSocialPostForUser: mocks.getPost,
     listSocialPostsForUser: mocks.listPosts,
-    approveSocialPostForUser: vi.fn(async (postId: string) => ({
-      ...metadata,
-      postId,
-      status: 'APPROVED' as const,
-    })),
     SocialPostServiceError,
   };
 });
@@ -174,15 +169,80 @@ describe('social post detail page', () => {
     expect(markup).not.toContain('studio-visual-image');
   });
 
-  it('shows an Approve button for DRAFT posts', async () => {
+  it('shows the Approve Canonical button for a canonical-only DRAFT post', async () => {
+    mocks.getPost.mockResolvedValue({
+      ...post,
+      postMarkdown: '<!-- canonical-unit -->\n[TOPIC]\nHari Guru\n\n[THESIS]\nGuru penting.\n<!-- /canonical-unit -->',
+    });
+
     const markup = renderToStaticMarkup(await SocialPostDetailPage({
       params: Promise.resolve({ postId }),
     }));
 
-    expect(markup).toContain('>Approve<');
+    expect(markup).toContain('>Approve Canonical<');
+    expect(markup).not.toContain('>Approve Caption<');
+    // Canonical-only draft: the caption section explains the deferred stage.
+    expect(markup).toContain('The caption is generated after the canonical content is approved.');
   });
 
-  it('hides the Approve button for APPROVED posts', async () => {
+  it('shows the caption pending indicator for a CANONICAL_APPROVED post without a caption', async () => {
+    mocks.getPost.mockResolvedValue({
+      ...post,
+      postMarkdown: '<!-- canonical-unit -->\n[TOPIC]\nHari Guru\n\n[THESIS]\nGuru penting.\n<!-- /canonical-unit -->',
+      metadata: { ...metadata, status: 'CANONICAL_APPROVED' as const },
+    });
+
+    const markup = renderToStaticMarkup(await SocialPostDetailPage({
+      params: Promise.resolve({ postId }),
+    }));
+
+    expect(markup).toContain('Generating caption…');
+    expect(markup).not.toContain('>Approve Caption<');
+    expect(markup).not.toContain('>Approve Canonical<');
+  });
+
+  it('shows the Approve Caption button once the caption exists', async () => {
+    mocks.getPost.mockResolvedValue({
+      ...post,
+      postMarkdown: '<!-- canonical-unit -->\n[TOPIC]\nHari Guru\n\n[THESIS]\nGuru penting.\n<!-- /canonical-unit -->',
+      captionMarkdown: 'Selamat Hari Guru Nasional.',
+      metadata: {
+        ...metadata,
+        status: 'CANONICAL_APPROVED' as const,
+        captionObjectKey: `social-posts/${postId}/caption.md`,
+      },
+    });
+
+    const markup = renderToStaticMarkup(await SocialPostDetailPage({
+      params: Promise.resolve({ postId }),
+    }));
+
+    expect(markup).toContain('>Approve Caption<');
+    expect(markup).toContain('Selamat Hari Guru Nasional.');
+    expect(markup).not.toContain('>Approve Canonical<');
+  });
+
+  it('shows the image pending indicator for an APPROVED post without visuals', async () => {
+    mocks.getPost.mockResolvedValue({
+      ...post,
+      captionMarkdown: 'Selamat Hari Guru Nasional.',
+      metadata: {
+        ...metadata,
+        status: 'APPROVED' as const,
+        captionObjectKey: `social-posts/${postId}/caption.md`,
+      },
+    });
+
+    const markup = renderToStaticMarkup(await SocialPostDetailPage({
+      params: Promise.resolve({ postId }),
+    }));
+
+    expect(markup).toContain('Generating image…');
+    expect(markup).not.toContain('>Approve Caption<');
+    expect(markup).not.toContain('>Approve Canonical<');
+  });
+
+  it('hides every approve control for APPROVED posts', async () => {
     mocks.getPost.mockResolvedValue({
       ...post,
       metadata: { ...metadata, status: 'APPROVED' as const },
@@ -193,6 +253,8 @@ describe('social post detail page', () => {
     }));
 
     expect(markup).not.toContain('>Approve<');
+    expect(markup).not.toContain('>Approve Caption<');
+    expect(markup).not.toContain('>Approve Canonical<');
   });
 
   it('renders the active visual asset image between caption and metadata', async () => {

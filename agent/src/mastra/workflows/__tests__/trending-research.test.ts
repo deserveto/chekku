@@ -230,7 +230,7 @@ describe('researchTrendingTopics', () => {
     expect(topic!.angle.length).toBeLessThanOrEqual(400);
     // Original lengths preserved inside source for the prompt.
     expect(topic!.source?.title.length).toBe(500);
-    expect(topic!.source?.snippet.length).toBe(1000);
+    expect(topic!.source?.snippet?.length).toBe(1000);
   });
 });
 

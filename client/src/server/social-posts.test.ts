@@ -4,14 +4,17 @@ vi.mock('server-only', () => ({}));
 
 const mocks = vi.hoisted(() => ({
   getUserId: vi.fn<() => Promise<string | null>>(),
+  getDownstreamToken: vi.fn<() => Promise<string | null>>(),
   rootStoreFactory: vi.fn(),
 }));
 
 vi.mock('@/server/auth', () => ({
   getUserId: mocks.getUserId,
+  getDownstreamToken: mocks.getDownstreamToken,
 }));
 vi.mock('./auth', () => ({
   getUserId: mocks.getUserId,
+  getDownstreamToken: mocks.getDownstreamToken,
 }));
 
 vi.mock('@chekku/storage', async (importOriginal) => {
@@ -38,7 +41,6 @@ import { GET as listPostsRoute } from '../app/api/storage/social-posts/route';
 import {
   getSocialPostForUser,
   getSocialPostVisualAssetForUser,
-  approveSocialPostForUser,
   listSocialPostsForUser,
   SocialPostServiceError,
 } from './social-posts';
@@ -310,27 +312,73 @@ describe('social post API routes', () => {
     expect(body).not.toContain(providerDetail);
   });
 
-  it('PATCH approves a DRAFT post and returns the updated metadata', async () => {
+  it('PATCH fires the caption stage for a DRAFT post', async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ runId: 'run-1' }), { headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ message: 'started' }), { headers: { 'Content-Type': 'application/json' } }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
     const getText = vi.fn(async (key: string) => {
       if (key.endsWith('metadata.json')) return JSON.stringify(metadata);
       return '';
     });
-    const replaceText = vi.fn();
-    mocks.rootStoreFactory.mockReturnValue(createRootStore({ getText, replaceText }));
+    mocks.rootStoreFactory.mockReturnValue(createRootStore({ getText }));
+    mocks.getDownstreamToken.mockResolvedValue(null);
 
-    const response = await patchPostRoute(
-      new Request(`http://localhost`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'APPROVED' }),
-      }),
-      { params: Promise.resolve({ postId }) },
-    );
+    try {
+      const response = await patchPostRoute(
+        new Request(`http://localhost`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'CANONICAL_APPROVED' }),
+        }),
+        { params: Promise.resolve({ postId }) },
+      );
 
-    expect(response.status).toBe(200);
-    const body = await response.json();
-    expect(body.metadata.status).toBe('APPROVED');
-    expect(replaceText).toHaveBeenCalledOnce();
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ ok: true, pendingStatus: 'CANONICAL_APPROVED' });
+      expect(fetchMock.mock.calls[0]![0]).toContain('/api/workflows/repurpose-social-post/create-run');
+      expect(fetchMock.mock.calls[1]![0]).toContain('/api/workflows/repurpose-social-post/start?runId=run-1');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('PATCH fires the image stage for a CANONICAL_APPROVED post', async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ runId: 'run-2' }), { headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ message: 'started' }), { headers: { 'Content-Type': 'application/json' } }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const captionMetadata = {
+      ...metadata,
+      status: 'CANONICAL_APPROVED' as const,
+      captionObjectKey: `social-posts/${postId}/caption.md`,
+    };
+    const getText = vi.fn(async (key: string) => {
+      if (key.endsWith('metadata.json')) return JSON.stringify(captionMetadata);
+      return '';
+    });
+    mocks.rootStoreFactory.mockReturnValue(createRootStore({ getText }));
+    mocks.getDownstreamToken.mockResolvedValue(null);
+
+    try {
+      const response = await patchPostRoute(
+        new Request(`http://localhost`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'APPROVED' }),
+        }),
+        { params: Promise.resolve({ postId }) },
+      );
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ ok: true, pendingStatus: 'APPROVED' });
+      expect(fetchMock.mock.calls[0]![0]).toContain('/api/workflows/generate-social-post-visual/create-run');
+      expect(fetchMock.mock.calls[1]![0]).toContain('/api/workflows/generate-social-post-visual/start?runId=run-2');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it('PATCH rejects an unsupported status value', async () => {
@@ -344,6 +392,27 @@ describe('social post API routes', () => {
     );
 
     expect(response.status).toBe(400);
+    const body = await response.json();
+    expect(body.error.code).toBe('invalid-status');
+  });
+
+  it('PATCH rejects the caption approval when the post is still DRAFT (409)', async () => {
+    const getText = vi.fn(async (key: string) => {
+      if (key.endsWith('metadata.json')) return JSON.stringify(metadata);
+      return '';
+    });
+    mocks.rootStoreFactory.mockReturnValue(createRootStore({ getText }));
+
+    const response = await patchPostRoute(
+      new Request(`http://localhost`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'APPROVED' }),
+      }),
+      { params: Promise.resolve({ postId }) },
+    );
+
+    expect(response.status).toBe(409);
     const body = await response.json();
     expect(body.error.code).toBe('invalid-status');
   });
@@ -369,91 +438,6 @@ const visualBytes: VisualAssetBytes = {
   value: new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a]),
   contentType: 'image/png',
 };
-
-describe('social post approval service', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.getUserId.mockResolvedValue('user-1');
-  });
-
-  it('rejects missing identity before creating storage', async () => {
-    const rootStoreFactory = vi.fn(() => createRootStore());
-    const approvePost = vi.fn();
-
-    await expect(approveSocialPostForUser(postId, {
-      getServerUserId: async () => null,
-      rootStoreFactory,
-      approvePost,
-    })).rejects.toMatchObject({
-      code: 'forbidden',
-      status: 403,
-      message: 'Authentication is required.',
-    });
-    expect(rootStoreFactory).not.toHaveBeenCalled();
-    expect(approvePost).not.toHaveBeenCalled();
-  });
-
-  it('rejects a malformed post id before resolving storage', async () => {
-    const rootStoreFactory = vi.fn(() => createRootStore());
-    const approvePost = vi.fn();
-
-    await expect(approveSocialPostForUser('smp_legacy', {
-      getServerUserId: async () => 'user-1',
-      rootStoreFactory,
-      approvePost,
-    })).rejects.toMatchObject({
-      code: 'invalid-post-id',
-      status: 400,
-      message: 'Invalid social post id.',
-    });
-    expect(rootStoreFactory).not.toHaveBeenCalled();
-  });
-
-  it('calls the approve dependency through social-media-agent-namespaced storage', async () => {
-    const approvePost = vi.fn(async (store: ObjectStorage, id: string) => {
-      await store.getText(`social-posts/${id}/metadata.json`);
-      return { ...metadata, status: 'APPROVED' as const };
-    });
-
-    const result = await approveSocialPostForUser(postId, {
-      getServerUserId: async () => 'user-1',
-      rootStoreFactory: () => createRootStore({ getText: vi.fn(async () => '{}') }),
-      approvePost,
-    });
-
-    expect(result.status).toBe('APPROVED');
-    expect(approvePost).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    ['not-found', 'not-found', 404, 'Social post not found.'],
-    ['configuration', 'storage-unavailable', 503, 'Social post storage is unavailable.'],
-  ] as const)('maps ObjectStorageError %s without leaking details', async (
-    storageCode,
-    serviceCode,
-    status,
-    message,
-  ) => {
-    const providerDetail = 'private-endpoint request-id=secret';
-    let failure: unknown;
-
-    try {
-      await approveSocialPostForUser(postId, {
-        getServerUserId: async () => 'user-1',
-        rootStoreFactory: () => createRootStore(),
-        approvePost: async () => {
-          throw new ObjectStorageError(storageCode, providerDetail);
-        },
-      });
-    } catch (error) {
-      failure = error;
-    }
-
-    expect(failure).toBeInstanceOf(SocialPostServiceError);
-    expect(failure).toMatchObject({ code: serviceCode, status, message });
-    expect(String(failure)).not.toContain(providerDetail);
-  });
-});
 
 describe('social post visual asset server service', () => {
   beforeEach(() => {

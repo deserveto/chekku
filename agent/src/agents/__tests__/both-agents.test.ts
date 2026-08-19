@@ -235,6 +235,14 @@ describe('social-media-supervisor-agent (three sub-agents and routing)', () => {
     expect(instructions).toContain('Social Media Strategist');
   });
 
+  it('keeps chat output ephemeral and points stored-post requests to /social-posts', async () => {
+    const instructions = (await socialMediaSupervisorAgent.getInstructions()) as unknown as string;
+    expect(instructions).toContain('two-stage approval');
+    expect(instructions).toContain('chat output is ephemeral text');
+    expect(instructions).toContain('never through a chat keyword or shortcut');
+    expect(instructions).toContain('/social-posts review flow');
+  });
+
   it('instructs the supervisor to complete the full request in one turn without stopping', async () => {
     const instructions = (await socialMediaSupervisorAgent.getInstructions()) as unknown as string;
     expect(instructions.toLowerCase()).toContain('complete the full request in one turn');

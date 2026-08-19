@@ -37,7 +37,7 @@ describe('agent server routes', () => {
     ]);
     expect(
       Object.keys(mastra.listWorkflows()).filter((key) => !key.endsWith('-input-processor')),
-    ).toEqual(['weeklySocialDrafts']);
+    ).toEqual(['weeklySocialDrafts', 'repurposeSocialPost', 'generateSocialPostVisual']);
     expect(mastra.listMCPServers()).toEqual({
       garage: garageMcpServer,
       searxng: searxngMcpServer,

@@ -68,7 +68,8 @@ import { researchTrendingTopics, type ReadPageFn, type SearchFn } from './trendi
  * it, while keeping canonical post id / key / metadata construction
  * deterministic via `buildSocialPostMetadata`.
  *
- * Two-step drafting (per PROMPT.md action item #3, locked D2=c layered):
+ * One-step drafting with a deferred caption stage (per Pembahasan 2 —
+ * 2-stage approval):
  *
  * 1. Canonical step — the workflow calls `socialMediaSupervisorAgent.generate()`
  *    (per D3=a) with the system marker `[weekly-social-drafts]` so the
@@ -76,17 +77,22 @@ import { researchTrendingTopics, type ReadPageFn, type SearchFn } from './trendi
  *    Content Writer runs in canonical mode (`buildCanonicalInstructions`) and
  *    emits a Canonical Content Unit: a platform-agnostic intermediate
  *    representation with [TOPIC], [THESIS], HOOKS, CORE POINTS, and three
- *    platform bricks (short-form, medium-form, visual/video).
+ *    platform bricks (short-form, medium-form, image).
  *
- * 2. Repurpose step — the workflow calls `socialMediaContentWriter.generate()`
- *    with repurpose instructions (`buildRepurposeInstructions`) and a format
- *    directive (`buildRepurposePrompt` dispatches by topic kind: greeting-card
- *    for awareness days/evergreen, Folkative news caption for trending). The
- *    AGENTS.md format-split invariant lives in this layer.
+ *    The canonical unit alone is stored in `post.md` (canonical-only, under
+ *    the `canonical-unit` HTML comment delimiter) with status `DRAFT`. No
+ *    caption is generated at draft time.
  *
- * The two outputs are wrapped together (`wrapPostMarkdown`) and stored in
- * `post.md` under HTML comment delimiters so legacy readers can still render
- * the file as Markdown while canonical-aware readers can split the sections.
+ * 2. Repurpose step — DEFERRED to approval. When the user approves the
+ *    canonical content in `/social-posts`, the client fires the
+ *    `repurpose-social-post` workflow (see `repurpose-social-post.ts`), which
+ *    calls `socialMediaContentWriter.generate()` with repurpose instructions
+ *    (`buildRepurposeInstructions`) and a format directive
+ *    (`buildRepurposePrompt` dispatches by topic kind: greeting-card for
+ *    awareness days/evergreen, Folkative news caption for trending), stores
+ *    the caption in `caption.md`, and transitions the post to
+ *    `CANONICAL_APPROVED`. The AGENTS.md format-split invariant lives in
+ *    that layer.
  *
  * The orchestrator (`runWeeklySocialDrafts`) is dependency-injected so the
  * schedule/agent/storage/email/search seams can be unit-tested with fakes;
@@ -103,14 +109,25 @@ import { researchTrendingTopics, type ReadPageFn, type SearchFn } from './trendi
 // source of truth for namespace.
 const defaultCreateTextTool = createCreateTextObjectTool();
 
-const SOCIAL_AGENT_CONTEXT = {
-  agent: {
-    agentId: SOCIAL_MEDIA_AGENT_ID,
-    toolCallId: 'weekly-social-drafts',
-    messages: [],
-    suspend: async () => undefined,
-  },
-} as never;
+/**
+ * Shared Garage MCP `create_text_object` seam for social-post workflows.
+ * Both the scheduled `weekly-social-drafts` workflow and the approval-driven
+ * `repurpose-social-post` workflow write post objects through this single
+ * factory so namespace derivation (`context.agent.agentId` pinned to
+ * `social-media-agent`) stays in one place.
+ */
+export function createSocialPostCreateText(toolCallId: string): CreateTextFn {
+  const context = {
+    agent: {
+      agentId: SOCIAL_MEDIA_AGENT_ID,
+      toolCallId,
+      messages: [],
+      suspend: async () => undefined,
+    },
+  } as never;
+  return (key, text) =>
+    defaultCreateTextTool.execute!({ key, text }, context).then(() => undefined);
+}
 
 // ---------------------------------------------------------------------------
 // Output schema
@@ -120,7 +137,7 @@ const draftedPostSchema = z.object({
   postUrl: z.string(),
   topic: z.string(),
   specialDay: z.string().optional(),
-  status: z.enum(['DRAFT', 'APPROVED', 'PUBLISHED']),
+  status: z.enum(['DRAFT', 'CANONICAL_APPROVED', 'APPROVED', 'PUBLISHED']),
   createdAt: z.string(),
 });
 
@@ -424,6 +441,59 @@ export function buildBrief(topic: Topic, weekStart: string): string {
   return lines.join('\n');
 }
 
+/**
+ * Parse a stored `brief.md` back into the topic + week it was drafted for.
+ * Inverse of {@link buildBrief}; used by the deferred repurpose step
+ * (`repurpose-social-post`) to reconstruct the original topic context from
+ * persisted state — the metadata alone only carries the topic name.
+ *
+ * Returns `undefined` when any required line is missing (e.g. a brief written
+ * by an older format); callers fall back to a minimal topic derived from
+ * metadata.
+ */
+export function parseBrief(briefMarkdown: string): { weekStart: string; topic: Topic } | undefined {
+  const values = new Map<string, string>();
+  for (const line of briefMarkdown.split('\n')) {
+    const match = /^([A-Za-z ]+):\s(.*)$/.exec(line);
+    if (match) values.set(match[1]!.trim(), match[2]!.trim());
+  }
+
+  const weekStart = values.get('Week of');
+  const name = values.get('Topic');
+  const angle = values.get('Angle') ?? '';
+  const sourceKind = values.get('Source');
+  if (!weekStart || !name || !sourceKind) return undefined;
+
+  const kind: Topic['kind'] | undefined = sourceKind === 'special-day'
+    ? 'special-day'
+    : sourceKind === 'trending-research'
+      ? 'trending'
+      : sourceKind === 'evergreen-pillar'
+        ? 'evergreen'
+        : undefined;
+  if (!kind) return undefined;
+
+  const specialDay = values.get('Special day');
+  const hijriYearText = values.get('Hijri year');
+  const hijriYear = hijriYearText !== undefined && /^\d+$/.test(hijriYearText)
+    ? Number(hijriYearText)
+    : undefined;
+  const referenceUrl = values.get('Reference URL');
+  const referenceTitle = values.get('Reference title');
+
+  const topic: Topic = {
+    kind,
+    name,
+    angle,
+    ...(specialDay !== undefined && specialDay.length > 0 ? { specialDay } : {}),
+    ...(hijriYear !== undefined ? { hijriYear } : {}),
+    ...(kind === 'trending' && referenceUrl && referenceTitle
+      ? { source: { url: referenceUrl, title: referenceTitle } }
+      : {}),
+  };
+  return { weekStart, topic };
+}
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -480,17 +550,19 @@ export function renderReviewEmail(
 // ---------------------------------------------------------------------------
 
 /**
- * Generate-function signatures. Two are exposed because the workflow runs a
- * two-step layered flow (per PROMPT.md #3 + locked D2=c):
+ * Generate-function signatures.
  *
- * - {@link CanonicalGenerateFn} — Step 1. Routes through the supervisor (per
- *   D3=a) so the supervisor stays the single routing seam for the
- *   social-media surface. The supervisor sees the `[weekly-social-drafts]`
- *   system marker in the prompt and delegates straight to Content Writer.
+ * - {@link CanonicalGenerateFn} — used by the weekly workflow's canonical
+ *   step. Routes through the supervisor (per D3=a) so the supervisor stays
+ *   the single routing seam for the social-media surface. The supervisor sees
+ *   the `[weekly-social-drafts]` system marker in the prompt and delegates
+ *   straight to Content Writer.
  *
- * - {@link RepurposeFn} — Step 2. Calls Content Writer directly (it already
- *   holds the canonical unit; no routing decision to make) with repurpose
- *   instructions and a format-specific prompt (greeting-card or Folkative).
+ * - {@link RepurposeFn} — used by the approval-driven
+ *   `repurpose-social-post` workflow (the deferred caption stage). Calls
+ *   Content Writer directly (it already holds the canonical unit; no routing
+ *   decision to make) with repurpose instructions and a format-specific
+ *   prompt (greeting-card or Folkative).
  */
 export type CanonicalGenerateFn = (prompt: string) => Promise<string>;
 export type RepurposeFn = (prompt: string) => Promise<string>;
@@ -521,11 +593,6 @@ export interface WeeklySocialDraftsDeps {
    * stub the supervisor+writer LLM call.
    */
   generateCanonical?: CanonicalGenerateFn;
-  /**
-   * Step 2 seam — repurpose via Content Writer. Override in tests to stub
-   * the repurpose LLM call.
-   */
-  repurpose?: RepurposeFn;
   createText?: CreateTextFn;
   sendEmail?: SendReviewEmailFn;
   webUrl?: string;
@@ -565,8 +632,7 @@ export const defaultRepurpose: RepurposeFn = (prompt) =>
     .generate(prompt, { requestContext: createSocialDraftRequestContext('repurpose-instagram') })
     .then((result) => result.text);
 
-const defaultCreateText: CreateTextFn = (key, text) =>
-  defaultCreateTextTool.execute!({ key, text }, SOCIAL_AGENT_CONTEXT).then(() => undefined);
+const defaultCreateText: CreateTextFn = createSocialPostCreateText('weekly-social-drafts');
 
 const defaultSendEmail: SendReviewEmailFn = (input) => sendEmailViaResend(input);
 
@@ -680,7 +746,6 @@ export async function runWeeklySocialDrafts(
   const weekStart = weekStartLabel(now);
   const webUrl = deps.webUrl ?? env.WEB_URL;
   const generateCanonical = deps.generateCanonical ?? defaultGenerateCanonical;
-  const repurpose = deps.repurpose ?? defaultRepurpose;
   const createText = deps.createText ?? defaultCreateText;
   const sendEmail = deps.sendEmail ?? defaultSendEmail;
   // The recipient always comes from `SOCIAL_DRAFT_REVIEW_EMAIL`. The workflow
@@ -768,7 +833,7 @@ export async function runWeeklySocialDrafts(
 
     // Validate the canonical unit before persisting. An empty, refused, or
     // unstructured response must not be written to post.md verbatim or
-    // re-injected into the repurpose prompt as "the source of truth". Skip
+    // re-injected into a repurpose prompt as "the source of truth". Skip
     // the post, log, and surface a researchNote so the run is not silently
     // incomplete (AGENTS.md: "Preserve errors that help the user act").
     if (parseCanonicalUnit(canonicalMarkdown) === undefined) {
@@ -780,16 +845,11 @@ export async function runWeeklySocialDrafts(
       continue;
     }
 
-    // Step 2: repurpose canonical → platform caption (Instagram voice,
-    // format-specific per AGENTS.md invariant — greeting-card for awareness
-    // days/evergreen, Folkative for trending).
-    const repurposePrompt = buildRepurposePrompt(canonicalMarkdown, topic, weekStart);
-    const repurposedCaption = await repurpose(repurposePrompt);
-
-    // Wrap both into a single `post.md` blob via HTML comment delimiters so
-    // legacy readers still render the file as readable Markdown while
-    // canonical-aware readers can split the two sections.
-    const postMarkdown = wrapPostMarkdown(canonicalMarkdown, repurposedCaption);
+    // Canonical-only post (per Pembahasan 2): the caption is NOT drafted
+    // here. The post is stored as a DRAFT containing just the canonical
+    // unit; the caption stage runs later, after the user approves the
+    // canonical content in /social-posts (see `repurpose-social-post.ts`).
+    const postMarkdown = wrapPostMarkdown(canonicalMarkdown, undefined);
     const metadata = await savePostViaMcp({
       postMarkdown,
       briefMarkdown: buildBrief(topic, weekStart),

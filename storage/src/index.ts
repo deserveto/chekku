@@ -49,6 +49,7 @@ export {
 } from './competitive-analyses.ts';
 export {
   SOCIAL_MEDIA_AGENT_ID,
+  attachCaptionToPost,
   buildSocialPostMetadata,
   buildVisualAsset,
   createPostId,

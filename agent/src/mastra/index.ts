@@ -31,6 +31,8 @@ import {
   startRunRoute,
 } from './routes/runs.js';
 import { storedAgentTools } from './tools/registry.js';
+import { generateSocialPostVisual } from './workflows/generate-social-post-visual.js';
+import { repurposeSocialPost } from './workflows/repurpose-social-post.js';
 import { weeklySocialDrafts } from './workflows/weekly-social-drafts.js';
 
 const storage = new PostgresStore({
@@ -49,7 +51,7 @@ export const mastra = new Mastra({
     socialMediaSupervisorAgent,
     visualContentAgent,
   },
-  workflows: { weeklySocialDrafts },
+  workflows: { weeklySocialDrafts, repurposeSocialPost, generateSocialPostVisual },
   mcpServers: {
     garage: garageMcpServer,
     searxng: searxngMcpServer,

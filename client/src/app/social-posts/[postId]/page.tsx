@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import ApproveButton from './ApproveButton';
+import GenerationPending from './GenerationPending';
 import { MarkdownMessage } from '@/components/markdown-message';
 import { StudioNav } from '@/components/studio/studio-nav';
 import { splitPostMarkdown } from '@/lib/post-markdown';
@@ -59,11 +60,17 @@ export default async function SocialPostDetailPage({
     );
   }
 
-  const { canonicalMarkdown, captionMarkdown } = splitPostMarkdown(post.postMarkdown);
+  const { canonicalMarkdown, captionMarkdown: embeddedCaption } = splitPostMarkdown(post.postMarkdown);
   const hasCanonical = Boolean(canonicalMarkdown);
+  // Caption stage output lives in caption.md once the post reached
+  // CANONICAL_APPROVED; legacy posts embed the caption inside post.md.
+  const captionMarkdown = post.captionMarkdown ?? embeddedCaption;
+  const hasCaption = Boolean(captionMarkdown && captionMarkdown.trim().length > 0);
   const activeVisual = post.metadata.activeVisualAssetId
     ? post.metadata.visualAssets?.find((asset) => asset.assetId === post.metadata.activeVisualAssetId)
     : undefined;
+  const hasVisual = (post.metadata.visualAssets?.length ?? 0) > 0;
+  const status = post.metadata.status;
 
   return (
     <div className="studio-shell">
@@ -75,13 +82,30 @@ export default async function SocialPostDetailPage({
             <h1>{post.postId}</h1>
             <p>
               {hasCanonical
-                ? 'Drafted canonical content unit and the repurposed caption derived from it, followed by storage metadata and the brief that generated it.'
+                ? 'Canonical content unit, the Instagram caption derived from it after approval, storage metadata, and the brief that generated it.'
                 : 'Drafted caption first, followed by storage metadata and the brief that generated it.'}
             </p>
           </div>
           <div className="studio-report-header-actions">
-            {post.metadata.status === 'DRAFT' ? (
-              <ApproveButton postId={post.postId} />
+            {status === 'DRAFT' ? (
+              <ApproveButton
+                postId={post.postId}
+                nextStatus="CANONICAL_APPROVED"
+                label="Approve Canonical"
+              />
+            ) : null}
+            {status === 'CANONICAL_APPROVED' && !hasCaption ? (
+              <GenerationPending label="Generating caption…" />
+            ) : null}
+            {status === 'CANONICAL_APPROVED' && hasCaption ? (
+              <ApproveButton
+                postId={post.postId}
+                nextStatus="APPROVED"
+                label="Approve Caption"
+              />
+            ) : null}
+            {status === 'APPROVED' && !hasVisual ? (
+              <GenerationPending label="Generating image…" />
             ) : null}
             <Link className="studio-button" href="/social-posts">Back to social posts</Link>
           </div>
@@ -98,9 +122,17 @@ export default async function SocialPostDetailPage({
           )}
 
           <section className="studio-panel studio-report-panel">
-            <h2 className="studio-eyebrow">{hasCanonical ? 'Repurposed Caption' : 'Caption'}</h2>
+            <h2 className="studio-eyebrow">{hasCanonical ? 'Instagram Caption' : 'Caption'}</h2>
             <div className="studio-report-markdown markdown">
-              <MarkdownMessage content={captionMarkdown} />
+              {hasCaption ? (
+                <MarkdownMessage content={captionMarkdown} />
+              ) : status === 'DRAFT' ? (
+                <p className="studio-muted">
+                  The caption is generated after the canonical content is approved.
+                </p>
+              ) : (
+                <p className="studio-muted">Generating caption…</p>
+              )}
             </div>
           </section>
 

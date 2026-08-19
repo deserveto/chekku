@@ -17,7 +17,20 @@ export const SOCIAL_MEDIA_AGENT_ID = 'social-media-agent';
 
 export type SocialPlatform = 'instagram';
 
-export type SocialPostStatus = 'DRAFT' | 'APPROVED' | 'PUBLISHED';
+/**
+ * Social-post lifecycle (2-stage approval, per Pembahasan 2):
+ *
+ *   DRAFT → CANONICAL_APPROVED → APPROVED → PUBLISHED (future)
+ *
+ * - `DRAFT` — canonical-only post awaiting canonical approval.
+ * - `CANONICAL_APPROVED` — caption generated and stored in `caption.md`,
+ *   awaiting caption approval.
+ * - `APPROVED` — caption approved; visual generation may run (the
+ *   `generate_image` tool requires exactly this status).
+ * - `PUBLISHED` — terminal for this iteration, managed by a future
+ *   publishing flow.
+ */
+export type SocialPostStatus = 'DRAFT' | 'CANONICAL_APPROVED' | 'APPROVED' | 'PUBLISHED';
 
 /**
  * Allowed output MIME types for a generated visual asset. Stored metadata
@@ -58,6 +71,12 @@ export interface SocialPostMetadata {
   postObjectKey: string;
   briefObjectKey: string;
   metadataObjectKey: string;
+  /** Set once the caption stage has written `caption.md` (status ≥ CANONICAL_APPROVED). */
+  captionObjectKey?: string;
+  /** RFC3339 timestamp of the DRAFT → CANONICAL_APPROVED transition. */
+  canonicalApprovedAt?: string;
+  /** RFC3339 timestamp of the CANONICAL_APPROVED → APPROVED transition. */
+  captionApprovedAt?: string;
   visualAssets?: SocialVisualAsset[];
   activeVisualAssetId?: string;
 }
@@ -91,6 +110,12 @@ export interface SocialPostReadResult {
   postMarkdown: string;
   briefMarkdown: string;
   metadata: SocialPostMetadata;
+  /**
+   * Caption markdown read from `caption.md`. Present only after the caption
+   * stage ran (status ≥ CANONICAL_APPROVED). Legacy posts embed the caption
+   * inside `post.md` under the `repurposed-caption` delimiter instead.
+   */
+  captionMarkdown?: string;
 }
 
 const POST_ID_RE = /^smp_[0-9]{14}_[0-9a-f]{8}$/;
@@ -106,7 +131,7 @@ const RFC3339_RE = /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.(\d+
 const MAX_VISUAL_PROMPT_BYTES = 2_000;
 
 const PLATFORMS: readonly SocialPlatform[] = ['instagram'];
-const STATUSES: readonly SocialPostStatus[] = ['DRAFT', 'APPROVED', 'PUBLISHED'];
+const STATUSES: readonly SocialPostStatus[] = ['DRAFT', 'CANONICAL_APPROVED', 'APPROVED', 'PUBLISHED'];
 
 export const createSocialPostStorage = (root: ObjectStorage): ObjectStorage =>
   createNamespacedObjectStorage(root, SOCIAL_MEDIA_AGENT_ID);
@@ -124,6 +149,7 @@ export function keysFor(postId: string) {
   return {
     postObjectKey: `${base}/post.md`,
     briefObjectKey: `${base}/brief.md`,
+    captionObjectKey: `${base}/caption.md`,
     metadataObjectKey: `${base}/metadata.json`,
   };
 }
@@ -234,9 +260,24 @@ function parseSocialPostMetadata(value: unknown): SocialPostMetadata | undefined
   if (!isSocialPostStatus(metadata.status)) return undefined;
 
   const expectedKeys = keysFor(metadata.postId);
+  const { captionObjectKey: expectedCaptionKey, ...fixedKeys } = expectedKeys;
   if (metadata.postObjectKey !== expectedKeys.postObjectKey
     || metadata.briefObjectKey !== expectedKeys.briefObjectKey
     || metadata.metadataObjectKey !== expectedKeys.metadataObjectKey) {
+    return undefined;
+  }
+  // Optional caption key must match the deterministic layout for this post —
+  // a hostile metadata blob cannot point the read path at an arbitrary key.
+  if (metadata.captionObjectKey !== undefined
+    && metadata.captionObjectKey !== expectedCaptionKey) {
+    return undefined;
+  }
+  if (metadata.canonicalApprovedAt !== undefined
+    && (typeof metadata.canonicalApprovedAt !== 'string' || !RFC3339_RE.test(metadata.canonicalApprovedAt))) {
+    return undefined;
+  }
+  if (metadata.captionApprovedAt !== undefined
+    && (typeof metadata.captionApprovedAt !== 'string' || !RFC3339_RE.test(metadata.captionApprovedAt))) {
     return undefined;
   }
 
@@ -256,7 +297,10 @@ function parseSocialPostMetadata(value: unknown): SocialPostMetadata | undefined
     topic: metadata.topic,
     ...(typeof metadata.specialDay === 'string' ? { specialDay: metadata.specialDay } : {}),
     status: metadata.status,
-    ...expectedKeys,
+    ...fixedKeys,
+    ...(typeof metadata.captionObjectKey === 'string' ? { captionObjectKey: metadata.captionObjectKey } : {}),
+    ...(typeof metadata.canonicalApprovedAt === 'string' ? { canonicalApprovedAt: metadata.canonicalApprovedAt } : {}),
+    ...(typeof metadata.captionApprovedAt === 'string' ? { captionApprovedAt: metadata.captionApprovedAt } : {}),
     ...(visualAssets && visualAssets.length > 0 ? { visualAssets } : {}),
     ...(activeVisualAssetId ? { activeVisualAssetId } : {}),
   };
@@ -307,6 +351,9 @@ export function buildSocialPostMetadata(input: SocialPostMetadataInput): BuiltSo
   const createdAt = (input.now?.() ?? new Date()).toISOString();
   const postId = input.postId ?? createPostId(new Date(createdAt));
   const objectKeys = keysFor(postId);
+  // Creation never has a caption — `captionObjectKey` is set later by
+  // `attachCaptionToPost` after the caption stage writes `caption.md`.
+  const { captionObjectKey: _captionKey, ...creationKeys } = objectKeys;
   const metadata: SocialPostMetadata = {
     postId,
     createdAt,
@@ -314,12 +361,12 @@ export function buildSocialPostMetadata(input: SocialPostMetadataInput): BuiltSo
     topic: input.topic,
     ...(input.specialDay ? { specialDay: input.specialDay } : {}),
     status,
-    ...objectKeys,
+    ...creationKeys,
   };
   return {
     metadata,
     metadataJson: JSON.stringify(metadata, null, 2),
-    ...objectKeys,
+    ...creationKeys,
   };
 }
 
@@ -371,7 +418,22 @@ export async function getSocialPost(store: ObjectStorage, postId: string): Promi
   if (!parsed || parsed.postId !== postId) {
     throw new Error(`Invalid social post metadata for ${postId}`);
   }
-  return { postId, postMarkdown, briefMarkdown, metadata: parsed };
+
+  // Caption stage output lives in a dedicated object once the post reached
+  // CANONICAL_APPROVED. Metadata references it (written last by
+  // `attachCaptionToPost`), so a present `captionObjectKey` implies the
+  // caption object exists; a missing object surfaces as a storage error.
+  const captionMarkdown = parsed.captionObjectKey
+    ? await store.getText(parsed.captionObjectKey)
+    : undefined;
+
+  return {
+    postId,
+    postMarkdown,
+    briefMarkdown,
+    metadata: parsed,
+    ...(captionMarkdown !== undefined ? { captionMarkdown } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -608,25 +670,83 @@ export async function readVisualAssetBytes(
 }
 
 /**
- * Allowed social-post status transitions. `DRAFT → APPROVED` is the only
- * transition the approval endpoint exposes; `PUBLISHED` is terminal for this
- * iteration and managed by a future publishing flow, not by this helper.
+ * Allowed social-post status transitions (2-stage approval, per Pembahasan 2):
+ *
+ *   DRAFT → CANONICAL_APPROVED  (caption stage — `attachCaptionToPost`)
+ *   CANONICAL_APPROVED → APPROVED  (caption approval — `updateSocialPostStatus`)
+ *
+ * `PUBLISHED` is terminal for this iteration and managed by a future
+ * publishing flow, not by these helpers.
  */
 const ALLOWED_STATUS_TRANSITIONS: Record<SocialPostStatus, readonly SocialPostStatus[]> = {
-  DRAFT: ['APPROVED'],
+  DRAFT: ['CANONICAL_APPROVED'],
+  CANONICAL_APPROVED: ['APPROVED'],
   APPROVED: [],
   PUBLISHED: [],
 };
 
 /**
- * Transition a social post's persisted status. Reads the current metadata,
- * validates the transition is allowed, and writes the updated metadata back
- * via `replaceText`. Returns the projected metadata after the update.
+ * Complete the caption stage for a DRAFT social post: record that
+ * `caption.md` exists and transition the status to `CANONICAL_APPROVED`.
  *
- * Only `DRAFT → APPROVED` is permitted. This is the approval mechanism the
- * Visual Content Agent's `generate_image` tool requires: the weekly workflow
- * creates DRAFT posts, the user reviews and approves one through the UI, then
- * asks the supervisor to generate a visual.
+ * The caller (the `repurpose-social-post` workflow) must have already stored
+ * the caption markdown at `keysFor(postId).captionObjectKey` before calling
+ * this; metadata is written back via `replaceText` **last**, so a metadata
+ * failure leaves an orphan caption object that is unreachable through
+ * canonical metadata, never a live entry pointing at missing content.
+ *
+ * Requires the current status to be exactly `DRAFT` — a post that already
+ * advanced (double-fire race, or an already-captioned post) is rejected
+ * instead of silently rewriting history. The read-modify-write is serialized
+ * per post within the process through {@link serializeMetadataWrite}.
+ *
+ * Returns the projected metadata after the update.
+ */
+export async function attachCaptionToPost(
+  store: ObjectStorage,
+  postId: string,
+  options: { now?: () => Date } = {},
+): Promise<SocialPostMetadata> {
+  const objectKeys = keysFor(postId);
+  return serializeMetadataWrite(postId, async () => {
+    const metadataText = await store.getText(objectKeys.metadataObjectKey);
+    let metadata: unknown;
+    try {
+      metadata = JSON.parse(metadataText);
+    } catch {
+      throw new Error(`Invalid social post metadata for ${postId}`);
+    }
+    const parsed = parseSocialPostMetadata(metadata);
+    if (!parsed || parsed.postId !== postId) {
+      throw new Error(`Invalid social post metadata for ${postId}`);
+    }
+    if (parsed.status !== 'DRAFT') {
+      throw new Error(
+        `Cannot attach a caption to social post ${postId} in status ${parsed.status}; expected DRAFT.`,
+      );
+    }
+
+    const updated: SocialPostMetadata = {
+      ...parsed,
+      status: 'CANONICAL_APPROVED',
+      captionObjectKey: objectKeys.captionObjectKey,
+      canonicalApprovedAt: (options.now?.() ?? new Date()).toISOString(),
+    };
+    await store.replaceText(objectKeys.metadataObjectKey, JSON.stringify(updated, null, 2), 'application/json');
+    return updated;
+  });
+}
+
+/**
+ * Transition a social post's persisted status. Reads the current metadata,
+ * validates the transition is allowed by {@link ALLOWED_STATUS_TRANSITIONS},
+ * and writes the updated metadata back via `replaceText`. Returns the
+ * projected metadata after the update.
+ *
+ * This is the caption-approval mechanism (`CANONICAL_APPROVED → APPROVED`)
+ * that unblocks the Visual Content Agent's `generate_image` tool: staging the
+ * transition also stamps `captionApprovedAt` (once) so the UI can show when
+ * the caption was approved.
  */
 export async function updateSocialPostStatus(
   store: ObjectStorage,
@@ -655,7 +775,13 @@ export async function updateSocialPostStatus(
       );
     }
 
-    const updated: SocialPostMetadata = { ...parsed, status: nextStatus };
+    const updated: SocialPostMetadata = {
+      ...parsed,
+      status: nextStatus,
+      ...(currentStatus === 'CANONICAL_APPROVED' && nextStatus === 'APPROVED' && !parsed.captionApprovedAt
+        ? { captionApprovedAt: new Date().toISOString() }
+        : {}),
+    };
     await store.replaceText(objectKeys.metadataObjectKey, JSON.stringify(updated, null, 2), 'application/json');
     return updated;
   });

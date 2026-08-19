@@ -56,8 +56,12 @@ export interface TrendingSource {
   url: string;
   /** Result title, used to identify the topic. */
   title: string;
-  /** Result snippet, used as the topic angle. */
-  snippet: string;
+  /**
+   * Result snippet, used as the topic angle. Optional because persisted
+   * reconstructions (e.g. `parseBrief` from a stored brief.md) only carry the
+   * URL and title.
+   */
+  snippet?: string;
   /** Optional ISO `publishedAt` from upstream, when the source provided it. */
   publishedAt?: string;
   /**
