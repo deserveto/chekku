@@ -12,6 +12,7 @@ import { storedAgentMigrationTarget } from './stored-agent-migration';
 import type { ModelRegistry } from './model-registry';
 import { readAgentIcon, type AgentIconId } from './agent-icons';
 import {
+  HIDDEN_AGENT_IDS,
   MAIN_AGENT_ID,
   RESERVED_AGENT_IDS,
   type ChekkuAgentDetail,
@@ -345,7 +346,7 @@ export async function listAllAgents(): Promise<ChekkuAgentSummary[]> {
   const merged = [
     ...codeAgents,
     ...safeStored.filter((agent) => !codeIds.has(agent.id)),
-  ];
+  ].filter((agent) => !HIDDEN_AGENT_IDS.has(agent.id));
 
   const mainEntry = merged.find((agent) => agent.id === MAIN_AGENT_ID) ?? {
     id: MAIN_AGENT_ID,

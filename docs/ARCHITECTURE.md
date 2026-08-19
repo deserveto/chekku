@@ -136,7 +136,7 @@ The chat composer (`client/src/components/chat/chat-studio.tsx`) exposes the act
 
 `storedAgentTools` is the instance-level registry that makes calculator, current-time, and email tools available during stored-agent hydration. Weekly and competitive PM tools plus reusable `search_web` and `read_web_page` attach directly to `pmAgent`; PM storage tools are not members of `storedAgentTools`, `garageMcpServer`, `searxngMcpServer`, or `webReaderMcpServer`.
 
-`socialMediaContentWriter` also wires a Telegram channel adapter. Once Mastra initializes the agent's `AgentChannels`, `index.ts` registers the agent's slash-command handlers (`/help`, `/roles`, `/role`, `/switch`) on the Chat SDK so Telegram-intercepted bot commands reach the role logic. `socialMediaSupervisorAgent` has no tools and attaches the Content Writer as a sub-agent via the `agents` field.
+`socialMediaContentWriter` also wires a Telegram channel adapter. Once Mastra initializes the agent's `AgentChannels`, `index.ts` registers the agent's slash-command handlers (`/help`, `/roles`, `/role`, `/switch`) on the Chat SDK so Telegram-intercepted bot commands reach the role logic. `socialMediaSupervisorAgent` binds the reusable `search_web` and `read_web_page` research tools and attaches the Content Writer as a sub-agent via the `agents` field.
 
 ## Agents
 
@@ -174,7 +174,7 @@ The active role is held in-memory keyed by `${platform}:${userId}`. The agent re
 
 ### Social Media Supervisor
 
-`social-media-supervisor-agent` is the routing agent for the social-media surface. It has no tools of its own and delegates drafting/repurposing/planning requests to its sub-agents via Mastra's `agents` field. The supervisor binds Memory and the same context-safety processors as the other code agents so its own turns stay bounded. Active call paths opt into routing by invoking the supervisor; Telegram stays on the Content Writer for this phase. It attaches three sub-agents today: the Content Writer (platform-post drafting/repurposing/planning), the Strategist (Content Strategy Brief and Content Plan research/interviews), and the Visual Content Agent (on-demand image generation for an APPROVED post).
+`social-media-supervisor-agent` is the routing agent for the social-media surface. It binds exactly two lightweight research tools — the reusable `search_web` and `read_web_page` singletons, used only for quick trending checks and opening user-provided URLs — and delegates drafting/repurposing/planning requests to its sub-agents via Mastra's `agents` field. The supervisor binds Memory and the same context-safety processors as the other code agents so its own turns stay bounded. Active call paths opt into routing by invoking the supervisor; Telegram stays on the Content Writer for this phase. It attaches three sub-agents today: the Content Writer (platform-post drafting/repurposing/planning), the Strategist (Content Strategy Brief and Content Plan research/interviews), and the Visual Content Agent (on-demand image generation for an APPROVED post). These three sub-agents are hidden from the client UI catalog and chat switcher (`HIDDEN_AGENT_IDS` filtered inside `listAllAgents()`); they stay registered server-side and remain delegation targets, so users reach the social-media surface through the supervisor and the scheduled workflow.
 
 ### Social Media Strategist
 
