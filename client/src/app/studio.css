@@ -1989,6 +1989,10 @@ body.studio-sidebar-resizing * {
   background: var(--studio-danger);
 }
 
+.chat-tool-card.interrupted summary > span {
+  background: var(--studio-muted);
+}
+
 .chat-tool-card summary strong {
   font-size: 9px;
   font-weight: 500;

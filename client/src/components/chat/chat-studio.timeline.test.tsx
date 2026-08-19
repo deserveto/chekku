@@ -566,4 +566,131 @@ describe('ChatStudio chronological tool timeline', () => {
     expect(toolCards()).toHaveLength(1);
     expect(container.querySelector('.chat-typing')).toBeNull();
   });
+
+  it('shows the typing indicator only on the streaming turn, never on historical tool-only turns', async () => {
+    act(() => root?.unmount());
+    document.body.innerHTML = '';
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    listThreadMessages.mockResolvedValue([
+      {
+        id: 'stored-assistant',
+        role: 'assistant',
+        content: '',
+        createdAt: 2,
+        parts: [
+          {
+            type: 'tool',
+            id: 'stored-assistant-t0',
+            toolCallId: 'call-1',
+            toolName: 'browser_click',
+            status: 'complete',
+            result: { clicked: true },
+          },
+        ],
+      },
+    ]);
+    // Keep the run in flight so the typing indicator is visible.
+    observeRunEvents.mockImplementation(
+      () => new Promise(() => {}),
+    );
+
+    act(() => {
+      root!.render(
+        <ChatStudio
+          resourceId="local-user"
+          initialAgentId="main-agent"
+          initialThreadId={activeThreadId}
+        />,
+      );
+    });
+    await flushEffects();
+
+    await submitMessage('Run something else');
+
+    const articles = container.querySelectorAll(
+      'article.chat-message.assistant',
+    );
+    expect(articles).toHaveLength(2);
+
+    const historical = articles[0]!;
+    const streaming = articles[1]!;
+
+    expect(historical.querySelectorAll('.chat-typing')).toHaveLength(0);
+    expect(streaming.querySelectorAll('.chat-typing')).toHaveLength(1);
+    expect(
+      container.querySelectorAll('.chat-typing'),
+    ).toHaveLength(1);
+  });
+
+  it('appends the stream error detail to the assistant turn', async () => {
+    observeRunEvents.mockImplementation(
+      eventsOf([
+        {
+          type: 'tool-call',
+          payload: { toolCallId: 'call-1', toolName: 'browser_goto' },
+        },
+        { type: 'error', payload: { error: 'gateway stream failed' } },
+        { type: 'error', payload: {} },
+      ]),
+    );
+
+    await submitMessage('Open the site');
+
+    const article = container.querySelectorAll(
+      'article.chat-message.assistant',
+    )[0]!;
+    expect(article.className).toContain('error');
+    expect(article.textContent).toContain('gateway stream failed');
+    expect(container.querySelector('.chat-typing')).toBeNull();
+  });
+
+  it('falls back to fixed text when a cancelled run produced no text', async () => {
+    observeRunEvents.mockImplementation(
+      eventsOf([
+        {
+          type: 'tool-call',
+          payload: { toolCallId: 'call-1', toolName: 'browser_goto' },
+        },
+        { type: 'cancelled', payload: {} },
+      ]),
+    );
+
+    await submitMessage('Open the site');
+
+    const article = container.querySelectorAll(
+      'article.chat-message.assistant',
+    )[0]!;
+    expect(article.textContent).toContain('Generation was stopped.');
+    expect(article.className).not.toContain('error');
+    expect(container.querySelector('.chat-typing')).toBeNull();
+  });
+
+  it('truncates oversized tool output in the card display', async () => {
+    observeRunEvents.mockImplementation(
+      eventsOf([
+        {
+          type: 'tool-call',
+          payload: { toolCallId: 'call-1', toolName: 'browser_snapshot' },
+        },
+        {
+          type: 'tool-result',
+          payload: {
+            toolCallId: 'call-1',
+            result: { dump: 'x'.repeat(20_000) },
+          },
+        },
+        { type: 'complete', payload: {} },
+      ]),
+    );
+
+    await submitMessage('Snapshot');
+
+    const pre = toolCards()[0]?.querySelector('pre:last-of-type');
+    expect(pre).toBeDefined();
+    expect(pre!.textContent!.length).toBeLessThan(10_000);
+    expect(pre!.textContent).toContain('output truncated');
+  });
 });

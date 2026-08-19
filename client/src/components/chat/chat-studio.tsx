@@ -57,6 +57,7 @@ import {
 import {
   appendTextDelta,
   groupAssistantParts,
+  textFromAssistantParts,
   upsertToolPart,
 } from '@/lib/assistant-parts';
 import {
@@ -70,15 +71,37 @@ import {
   type ToolEventStatus,
 } from '@/lib/types';
 
-function safeDisplay(value: unknown): string {
-  if (value === undefined) return '';
-  if (typeof value === 'string') return value;
+const TOOL_DISPLAY_LIMIT = 8_192;
 
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
+function safeDisplay(value: unknown): string {
+  let text: string;
+  if (value === undefined) return '';
+  if (typeof value === 'string') {
+    text = value;
+  } else {
+    try {
+      text = JSON.stringify(value, null, 2);
+    } catch {
+      text = String(value);
+    }
   }
+
+  if (text.length > TOOL_DISPLAY_LIMIT) {
+    return `${text.slice(0, TOOL_DISPLAY_LIMIT)}\n… output truncated`;
+  }
+  return text;
+}
+
+function appendErrorDetail(message: ChatMessage, detail: string): ChatMessage {
+  return {
+    ...message,
+    content: message.content ? `${message.content}\n\n${detail}` : detail,
+    parts: appendTextDelta(
+      message.parts ?? [],
+      message.content ? `\n\n${detail}` : detail,
+    ),
+    error: true,
+  };
 }
 
 function messageFromMemory(
@@ -154,6 +177,11 @@ export function ChatStudio({
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [activeRun, setActiveRun] = useState<AgentRunSummary | null>(null);
+  // id of the assistant placeholder the active subscription streams into;
+  // gates per-message UI (typing indicator) to the streaming turn only.
+  const [activeAssistantId, setActiveAssistantId] = useState<string | null>(
+    null,
+  );
   const [subscriptionState, setSubscriptionState] = useState<
     'idle' | 'connecting' | 'connected'
   >('idle');
@@ -288,15 +316,7 @@ export function ChatStudio({
       setMessages((current) =>
         current.map((message) =>
           message.id === assistantId
-            ? {
-                ...message,
-                content: message.content ? `${message.content}\n\n${detail}` : detail,
-                parts: appendTextDelta(
-                  message.parts ?? [],
-                  message.content ? `\n\n${detail}` : detail,
-                ),
-                error: true,
-              }
+            ? appendErrorDetail(message, detail)
             : message,
         ),
       );
@@ -338,6 +358,7 @@ export function ChatStudio({
       const controller = new AbortController();
       subscriptionRef.current = controller;
       lastTerminalRef.current = null;
+      setActiveAssistantId(assistantId);
       setSubscriptionState('connecting');
 
       void observeRunEvents(runId, {
@@ -349,6 +370,7 @@ export function ChatStudio({
         subscriptionRef.current = null;
         setSubscriptionState('idle');
         setActiveRun(null);
+        setActiveAssistantId(null);
         finalizeTerminalMessage(assistantId);
         void refreshThreads();
         textareaRef.current?.focus();
@@ -481,6 +503,7 @@ export function ChatStudio({
       // thread: a stale activeRun would keep the composer disabled and
       // point thread B's Stop button at thread A's run.
       setActiveRun(null);
+      setActiveAssistantId(null);
       setSubscriptionState('idle');
       lastTerminalRef.current = null;
     };
@@ -679,15 +702,7 @@ export function ChatStudio({
       setMessages((current) =>
         current.map((message) =>
           message.id === assistantId
-            ? {
-                ...message,
-                error: true,
-                content: `Could not complete request. ${detail}`,
-                parts: appendTextDelta(
-                  message.parts ?? [],
-                  `Could not complete request. ${detail}`,
-                ),
-              }
+            ? appendErrorDetail(message, `Could not complete request. ${detail}`)
             : message,
         ),
       );
@@ -953,6 +968,9 @@ export function ChatStudio({
                   message.role === 'assistant' && message.parts?.length
                     ? groupAssistantParts(message.parts)
                     : null;
+                const copyText = message.parts?.length
+                  ? textFromAssistantParts(message.parts)
+                  : message.content;
 
                 return (
                   <article
@@ -1010,18 +1028,19 @@ export function ChatStudio({
                       <TypingIndicator />
                     )}
 
-                    {partGroups && !message.content && runActive && (
-                      <TypingIndicator />
-                    )}
+                    {partGroups &&
+                      !message.content &&
+                      runActive &&
+                      message.id === activeAssistantId && (
+                        <TypingIndicator />
+                      )}
 
-                    {message.role === 'assistant' && message.content && (
+                    {message.role === 'assistant' && copyText && (
                       <div className="chat-message-actions">
                         <button
                           type="button"
                           onClick={() =>
-                            void navigator.clipboard.writeText(
-                              message.content,
-                            )
+                            void navigator.clipboard.writeText(copyText)
                           }
                         >
                           Copy

@@ -41,7 +41,8 @@ export type ToolEventStatus =
   | 'complete'
   | 'approval'
   | 'declined'
-  | 'error';
+  | 'error'
+  | 'interrupted';
 
 export type TextAssistantPart = {
   type: 'text';

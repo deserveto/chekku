@@ -31,7 +31,6 @@ import {
   listThreadMessages,
   removeThread,
   renameThread,
-  threadTitleFromPrompt,
 } from './memory-threads';
 
 describe('agent-scoped memory threads', () => {
@@ -431,11 +430,5 @@ describe('agent-scoped memory threads', () => {
         part.type === 'tool' ? part.toolName : 'text',
       ),
     ).toEqual(['browser_goto', 'text', 'browser_snapshot', 'text']);
-  });
-
-  it('derives the sidebar title from the first prompt', () => {
-    expect(threadTitleFromPrompt('Short prompt')).toBe('Short prompt');
-    const long = 'a'.repeat(60);
-    expect(threadTitleFromPrompt(long)).toBe(`${'a'.repeat(49)}…`);
   });
 });

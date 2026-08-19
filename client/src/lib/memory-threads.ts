@@ -27,13 +27,6 @@ export interface StudioMemoryMessage {
   createdAt: number;
 }
 
-/** Sidebar title for a new thread, derived from the first prompt. */
-export function threadTitleFromPrompt(prompt: string): string {
-  return prompt.length > 52
-    ? `${prompt.slice(0, 49).trim()}…`
-    : prompt;
-}
-
 function toTimestamp(value: unknown, fallback = Date.now()): number {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value === 'string') {

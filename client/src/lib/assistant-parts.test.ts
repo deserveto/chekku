@@ -5,6 +5,7 @@ import {
   groupAssistantParts,
   mergeAdjacentAssistantTurns,
   restoreAssistantParts,
+  textFromAssistantParts,
   upsertToolPart,
 } from './assistant-parts';
 import type { AssistantPart } from './types';
@@ -290,6 +291,14 @@ describe('restoreAssistantParts', () => {
               toolName: 't4',
             },
           },
+          {
+            type: 'tool-invocation',
+            toolInvocation: {
+              state: 'streams-once-then-crashed',
+              toolCallId: 'e',
+              toolName: 't5',
+            },
+          },
         ],
       },
       'msg-2',
@@ -297,9 +306,10 @@ describe('restoreAssistantParts', () => {
 
     expect(restored!.parts.map((part) => part.status)).toEqual([
       'complete',
-      'running',
+      'interrupted',
       'error',
       'approval',
+      'interrupted',
     ]);
     expect(restored!.parts[2]).toMatchObject({ result: 'selector not found' });
     expect(restored!.text).toBe('');
@@ -348,6 +358,12 @@ describe('restoreAssistantParts', () => {
     );
 
     expect(restored!.text).toBe('Text stored only on the convenience field.');
+    // The fallback must be visible in the timeline, not only copyable.
+    expect(restored!.parts).toHaveLength(2);
+    expect(restored!.parts[1]).toMatchObject({
+      type: 'text',
+      content: 'Text stored only on the convenience field.',
+    });
   });
 
   it('ignores tool invocations without a usable toolCallId', () => {
@@ -379,6 +395,24 @@ describe('restoreAssistantParts', () => {
     expect(
       restoreAssistantParts({ format: 2, parts: 'not-an-array' }, 'm'),
     ).toBeUndefined();
+  });
+});
+
+describe('textFromAssistantParts', () => {
+  it('joins text parts and skips tool parts', () => {
+    const parts: AssistantPart[] = [
+      textPart('First block.'),
+      toolPart('a'),
+      textPart('Second block.'),
+    ];
+    expect(textFromAssistantParts(parts)).toBe(
+      'First block.\nSecond block.',
+    );
+  });
+
+  it('returns an empty string when no text parts exist', () => {
+    expect(textFromAssistantParts([toolPart('a'), toolPart('b')])).toBe('');
+    expect(textFromAssistantParts([])).toBe('');
   });
 });
 

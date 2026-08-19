@@ -147,7 +147,7 @@ function restoredToolStatus(invocation: Record<string, unknown>): ToolEventStatu
     case 'declined':
       return 'declined';
     default:
-      return 'running';
+      return 'interrupted';
   }
 }
 
@@ -189,7 +189,7 @@ function restoredToolPart(
  * (`content: { format: 2, parts: [...] }`). Only `text` and
  * `tool-invocation` parts are kept — reasoning is never surfaced and
  * step/source/file/data parts have no timeline representation yet. Returns
- * undefined for shapes that are not V2 message content so legacy formats can
+ * undefined when the payload carries no `parts` array so legacy formats can
  * fall back to plain text extraction.
  */
 export function restoreAssistantParts(
@@ -225,9 +225,23 @@ export function restoreAssistantParts(
   }
 
   let text = texts.join('\n');
-  if (!text && typeof record.content === 'string') text = record.content;
+  if (!text && typeof record.content === 'string' && record.content) {
+    text = record.content;
+    parts.push({
+      type: 'text',
+      id: `${idPrefix}-x${counter++}`,
+      content: record.content,
+    });
+  }
 
   return { text, parts };
+}
+
+export function textFromAssistantParts(parts: AssistantPart[]): string {
+  return parts
+    .map((part) => (part.type === 'text' ? part.content : ''))
+    .filter(Boolean)
+    .join('\n');
 }
 
 export type MergeableTurnMessage = {
