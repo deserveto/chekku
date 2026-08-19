@@ -58,6 +58,37 @@ it('renders report links as safe new-tab relative links', () => {
   expect(markup).toContain('>report</a>');
 });
 
+it('renders markdown images for http(s), same-origin, and data urls', () => {
+  const markup = renderToStaticMarkup(createElement(MarkdownMessage, {
+    content: '![alt](https://example.com/img.png)',
+  }));
+
+  expect(markup).toContain('<img');
+  expect(markup).toContain('src="https://example.com/img.png"');
+  expect(markup).toContain('alt="alt"');
+  expect(markup.toLowerCase()).toContain('referrerpolicy="no-referrer"');
+  expect(markup).toContain('loading="lazy"');
+});
+
+it('renders same-origin image urls (storage visual route)', () => {
+  const markup = renderToStaticMarkup(createElement(MarkdownMessage, {
+    content: '![visual](/api/storage/social-posts/smp_x/visuals/sva_1)',
+  }));
+
+  expect(markup).toContain(
+    'src="/api/storage/social-posts/smp_x/visuals/sva_1"',
+  );
+});
+
+it('drops markdown images with disallowed url schemes', () => {
+  const markup = renderToStaticMarkup(createElement(MarkdownMessage, {
+    content: '![bad](javascript:alert(1))',
+  }));
+
+  expect(markup).not.toContain('<img');
+  expect(markup).not.toContain('javascript:');
+});
+
 it('renders report tables in a labeled keyboard-scrollable region', () => {
   const content = [
     '| Report | Created | Risk | Status |',

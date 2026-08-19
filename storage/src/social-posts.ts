@@ -281,7 +281,7 @@ function parseSocialPostMetadata(value: unknown): SocialPostMetadata | undefined
  * `agent/src/mastra/social-content/canonical-unit.ts` → `wrapPostMarkdown`:
  *
  *     <!-- canonical-unit -->
- *     <canonical unit markdown — 7-brick platform-agnostic intermediate>
+ *     <canonical unit markdown — 8 Blocks platform-agnostic intermediate>
  *     <!-- /canonical-unit -->
  *     <!-- repurposed-caption -->
  *     <final platform-specific caption>

@@ -31,7 +31,7 @@ const FULL_UNIT: CanonicalContentUnit = {
     'Stop booking 30-min meetings.\n\nMost can be a 2-min async update. Our team saved 12 hours/week with one rule: no agenda, no meeting.\n\nWhat is your meeting default?',
   mediumFormBrick:
     'Meeting fatigue is real — but the fix is not fewer meetings, it is shorter ones with clearer goals.\n\nWe cut default holds to 15 minutes and required a one-sentence decision goal in every invite. The result: 12 hours/week reclaimed, and decisions actually get made.',
-  visualScriptBrick:
+  imageBrick:
     'Panel 1: Calendar full of 30-min blocks (grey).\nPanel 2: One invite with a one-line goal highlighted.\nPanel 3: The same calendar, mostly empty — reclaimed time.',
   callToAction: 'Reply with the one meeting you cancelled this week and what you did with the hour.',
 };
@@ -45,7 +45,7 @@ describe('CANONICAL_UNIT_TEMPLATE', () => {
       'CORE POINTS',
       'SHORT-FORM BRICK',
       'MEDIUM-FORM BRICK',
-      'VISUAL / VIDEO SCRIPT BRICK',
+      'IMAGE BRICK',
       'CALL TO ACTION / ENGAGEMENT',
     ];
     for (const header of requiredHeaders) {
@@ -59,42 +59,25 @@ describe('CANONICAL_UNIT_TEMPLATE', () => {
     expect(CANONICAL_UNIT_TEMPLATE).toContain('Data/Impact');
   });
 
-  it('instructs the visual script brick as a platform-agnostic sequence of visual concepts', () => {
-    expect(CANONICAL_UNIT_TEMPLATE).toContain('sequence of reusable visual concepts');
-    expect(CANONICAL_UNIT_TEMPLATE).toContain('Do NOT label items "Panel 1');
-    expect(CANONICAL_UNIT_TEMPLATE).toContain('one concept can carry it');
-    expect(CANONICAL_UNIT_TEMPLATE).toContain('Platform-agnostic visual narrative');
-    expect(CANONICAL_UNIT_TEMPLATE).toContain('Ground every visual in the source');
+  it('instructs the image brick as a designed 1:1 poster/infographic (not a photo, not video)', () => {
+    expect(CANONICAL_UNIT_TEMPLATE).toContain('IMAGE BRICK');
+    expect(CANONICAL_UNIT_TEMPLATE).toContain('designed poster/infographic');
+    expect(CANONICAL_UNIT_TEMPLATE).toContain('NOT a bare photograph');
+    expect(CANONICAL_UNIT_TEMPLATE).toContain('NOT a video script');
+    expect(CANONICAL_UNIT_TEMPLATE).toContain('one or more panels inside a single 1:1 image');
+    expect(CANONICAL_UNIT_TEMPLATE).toContain('composition: framing, perspective');
+    expect(CANONICAL_UNIT_TEMPLATE).toContain('ACTUAL TEXT drawn from this Canonical Content Unit');
+    expect(CANONICAL_UNIT_TEMPLATE).toContain('roughly max ~12 words');
+    expect(CANONICAL_UNIT_TEMPLATE).toContain('Ground every panel in the source');
     expect(CANONICAL_UNIT_TEMPLATE).toContain('Do NOT include camera direction');
     expect(CANONICAL_UNIT_TEMPLATE).toContain('voice-over');
-    expect(CANONICAL_UNIT_TEMPLATE).toContain('transition effects');
     expect(CANONICAL_UNIT_TEMPLATE).toContain('"carousel", "slide", or "reel"');
-    expect(CANONICAL_UNIT_TEMPLATE).not.toContain('Per panel:');
   });
 
   it('demands a descriptive Purpose instead of generic labels', () => {
     expect(CANONICAL_UNIT_TEMPLATE).toContain('Purpose');
-    expect(CANONICAL_UNIT_TEMPLATE).toContain('generic labels');
-    expect(CANONICAL_UNIT_TEMPLATE).toContain('Introduction');
-    expect(CANONICAL_UNIT_TEMPLATE).toContain('Highlight the healthcare accessibility problem');
-  });
-
-  it('prioritizes concrete scenes over symbolic graphics', () => {
-    expect(CANONICAL_UNIT_TEMPLATE).toContain('prioritize concrete scenes');
-    expect(CANONICAL_UNIT_TEMPLATE).toContain('logos, maps, icons');
-    expect(CANONICAL_UNIT_TEMPLATE).toContain("patient's home");
-  });
-
-  it('bounds the Overlay to a short phrase, not a sentence', () => {
-    expect(CANONICAL_UNIT_TEMPLATE).toContain('3–8 words');
-    expect(CANONICAL_UNIT_TEMPLATE).toContain('Never a full sentence');
-    expect(CANONICAL_UNIT_TEMPLATE).toContain('Home Care Jemput Bola');
-  });
-
-  it('arranges the concepts as a coherent narrative', () => {
-    expect(CANONICAL_UNIT_TEMPLATE).toContain('coherent story');
-    expect(CANONICAL_UNIT_TEMPLATE).toContain('Problem');
-    expect(CANONICAL_UNIT_TEMPLATE).toContain('future implication');
+    expect(CANONICAL_UNIT_TEMPLATE).toContain('communication objective');
+    expect(CANONICAL_UNIT_TEMPLATE).toContain('WHY this panel exists');
   });
 
   it('keeps the medium-form brick factual and hedged', () => {
@@ -114,7 +97,7 @@ describe('renderCanonicalUnit', () => {
       'CORE POINTS',
       'SHORT-FORM BRICK',
       'MEDIUM-FORM BRICK',
-      'VISUAL / VIDEO SCRIPT BRICK',
+      'IMAGE BRICK',
       'CALL TO ACTION / ENGAGEMENT',
     ];
     let lastIdx = -1;
@@ -174,7 +157,7 @@ describe('parseCanonicalUnit', () => {
     expect(parsed!.corePoints).toEqual(FULL_UNIT.corePoints);
     expect(parsed!.shortFormBrick).toBe(FULL_UNIT.shortFormBrick);
     expect(parsed!.mediumFormBrick).toBe(FULL_UNIT.mediumFormBrick);
-    expect(parsed!.visualScriptBrick).toBe(FULL_UNIT.visualScriptBrick);
+    expect(parsed!.imageBrick).toBe(FULL_UNIT.imageBrick);
     expect(parsed!.callToAction).toBe(FULL_UNIT.callToAction);
   });
 
@@ -226,8 +209,25 @@ describe('parseCanonicalUnit', () => {
     expect(parsed).toBeDefined();
     expect(parsed!.shortFormBrick).toBe('');
     expect(parsed!.mediumFormBrick).toBe('');
-    expect(parsed!.visualScriptBrick).toBe('');
+    expect(parsed!.imageBrick).toBe('');
     expect(parsed!.callToAction).toBe('');
+  });
+
+  it('reads the legacy VISUAL / VIDEO SCRIPT BRICK header as the image brick (backward compat)', () => {
+    // Posts written before the image-only refactor stored the visual/video
+    // script under the old header. The parser must still recover it as the
+    // imageBrick so legacy post.md files keep parsing.
+    const md = [
+      '[TOPIC]',
+      'topic',
+      '[THESIS]',
+      'thesis',
+      'VISUAL / VIDEO SCRIPT BRICK',
+      'legacy visual content',
+    ].join('\n');
+    const parsed = parseCanonicalUnit(md);
+    expect(parsed).toBeDefined();
+    expect(parsed!.imageBrick).toBe('legacy visual content');
   });
 });
 

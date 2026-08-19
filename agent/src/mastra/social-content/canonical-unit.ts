@@ -1,6 +1,6 @@
 /**
- * Canonical Content Unit — the platform-agnostic output contract of the
- * Social Media Content Writer.
+ * Canonical Content Unit — 8 Blocks — the platform-agnostic output contract of
+ * the Social Media Content Writer.
  *
  * Per `PROMPT.md` (Notulensi Meeting Week 4 N4_5, 24 Juli 2026), the Content
  * Writer's primary output is no longer a platform-specific caption. It is a
@@ -8,7 +8,7 @@
  * repurposed to many platforms (Instagram, LinkedIn, X, TikTok, Medium) via
  * downstream prompt engineering.
  *
- * Anatomy (matches PROMPT.md:121-146):
+ * Anatomy (8 Blocks — matches PROMPT.md:121-146):
  *
  *   [TOPIC]                         — the subject, one line
  *   [THESIS]                        — the angle / point of view, one paragraph
@@ -16,7 +16,7 @@
  *   CORE POINTS                     — 3-5 bullets, the substance
  *   SHORT-FORM BRICK                — X / TikTok caption (≤280 chars body)
  *   MEDIUM-FORM BRICK               — LinkedIn / Medium article body
- *   VISUAL / VIDEO SCRIPT BRICK     — platform-agnostic sequence of reusable visual concepts
+ *   IMAGE BRICK                     — platform-agnostic 1:1 poster/infographic composition (text + graphic panels)
  *   CALL TO ACTION / ENGAGEMENT     — one closing CTA
  *
  * Storage (per AGENTS.md invariant): `post.md` in Garage stores the rendered
@@ -39,7 +39,7 @@ export interface CanonicalContentUnit {
   corePoints: string[];
   shortFormBrick: string;
   mediumFormBrick: string;
-  visualScriptBrick: string;
+  imageBrick: string;
   callToAction: string;
 }
 
@@ -91,12 +91,17 @@ SHORT-FORM BRICK
 MEDIUM-FORM BRICK
 <LinkedIn / Medium post body. Professional voice, short paragraphs, one clear idea. Keep it factual: do not state guaranteed impact or outcomes unless the source explicitly supports them — prefer hedged wording ("diharapkan…", "berpotensi…", "ditujukan untuk…", "menjadi langkah menuju…") over definitive claims.>
 
-VISUAL / VIDEO SCRIPT BRICK
-<Platform-agnostic visual narrative — a sequence of reusable visual concepts, NOT a finalized platform-specific layout. Do NOT label items "Panel 1 / Panel 2 / …"; write a flowing sequence of visual concepts arranged as a coherent story: Problem (if applicable) → key event or innovation → impact or recognition → future implication (only if supported by the content). Use only the minimum number of concepts needed (simple news ≈ 3, medium topic ≈ 4, complex educational topic ≈ 5+ only when necessary; fewer or more allowed when justified); never split one idea across multiple concepts when one concept can carry it. Each concept contains exactly three elements and nothing else — Purpose, Visual, Overlay:
-- Purpose: the communication objective — WHY this visual exists, not its position in the sequence. Never use generic labels such as "Introduction", "Core News", "Future Outlook", or "Closing". Write descriptive aims, e.g. "Highlight the healthcare accessibility problem", "Introduce the Home Care innovation", "Show government recognition", "Explain the national impact", "Present the future direction".
-- Visual: prioritize concrete scenes depicting the real event, action, or situation (e.g. healthcare workers visiting a patient's home, a patient receiving treatment at home, medical staff interacting with families, community healthcare activities). Do NOT default to symbolic assets — logos, maps, icons, abstract graphics — unless they are truly the central subject of the news; they may support a scene but must not replace it when a real-world scene communicates the message better.
-- Overlay: short and memorable, 3–8 words (max ~10). Never a full sentence. Example: "Home Care Jemput Bola", "Diapresiasi Kemenkes RI", "Menuju Model Nasional".
-Ground every visual in the source / Core Points — never invent speculative or inferred imagery (if the source only mentions international healthcare cooperation, draw "illustration of international healthcare collaboration", not "futuristic telemedicine UI"). Do NOT include camera direction, scene movement, animation, transition effects, voice-over, audio cues, or editing instructions, and do NOT describe the concepts using platform-specific presentation wording such as "carousel", "slide", or "reel" — downstream platform-specific agents decide how many cards are needed and how they are presented.>
+IMAGE BRICK
+<Platform-agnostic 1:1 image composition — a designed poster/infographic (NOT a bare photograph and NOT a video script). Arrange the content as one or more panels inside a single 1:1 image; use only as many panels as the content needs. Each panel contains exactly:
+- Purpose: the communication objective — WHY this panel exists.
+- hero object: the central subject.
+- environment: setting, scale.
+- emotional goal: mood, tone.
+- composition: framing, perspective.
+- supporting elements: decorative/material context.
+- negative constraints: what must NOT be included.
+- Overlay: the ACTUAL TEXT drawn from this Canonical Content Unit that appears on the panel (keep it concise, roughly max ~12 words).
+Ground every panel in the source / Core Points — never invent speculative imagery or claims. Do NOT include camera direction, scene movement, animation, transition effects, voice-over, audio cues, or any video/editing instructions — this is a static image only. Do NOT describe the concepts using platform-specific presentation wording such as "carousel", "slide", or "reel".>
 
 CALL TO ACTION / ENGAGEMENT
 <one line — what the reader should do, think, or reply next>`;
@@ -139,8 +144,8 @@ export function renderCanonicalUnit(unit: CanonicalContentUnit): string {
   lines.push(unit.mediumFormBrick.trim());
   lines.push('');
 
-  lines.push('VISUAL / VIDEO SCRIPT BRICK');
-  lines.push(unit.visualScriptBrick.trim());
+  lines.push('IMAGE BRICK');
+  lines.push(unit.imageBrick.trim());
   lines.push('');
 
   lines.push('CALL TO ACTION / ENGAGEMENT');
@@ -186,7 +191,13 @@ export function parseCanonicalUnit(markdown: string): CanonicalContentUnit | und
     corePoints,
     shortFormBrick: extractSection(markdown, 'SHORT-FORM BRICK') ?? '',
     mediumFormBrick: extractSection(markdown, 'MEDIUM-FORM BRICK') ?? '',
-    visualScriptBrick: extractSection(markdown, 'VISUAL / VIDEO SCRIPT BRICK') ?? '',
+    // New canonical contract emits IMAGE BRICK. Fall back to the legacy
+    // VISUAL / VIDEO SCRIPT BRICK header so post.md files written before the
+    // image-only refactor still parse (the renderer emits the new header).
+    imageBrick:
+      extractSection(markdown, 'IMAGE BRICK')
+      ?? extractSection(markdown, 'VISUAL / VIDEO SCRIPT BRICK')
+      ?? '',
     callToAction: extractSection(markdown, 'CALL TO ACTION / ENGAGEMENT') ?? '',
   };
 }
@@ -259,6 +270,9 @@ const SECTION_HEADERS: readonly string[] = [
   'CORE POINTS',
   'SHORT-FORM BRICK',
   'MEDIUM-FORM BRICK',
+  'IMAGE BRICK',
+  // Legacy header kept so extractSection terminates correctly when parsing a
+  // post.md written before the image-only refactor.
   'VISUAL / VIDEO SCRIPT BRICK',
   'CALL TO ACTION / ENGAGEMENT',
 ];

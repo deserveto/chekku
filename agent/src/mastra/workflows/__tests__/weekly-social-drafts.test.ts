@@ -89,7 +89,7 @@ function makeCanonicalUnit(label: string): string {
     'MEDIUM-FORM BRICK',
     'Medium-form body.',
     '',
-    'VISUAL / VIDEO SCRIPT BRICK',
+    'IMAGE BRICK',
     'Visual concept one.',
     '',
     'CALL TO ACTION / ENGAGEMENT',
@@ -363,7 +363,7 @@ describe('buildCanonicalPrompt', () => {
     expect(prompt).toContain('Week of: 2026-11-23');
   });
 
-  it('embeds the 7-brick canonical template (TOPIC, THESIS, HOOKS, CORE POINTS, 3 bricks, CTA)', () => {
+  it('embeds the 8-block canonical template (TOPIC, THESIS, HOOKS, CORE POINTS, 3 bricks, CTA)', () => {
     const prompt = buildCanonicalPrompt(CANONICAL_TOPIC, '2026-11-23');
     expect(prompt).toContain('[TOPIC]');
     expect(prompt).toContain('[THESIS]');
@@ -374,7 +374,7 @@ describe('buildCanonicalPrompt', () => {
     expect(prompt).toContain('CORE POINTS');
     expect(prompt).toContain('SHORT-FORM BRICK');
     expect(prompt).toContain('MEDIUM-FORM BRICK');
-    expect(prompt).toContain('VISUAL / VIDEO SCRIPT BRICK');
+    expect(prompt).toContain('IMAGE BRICK');
     expect(prompt).toContain('CALL TO ACTION / ENGAGEMENT');
   });
 
@@ -395,15 +395,13 @@ describe('buildCanonicalPrompt', () => {
     expect(prompt).toContain('[source] placeholder');
   });
 
-  it('inherits the platform-agnostic visual-concept contract from the template', () => {
+  it('inherits the image-brick (designed poster/infographic) contract from the template', () => {
     const prompt = buildCanonicalPrompt(CANONICAL_TOPIC, '2026-11-23');
-    expect(prompt).toContain('sequence of reusable visual concepts');
-    expect(prompt).toContain('Do NOT label items "Panel 1');
-    expect(prompt).toContain('platform-agnostic');
+    expect(prompt).toContain('IMAGE BRICK');
+    expect(prompt).toContain('designed poster/infographic');
+    expect(prompt).toContain('NOT a bare photograph');
+    expect(prompt).toContain('ACTUAL TEXT drawn from this Canonical Content Unit');
     expect(prompt).toContain('Keep it factual');
-    expect(prompt).toContain('prioritize concrete scenes');
-    expect(prompt).toContain('3–8 words');
-    expect(prompt).toContain('coherent story');
   });
 });
 
@@ -431,7 +429,7 @@ describe('buildRepurposePrompt', () => {
     'MEDIUM-FORM BRICK',
     'Meeting fatigue is real. Cut to 15-min with a goal.',
     '',
-    'VISUAL / VIDEO SCRIPT BRICK',
+    'IMAGE BRICK',
     'Panel 1: full calendar. Panel 2: empty calendar.',
     '',
     'CALL TO ACTION / ENGAGEMENT',

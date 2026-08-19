@@ -156,14 +156,14 @@ describe('agent-scoped memory threads', () => {
     );
     await expect(
       listThreadMessages('main-agent', 'main-agent-local-user-a', 'local-user'),
-    ).resolves.toEqual([]);
+    ).resolves.toEqual({ messages: [], toolEvents: [] });
   });
 
   it('returns an empty list when the upstream reports not-found via message', async () => {
     threadListMessages.mockRejectedValueOnce(new Error('Thread not found'));
     await expect(
       listThreadMessages('main-agent', 'main-agent-local-user-a', 'local-user'),
-    ).resolves.toEqual([]);
+    ).resolves.toEqual({ messages: [], toolEvents: [] });
   });
 
   it('re-throws an extended status-less message-read error', async () => {
@@ -182,5 +182,377 @@ describe('agent-scoped memory threads', () => {
     await expect(
       listThreadMessages('main-agent', 'main-agent-local-user-a', 'local-user'),
     ).rejects.toThrow('Server error');
+  });
+
+  it('restores tool-call and tool-result parts as tool events', async () => {
+    threadListMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'msg-user',
+          role: 'user',
+          content: [{ type: 'text', text: 'draft a post' }],
+          createdAt: '2024-01-01T00:00:00.000Z',
+        },
+        {
+          id: 'msg-asst',
+          role: 'assistant',
+          content: [
+            { type: 'text', text: 'Delegating…' },
+            {
+              type: 'tool-call',
+              toolCallId: 'call_1',
+              toolName: 'search_web',
+              input: { query: 'local-first db' },
+            },
+          ],
+          createdAt: '2024-01-01T00:00:01.000Z',
+        },
+        {
+          id: 'msg-tool',
+          role: 'tool',
+          content: [
+            {
+              type: 'tool-result',
+              toolCallId: 'call_1',
+              toolName: 'search_web',
+              output: { type: 'json', value: { results: ['a', 'b'] } },
+            },
+          ],
+          createdAt: '2024-01-01T00:00:02.000Z',
+        },
+      ],
+    });
+
+    const result = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    expect(result.messages.map((m) => m.id)).toEqual([
+      'msg-user',
+      'msg-asst',
+    ]);
+    expect(result.toolEvents).toEqual([
+      expect.objectContaining({
+        id: 'call_1',
+        toolCallId: 'call_1',
+        messageId: 'msg-asst',
+        toolName: 'search_web',
+        status: 'complete',
+        args: { query: 'local-first db' },
+        result: { results: ['a', 'b'] },
+      }),
+    ]);
+  });
+
+  it('keeps an assistant message whose only body is a tool call', async () => {
+    threadListMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'msg-asst',
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool-call',
+              toolCallId: 'call_1',
+              toolName: 'get_current_time',
+              input: {},
+            },
+          ],
+          createdAt: '2024-01-01T00:00:00.000Z',
+        },
+      ],
+    });
+
+    const result = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]!.content).toBe('');
+    expect(result.toolEvents[0]!.messageId).toBe('msg-asst');
+  });
+
+  it('marks restored tool events as error when the result is an error variant', async () => {
+    threadListMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'msg-asst',
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool-call',
+              toolCallId: 'call_1',
+              toolName: 'generate_image',
+              input: { prompt: 'x' },
+            },
+          ],
+          createdAt: '2024-01-01T00:00:00.000Z',
+        },
+        {
+          id: 'msg-tool',
+          role: 'tool',
+          content: [
+            {
+              type: 'tool-result',
+              toolCallId: 'call_1',
+              toolName: 'generate_image',
+              output: { type: 'error-text', value: 'Not configured' },
+            },
+          ],
+          createdAt: '2024-01-01T00:00:01.000Z',
+        },
+      ],
+    });
+
+    const result = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    expect(result.toolEvents[0]).toEqual(
+      expect.objectContaining({
+        status: 'error',
+        result: 'Not configured',
+      }),
+    );
+  });
+
+  // Mastra 1.50 persists messages in the V2 shape:
+  // `content: { format: 2, parts: [...] }` with tool parts stored as a single
+  // `tool-invocation` whose data is nested under `toolInvocation`.
+  describe('V2 tool-invocation restore', () => {
+    it('restores a sub-agent delegation invocation with nested tool results', async () => {
+      threadListMessages.mockResolvedValueOnce({
+        messages: [
+          {
+            id: 'msg-user',
+            role: 'user',
+            content: { format: 2, parts: [{ type: 'text', text: 'Cari berita' }] },
+            createdAt: '2024-01-01T00:00:00.000Z',
+          },
+          {
+            id: 'msg-asst',
+            role: 'assistant',
+            content: {
+              format: 2,
+              content: 'Hasil riset…',
+              parts: [
+                { type: 'step-start' },
+                { type: 'text', text: 'Hasil riset…' },
+                {
+                  type: 'tool-invocation',
+                  toolInvocation: {
+                    toolCallId: 'call_strategist',
+                    toolName: 'agent-socialMediaStrategistAgent',
+                    args: { prompt: 'Cari berita teknologi terbaru' },
+                    state: 'result',
+                    result: {
+                      text: 'Content pillar: TECHNOLOGY & AI TRENDS',
+                      subAgentThreadId: 'thread-strategist',
+                      subAgentResourceId: 'user-socialMediaStrategistAgent',
+                      subAgentToolResults: [
+                        {
+                          toolName: 'search_web',
+                          toolCallId: 'chatcmpl-tool-95a456ca49c13702',
+                          result: {
+                            query: 'berita teknologi AI',
+                            results: [{ url: 'https://mediaindonesia.com/x', title: 'AI' }],
+                          },
+                        },
+                      ],
+                    },
+                  },
+                },
+              ],
+            },
+            createdAt: '2024-01-01T00:00:01.000Z',
+          },
+        ],
+      });
+
+      const result = await listThreadMessages(
+        'main-agent',
+        'main-agent-local-user-a',
+        'local-user',
+      );
+
+      expect(result.messages.map((m) => m.id)).toEqual([
+        'msg-user',
+        'msg-asst',
+      ]);
+      expect(result.messages[1]!.content).toBe('Hasil riset…');
+      expect(result.toolEvents).toEqual([
+        expect.objectContaining({
+          id: 'call_strategist',
+          toolCallId: 'call_strategist',
+          messageId: 'msg-asst',
+          toolName: 'agent-socialMediaStrategistAgent',
+          status: 'complete',
+          args: { prompt: 'Cari berita teknologi terbaru' },
+          result: expect.objectContaining({
+            subAgentToolResults: [
+              expect.objectContaining({
+                toolName: 'search_web',
+                result: expect.objectContaining({
+                  results: [{ url: 'https://mediaindonesia.com/x', title: 'AI' }],
+                }),
+              }),
+            ],
+          }),
+        }),
+      ]);
+    });
+
+    it('keeps a V2 tool-only assistant message and preserves the nested image URL for the chat preview', async () => {
+      threadListMessages.mockResolvedValueOnce({
+        messages: [
+          {
+            id: 'msg-asst',
+            role: 'assistant',
+            content: {
+              format: 2,
+              parts: [
+                { type: 'step-start' },
+                {
+                  type: 'tool-invocation',
+                  toolInvocation: {
+                    toolCallId: 'call_visual',
+                    toolName: 'agent-visualContentAgent',
+                    args: { prompt: 'Use preview_image (no postId)' },
+                    state: 'result',
+                    result: {
+                      text: 'Gambar preview sudah jadi',
+                      subAgentToolResults: [
+                        {
+                          toolName: 'previewImageTool',
+                          toolCallId: 'chatcmpl-tool-a0f3165fc6a561e2',
+                          result: {
+                            previewId: 'prev_20260815121042_1d47453e',
+                            imageUrl:
+                              '/api/storage/chat-previews/prev_20260815121042_1d47453e.png',
+                            pillar: 'TECHNOLOGY',
+                          },
+                        },
+                      ],
+                    },
+                  },
+                },
+              ],
+            },
+            createdAt: '2024-01-01T00:00:00.000Z',
+          },
+        ],
+      });
+
+      const result = await listThreadMessages(
+        'main-agent',
+        'main-agent-local-user-a',
+        'local-user',
+      );
+
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0]!.content).toBe('');
+      expect(result.toolEvents).toHaveLength(1);
+      expect(result.toolEvents[0]).toEqual(
+        expect.objectContaining({
+          messageId: 'msg-asst',
+          toolName: 'agent-visualContentAgent',
+          status: 'complete',
+        }),
+      );
+      const nested =
+        (result.toolEvents[0]!.result as {
+          subAgentToolResults?: Array<{ result?: { imageUrl?: string } }>;
+        })?.subAgentToolResults ?? [];
+      expect(nested[0]?.result?.imageUrl).toBe(
+        '/api/storage/chat-previews/prev_20260815121042_1d47453e.png',
+      );
+    });
+
+    it('maps a V2 output-error invocation to an error tool event', async () => {
+      threadListMessages.mockResolvedValueOnce({
+        messages: [
+          {
+            id: 'msg-asst',
+            role: 'assistant',
+            content: {
+              format: 2,
+              parts: [
+                {
+                  type: 'tool-invocation',
+                  toolInvocation: {
+                    toolCallId: 'call_err',
+                    toolName: 'generate_image',
+                    args: { prompt: 'x' },
+                    state: 'output-error',
+                    errorText: 'Image generation is not configured',
+                  },
+                },
+              ],
+            },
+            createdAt: '2024-01-01T00:00:00.000Z',
+          },
+        ],
+      });
+
+      const result = await listThreadMessages(
+        'main-agent',
+        'main-agent-local-user-a',
+        'local-user',
+      );
+
+      expect(result.toolEvents[0]).toEqual(
+        expect.objectContaining({
+          toolCallId: 'call_err',
+          status: 'error',
+          result: 'Image generation is not configured',
+        }),
+      );
+    });
+
+    it('marks a still-running V2 invocation as running', async () => {
+      threadListMessages.mockResolvedValueOnce({
+        messages: [
+          {
+            id: 'msg-asst',
+            role: 'assistant',
+            content: {
+              format: 2,
+              parts: [
+                {
+                  type: 'tool-invocation',
+                  toolInvocation: {
+                    toolCallId: 'call_pending',
+                    toolName: 'search_web',
+                    args: { query: 'ai' },
+                    state: 'call',
+                  },
+                },
+              ],
+            },
+            createdAt: '2024-01-01T00:00:00.000Z',
+          },
+        ],
+      });
+
+      const result = await listThreadMessages(
+        'main-agent',
+        'main-agent-local-user-a',
+        'local-user',
+      );
+
+      expect(result.toolEvents[0]).toEqual(
+        expect.objectContaining({
+          toolCallId: 'call_pending',
+          status: 'running',
+        }),
+      );
+      expect(result.toolEvents[0]!.result).toBeUndefined();
+    });
   });
 });
