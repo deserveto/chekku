@@ -9,12 +9,21 @@ export interface StudioThread {
   updatedAt: number;
 }
 
+export interface StudioMemoryAttachment {
+  mimeType: string;
+  dataUrl: string;
+  filename?: string;
+}
+
 export interface StudioMemoryMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   createdAt: number;
+  attachments?: StudioMemoryAttachment[];
 }
+
+const MAX_RESTORED_ATTACHMENTS = 24;
 
 function toTimestamp(value: unknown, fallback = Date.now()): number {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -47,6 +56,7 @@ function textFromContent(content: unknown): string {
     const record = content as Record<string, unknown>;
     if (typeof record.text === 'string') return record.text;
     if (typeof record.content === 'string') return record.content;
+    if (Array.isArray(record.parts)) return textFromContent(record.parts);
   }
 
   return '';
@@ -82,6 +92,34 @@ function normalizeThread(
   };
 }
 
+function attachmentsFromContent(content: unknown): StudioMemoryAttachment[] {
+  const parts = Array.isArray(content)
+    ? content
+    : content && typeof content === 'object' && Array.isArray((content as Record<string, unknown>).parts)
+      ? ((content as Record<string, unknown>).parts as unknown[])
+      : [];
+
+  const attachments: StudioMemoryAttachment[] = [];
+  for (const part of parts) {
+    if (!part || typeof part !== 'object') continue;
+    const record = part as Record<string, unknown>;
+    if (record.type !== 'file') continue;
+    const mimeType = typeof record.mimeType === 'string' ? record.mimeType : '';
+    if (!mimeType.startsWith('image/')) continue;
+    const data = typeof record.data === 'string' ? record.data : '';
+    if (!data) continue;
+    attachments.push({
+      mimeType,
+      dataUrl: data.startsWith('data:') ? data : `data:${mimeType};base64,${data}`,
+      ...(typeof record.filename === 'string' && record.filename
+        ? { filename: record.filename }
+        : {}),
+    });
+    if (attachments.length >= MAX_RESTORED_ATTACHMENTS) break;
+  }
+  return attachments;
+}
+
 function normalizeMessage(value: unknown): StudioMemoryMessage | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const row = value as Record<string, unknown>;
@@ -90,7 +128,9 @@ function normalizeMessage(value: unknown): StudioMemoryMessage | undefined {
   if (role !== 'user' && role !== 'assistant') return undefined;
 
   const content = textFromContent(row.content);
-  if (!content && role === 'assistant') return undefined;
+  const attachments = attachmentsFromContent(row.content);
+  if (role === 'assistant' && !content) return undefined;
+  if (role === 'user' && !content && attachments.length === 0) return undefined;
 
   return {
     id:
@@ -100,6 +140,7 @@ function normalizeMessage(value: unknown): StudioMemoryMessage | undefined {
     role,
     content,
     createdAt: toTimestamp(row.createdAt),
+    ...(attachments.length > 0 ? { attachments } : {}),
   };
 }
 

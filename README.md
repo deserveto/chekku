@@ -21,6 +21,7 @@ Chekku is a focused interface for managing Mastra agents, running agent-specific
 - **Agent Studio** — browse code-defined and stored agents from one registry.
 - **Stored-agent builder** — create, edit, delete, and hydrate agents through `@mastra/editor`.
 - **Agent-isolated history** — each agent owns its own Memory threads and conversation list.
+- **File uploads** — attach text files, images, and PDFs to any chat; images reach the model natively and PDFs are rendered to page images in the browser.
 - **Slash-command skills** — `/` opens the active agent's user-invocable skills.
 - **OpenAI-compatible models** — point at Rafiqspace, LiteLLM, vLLM, or any `/v1` endpoint with server-only credentials.
 - **QA agents** — a browser agent (Mastra Agent Browser) and an Android agent (Maestro on a local emulator/device).

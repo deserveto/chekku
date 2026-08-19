@@ -195,6 +195,17 @@ LLM_IMAGE_ENDPOINT_PATH
 - `/api/storage/social-posts` and `/api/storage/social-posts/[postId]` require the same server identity seam and return safe bounded errors.
 - `/reports/weekly` and `/reports/[reportId]` use `client/src/server/pm-reports.ts`; `/reports/competitive` and `/reports/competitive/[analysisId]` use `client/src/server/competitive-analyses.ts`; `/social-posts` and `/social-posts/[postId]` use `client/src/server/social-posts.ts`; browser modules never import `@chekku/storage`.
 
+### Chat file uploads
+
+- All attachment processing happens in the browser (`client/src/lib/chat-attachments.ts` plus the browser adapters in `client/src/lib/chat-attachments-browser.ts`). The server never receives or stores files outside the chat message itself: uploads live in Mastra Memory/Postgres as message parts, exactly like any other message. There is no Garage write path and no upload API route.
+- Supported inputs: text formats (txt, md, csv, tsv, json, log, xml, yml/yaml, inlined as labeled untrusted-data text blocks), images (png/jpeg/webp, passed as native multimodal image parts), and PDF (rendered to page images with `pdfjs-dist` in the browser). The OpenAI-compatible gateway only accepts `image/*` file parts — raw `application/pdf` file parts are never sent.
+- Caps: at most 8 attachments per message, 256 KiB per text file, 20 PDF pages, and 8 MiB total base64 per message. Images larger than 1568 px long edge or 600 KB are downscaled/re-encoded to JPEG client-side; PDF pages render at ≤1580 px long edge. Failures surface as bounded per-file error chips with fixed messages.
+- Image parts reach the model as raw base64 plus `mimeType` (never a `data:` URL string) so the OpenAI-compatible provider serializes them into `image_url` data URLs without double-wrapping.
+- The char-budget guard counts user-message image file parts at the fixed `VISION_PART_ESTIMATE_CHARS` estimate (vision-encoder cost, not base64 length) and never slices binary payload fields (`data`, `image`) during truncation; budget enforcement drops whole turns or truncates text instead. Tool-result `media` (screenshots) counting is unchanged.
+- The context limiter is `VisionAwareTokenLimiterProcessor` (returned by `createAgentContextLimiter()`; still a `TokenLimiterProcessor` subclass). The stock limiter feeds every non-text part through `JSON.stringify` before estimating tokens, which counts a ~130 KB page as ~25k tokens and trips the `TokenLimiterProcessor` tripwire on multi-page uploads before generation starts. The subclass counts image file parts at the fixed `VISION_PART_ESTIMATE_TOKENS` estimate and delegates all other behavior to the base implementation. The chat UI renders `tripwire` stream chunks as a visible assistant error ("Request stopped by a safety limit. …") instead of ending silently.
+- The Mastra server sets `bodySizeLimit: 12 MiB` because upload payloads are base64-inflated message JSON; the client's 8 MiB base64 cap keeps requests below it.
+- Both configured models (`qwen3.6-35b-a3b-fast`, `qwen3.6-35b-a3b`) are multimodal. If a text-only model ever joins `LLM_MODELS`, the composer needs per-model vision gating before image/PDF upload is offered.
+
 ### Garage MCP
 
 - Register the built-in server as `mcpServers: { garage: garageMcpServer }` in the single Mastra composition root.

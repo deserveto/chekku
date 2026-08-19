@@ -18,6 +18,28 @@ describe('normalizeSystemMessages', () => {
     expect(normalizeSystemMessages(prompt)).toEqual(prompt);
   });
 
+  it('passes user file parts through untouched while merging system messages', () => {
+    const userContent = [
+      { type: 'text', text: 'Summarize the attachment.' },
+      { type: 'file', data: 'aGk=', mediaType: 'image/png', filename: 'upload.png' },
+    ];
+
+    const result = normalizeSystemMessages([
+      { role: 'system', content: 'You are QA Web Agent.' },
+      { role: 'user', content: userContent },
+      { role: 'system', content: 'Browser context: page is empty.' },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: 'system',
+        content: 'You are QA Web Agent.\n\nBrowser context: page is empty.',
+      },
+      { role: 'user', content: userContent },
+    ]);
+    expect(result[1]?.content).toBe(userContent);
+  });
+
   it('moves a late system message to the beginning', () => {
     const result = normalizeSystemMessages([
       {

@@ -54,10 +54,22 @@ export type ToolEvent = {
   runId?: string;
 };
 
+export type ChatAttachmentView = {
+  id: string;
+  kind: 'image' | 'file' | 'pdf';
+  filename: string;
+  mimeType?: string;
+  /** Data URL for rendering (image bytes or PDF cover page). */
+  dataUrl?: string;
+  /** Number of rendered pages for PDF attachments. */
+  pageCount?: number;
+};
+
 export type ChatMessage = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   error?: boolean;
   createdAt: number;
+  attachments?: ChatAttachmentView[];
 };

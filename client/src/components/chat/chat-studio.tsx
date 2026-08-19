@@ -1,6 +1,8 @@
 'use client';
 
 import {
+  ClipboardEvent,
+  DragEvent,
   FormEvent,
   KeyboardEvent,
   useCallback,
@@ -27,12 +29,26 @@ import {
   listAgentSkills,
   type AgentSkillSummary,
 } from '@/lib/agent-skills';
+import {
+  ATTACHMENT_ACCEPT_ATTR,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  buildUserMessageContent,
+  classifyAttachment,
+  exceedsTotalBase64Limit,
+  prepareImageAttachment,
+  preparePdfAttachment,
+  prepareTextAttachment,
+  toAttachmentView,
+  type PreparedAttachment,
+} from '@/lib/chat-attachments';
+import { browserImageDeps, browserPdfDeps } from '@/lib/chat-attachments-browser';
 import { buildChatHref } from '@/lib/chat-route';
 import {
   listAgentThreads,
   listThreadMessages,
   removeThread,
   renameThread,
+  type StudioMemoryMessage,
   type StudioThread,
 } from '@/lib/memory-threads';
 import { mastraClient } from '@/lib/mastra-client';
@@ -74,16 +90,29 @@ function safeDisplay(value: unknown): string {
   }
 }
 
-function messageFromMemory(
-  value: {
-    id: string;
-    role: 'user' | 'assistant';
-    content: string;
-    createdAt: number;
-  },
-): ChatMessage {
-  return { ...value };
+function messageFromMemory(value: StudioMemoryMessage): ChatMessage {
+  const { attachments: restored, ...base } = value;
+  const attachments = restored?.map((attachment, index) => ({
+    id: `${value.id}-att-${index}`,
+    kind: 'image' as const,
+    filename: attachment.filename ?? `attachment-${index + 1}`,
+    mimeType: attachment.mimeType,
+    dataUrl: attachment.dataUrl,
+  }));
+  return {
+    ...base,
+    ...(attachments && attachments.length > 0 ? { attachments } : {}),
+  };
 }
+
+type PendingUpload = {
+  id: string;
+  filename: string;
+  kind: 'text' | 'image' | 'pdf';
+  status: 'preparing' | 'ready' | 'error';
+  error?: string;
+  prepared?: PreparedAttachment;
+};
 
 export function ChatStudio({
   resourceId,
@@ -108,6 +137,9 @@ export function ChatStudio({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [tools, setTools] = useState<ToolEvent[]>([]);
   const [input, setInput] = useState('');
+  const [uploads, setUploads] = useState<PendingUpload[]>([]);
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [commandOpen, setCommandOpen] = useState(false);
   const [commandIndex, setCommandIndex] = useState(0);
   const [skills, setSkills] = useState<AgentSkillSummary[]>([]);
@@ -267,6 +299,7 @@ export function ChatStudio({
         setMessages([]);
         setTools([]);
         setInput('');
+        setUploads([]);
         setCommandOpen(false);
         replaceWithNew(agentId);
       }
@@ -354,7 +387,11 @@ export function ChatStudio({
           });
         }
 
-        if (chunk.type === 'finish' || chunk.type === 'error') {
+        if (
+          chunk.type === 'finish' ||
+          chunk.type === 'error' ||
+          chunk.type === 'tripwire'
+        ) {
           finished = true;
         }
 
@@ -368,6 +405,25 @@ export function ChatStudio({
             current.map((message) =>
               message.id === assistantId
                 ? { ...message, content: detail, error: true }
+                : message,
+            ),
+          );
+        }
+
+        if (chunk.type === 'tripwire') {
+          const reason =
+            typeof payload.reason === 'string' && payload.reason.trim()
+              ? payload.reason
+              : 'The request exceeded a processing limit.';
+
+          setMessages((current) =>
+            current.map((message) =>
+              message.id === assistantId
+                ? {
+                    ...message,
+                    content: `Request stopped by a safety limit. ${reason}`,
+                    error: true,
+                  }
                 : message,
             ),
           );
@@ -393,11 +449,108 @@ export function ChatStudio({
     void seen;
   };
 
+  const readyUploads = useMemo(
+    () =>
+      uploads.flatMap((upload) =>
+        upload.status === 'ready' && upload.prepared
+          ? [upload.prepared]
+          : [],
+      ),
+    [uploads],
+  );
+  const preparingUploads = uploads.some(
+    (upload) => upload.status === 'preparing',
+  );
+
+  const prepareUpload = async (file: File) => {
+    const id = crypto.randomUUID();
+    const kind = classifyAttachment(file);
+
+    if (kind === 'unsupported') {
+      setUploads((current) => [
+        ...current,
+        {
+          id,
+          filename: file.name,
+          kind: 'text',
+          status: 'error',
+          error: 'This file type is not supported.',
+        },
+      ]);
+      return;
+    }
+
+    setUploads((current) => [
+      ...current,
+      { id, filename: file.name, kind, status: 'preparing' },
+    ]);
+
+    try {
+      const prepared =
+        kind === 'text'
+          ? await prepareTextAttachment(file)
+          : kind === 'image'
+            ? await prepareImageAttachment(file, browserImageDeps)
+            : await preparePdfAttachment(
+                file,
+                browserImageDeps,
+                await browserPdfDeps(),
+              );
+      setUploads((current) =>
+        current.map((upload) =>
+          upload.id === id
+            ? { ...upload, status: 'ready', prepared }
+            : upload,
+        ),
+      );
+    } catch (reason) {
+      setUploads((current) =>
+        current.map((upload) =>
+          upload.id === id
+            ? {
+                ...upload,
+                status: 'error',
+                error:
+                  reason instanceof Error && reason.message
+                    ? reason.message
+                    : 'This file could not be processed.',
+              }
+            : upload,
+        ),
+      );
+    }
+  };
+
+  const addFiles = (files: File[]) => {
+    if (isStreaming || !modelReady) return;
+
+    const room = MAX_ATTACHMENTS_PER_MESSAGE - uploads.length;
+    if (room <= 0) {
+      setError(
+        `Up to ${MAX_ATTACHMENTS_PER_MESSAGE} attachments are allowed per message.`,
+      );
+      return;
+    }
+
+    const accepted = files.slice(0, room);
+    if (files.length > accepted.length) {
+      setError(
+        `Up to ${MAX_ATTACHMENTS_PER_MESSAGE} attachments are allowed per message.`,
+      );
+    }
+    for (const file of accepted) void prepareUpload(file);
+  };
+
+  const removeUpload = (id: string) => {
+    setUploads((current) => current.filter((upload) => upload.id !== id));
+  };
+
   const sendMessage = async (raw: string) => {
     const prompt = raw.trim();
 
     if (
-      !prompt ||
+      (!prompt && readyUploads.length === 0) ||
+      preparingUploads ||
       isStreaming ||
       !threadOwned ||
       !modelReady
@@ -405,6 +558,14 @@ export function ChatStudio({
       return;
     }
 
+    if (exceedsTotalBase64Limit(readyUploads)) {
+      setError(
+        'These attachments exceed the 8 MB total limit for one message. Remove some files and try again.',
+      );
+      return;
+    }
+
+    const attachmentViews = readyUploads.map(toAttachmentView);
     const firstTurn = messages.length === 0;
     const now = Date.now();
     const assistantId = crypto.randomUUID();
@@ -416,6 +577,7 @@ export function ChatStudio({
         role: 'user',
         content: prompt,
         createdAt: now,
+        ...(attachmentViews.length > 0 ? { attachments: attachmentViews } : {}),
       },
       {
         id: assistantId,
@@ -425,24 +587,39 @@ export function ChatStudio({
       },
     ]);
     setInput('');
+    setUploads([]);
+    if (fileInputRef.current) fileInputRef.current.value = '';
     setError(undefined);
     setIsStreaming(true);
 
     try {
-      const stream = await agent.stream(prompt, {
-        memory: {
-          thread: threadId,
-          resource: resourceId,
+      const stream = await agent.stream(
+        [
+          {
+            role: 'user',
+            content: buildUserMessageContent(prompt, readyUploads),
+          },
+        ],
+        {
+          memory: {
+            thread: threadId,
+            resource: resourceId,
+          },
         },
-      });
+      );
 
       await consumeStream(stream, assistantId);
 
       if (firstTurn) {
+        const titleSource =
+          prompt ||
+          (attachmentViews[0]?.filename
+            ? `${attachmentViews[0].filename}`
+            : 'Attachment');
         const title =
-          prompt.length > 52
-            ? `${prompt.slice(0, 49).trim()}…`
-            : prompt;
+          titleSource.length > 52
+            ? `${titleSource.slice(0, 49).trim()}…`
+            : titleSource;
 
         try {
           await renameThread(
@@ -534,6 +711,27 @@ export function ChatStudio({
       event.preventDefault();
       void sendMessage(input);
     }
+  };
+
+  const paste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(event.clipboardData?.files ?? []).filter(
+      (file) => classifyAttachment(file) !== 'unsupported',
+    );
+    if (files.length > 0) {
+      event.preventDefault();
+      addFiles(files);
+    }
+  };
+
+  const dragOverForm = (event: DragEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setDragOver(true);
+  };
+
+  const dropForm = (event: DragEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setDragOver(false);
+    addFiles(Array.from(event.dataTransfer?.files ?? []));
   };
 
   if (!threadOwned) {
@@ -777,14 +975,53 @@ export function ChatStudio({
                     <div className="chat-message-content markdown">
                       {message.content ? (
                         <MarkdownMessage content={message.content} />
-                      ) : (
+                      ) : message.role === 'assistant' ? (
                         <span className="chat-typing">
                           <i />
                           <i />
                           <i />
                         </span>
-                      )}
+                      ) : null}
                     </div>
+
+                    {message.role === 'user' &&
+                      message.attachments &&
+                      message.attachments.length > 0 && (
+                        <div
+                          className="chat-message-attachments"
+                          role="list"
+                          aria-label="Attached files"
+                        >
+                          {message.attachments.map((attachment, index) =>
+                            attachment.dataUrl ? (
+                              // Data-URL thumbnails cannot use next/image without
+                              // per-origin configuration; a plain img is correct here.
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                key={attachment.id || `${message.id}-att-${index}`}
+                                className="chat-attachment-thumb"
+                                src={attachment.dataUrl}
+                                alt={
+                                  attachment.filename ||
+                                  `Attached image ${index + 1}`
+                                }
+                                loading="lazy"
+                              />
+                            ) : (
+                              <span
+                                className="chat-attachment-file"
+                                key={attachment.id || `${message.id}-att-${index}`}
+                                role="listitem"
+                              >
+                                ≡ {attachment.filename}
+                                {attachment.pageCount
+                                  ? ` (${attachment.pageCount} pages)`
+                                  : ''}
+                              </span>
+                            ),
+                          )}
+                        </div>
+                      )}
 
                     {message.role === 'assistant' && message.content && (
                       <div className="chat-message-actions">
@@ -821,8 +1058,56 @@ export function ChatStudio({
             </div>
           )}
 
-          <form className="chat-composer" onSubmit={submit}>
+          <form
+            className={`chat-composer${dragOver ? ' drag-over' : ''}`}
+            onSubmit={submit}
+            onDragOver={dragOverForm}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={dropForm}
+          >
             <div className="chat-composer__input">
+              {uploads.length > 0 && (
+                <div
+                  className="chat-upload-row"
+                  role="list"
+                  aria-label="Pending attachments"
+                >
+                  {uploads.map((upload) => (
+                    <span
+                      className={`chat-upload-chip ${upload.status}`}
+                      key={upload.id}
+                      role="listitem"
+                    >
+                      <span aria-hidden="true">
+                        {upload.kind === 'image'
+                          ? '▣'
+                          : upload.kind === 'pdf'
+                            ? '⎘'
+                            : '≡'}
+                      </span>
+                      <span className="chat-upload-name">
+                        {upload.filename}
+                        {upload.prepared?.kind === 'pdf'
+                          ? ` (${upload.prepared.pages.length} pages)`
+                          : ''}
+                      </span>
+                      {upload.status === 'preparing' && (
+                        <small>processing…</small>
+                      )}
+                      {upload.status === 'error' && upload.error && (
+                        <small>{upload.error}</small>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => removeUpload(upload.id)}
+                        aria-label={`Remove ${upload.filename}`}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
               {commandOpen && filteredSkills.length > 0 ? (
                 <CommandMenu
                   commands={filteredSkills}
@@ -841,6 +1126,7 @@ export function ChatStudio({
                   if (isCommand) setCommandIndex(0);
                 }}
                 onKeyDown={keyDown}
+                onPaste={paste}
                 placeholder={
                   modelReady
                     ? `Message ${currentAgent?.name || agentId}…`
@@ -853,6 +1139,27 @@ export function ChatStudio({
 
             <footer>
               <div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  hidden
+                  accept={ATTACHMENT_ACCEPT_ATTR}
+                  onChange={(event) => {
+                    addFiles(Array.from(event.target.files ?? []));
+                    event.target.value = '';
+                  }}
+                />
+                <button
+                  className="chat-attach-button"
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={!modelReady || isStreaming}
+                  aria-label="Attach files"
+                  title="Attach files"
+                >
+                  ＋ Attach
+                </button>
                 <span className="chat-memory-chip">◇ Memory</span>
                 {agentId === QA_WEB_AGENT_ID && (
                   <span className="chat-memory-chip">◎ Browser</span>
@@ -877,7 +1184,11 @@ export function ChatStudio({
                   <button
                     className="chat-send-button"
                     type="submit"
-                    disabled={!input.trim() || !modelReady}
+                    disabled={
+                      (!input.trim() && readyUploads.length === 0) ||
+                      preparingUploads ||
+                      !modelReady
+                    }
                     aria-label="Send message"
                   >
                     ↑

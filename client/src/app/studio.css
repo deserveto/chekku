@@ -2190,6 +2190,127 @@ body.studio-sidebar-resizing * {
   background: transparent;
 }
 
+.chat-composer.drag-over {
+  border-color: var(--studio-accent);
+  box-shadow: 0 16px 48px rgb(0 0 0 / 14%), inset 0 0 0 1px var(--studio-accent);
+}
+
+.chat-attach-button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 7px;
+  border: 1px solid var(--studio-line);
+  border-radius: 3px;
+  color: var(--studio-muted);
+  font: 8px var(--font-dm-mono);
+  background: transparent;
+  cursor: pointer;
+}
+
+.chat-attach-button:hover:not(:disabled) {
+  color: var(--studio-ink);
+  border-color: var(--studio-line-strong);
+}
+
+.chat-attach-button:focus-visible {
+  outline: 2px solid var(--studio-accent);
+  outline-offset: 1px;
+}
+
+.chat-attach-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.chat-upload-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 12px 0;
+}
+
+.chat-upload-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 3px 4px 3px 7px;
+  border: 1px solid var(--studio-line-strong);
+  border-radius: 3px;
+  color: var(--studio-body);
+  font: 9px var(--font-dm-mono);
+  background: var(--studio-canvas);
+}
+
+.chat-upload-chip .chat-upload-name {
+  overflow: hidden;
+  max-width: 220px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-upload-chip small {
+  color: var(--studio-muted);
+  font-size: 8px;
+}
+
+.chat-upload-chip.error {
+  color: var(--studio-danger);
+  border-color: var(--studio-danger);
+}
+
+.chat-upload-chip button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  color: var(--studio-muted);
+  font-size: 10px;
+  line-height: 1;
+  background: transparent;
+  cursor: pointer;
+}
+
+.chat-upload-chip button:hover {
+  color: var(--studio-ink);
+}
+
+.chat-upload-chip button:focus-visible {
+  outline: 2px solid var(--studio-accent);
+  outline-offset: 1px;
+}
+
+.chat-message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.chat-attachment-thumb {
+  max-width: 180px;
+  max-height: 120px;
+  border: 1px solid var(--studio-line-strong);
+  border-radius: 4px;
+  object-fit: contain;
+}
+
+.chat-attachment-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 7px;
+  border: 1px solid var(--studio-line);
+  border-radius: 3px;
+  color: var(--studio-muted);
+  font: 9px var(--font-dm-mono);
+}
+
 .chat-send-button:disabled {
   opacity: 0.35;
   cursor: not-allowed;

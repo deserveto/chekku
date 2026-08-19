@@ -19,6 +19,25 @@ const CONTEXT_RESERVE_TOKENS = 60_000;
 export const CHAR_GUARD_CHARS_PER_TOKEN = 2.5;
 export const CHAR_GUARD_OUTPUT_RESERVE_TOKENS = 32_000;
 
+/**
+ * Vision-encoder inputs cost a bounded number of tokens per image regardless of
+ * base64 length, so user-message image file parts count as a fixed estimate
+ * instead of raw base64 chars (which would exhaust the whole budget and force
+ * the truncation loop to slice the payload into garbage).
+ */
+export const VISION_PART_ESTIMATE_CHARS = 4_000;
+
+/**
+ * The same estimate expressed in tokens for the TokenLimiterProcessor. The
+ * stock limiter feeds every non-text part through JSON.stringify before
+ * estimating tokens, so a multi-page PDF upload (~25k estimated "tokens" per
+ * 130 KB page) trips the tripwire before generation starts even though the
+ * vision encoder only charges ~1-2k tokens per image.
+ */
+export const VISION_PART_ESTIMATE_TOKENS = Math.round(
+  VISION_PART_ESTIMATE_CHARS / CHAR_GUARD_CHARS_PER_TOKEN,
+);
+
 export function getModelContextWindow(modelId: string): number {
   if (!modelId || !modelId.trim()) return FALLBACK_CONTEXT_WINDOW;
   const native = stripOpenAICompatibleRouterId(modelId);
@@ -42,8 +61,87 @@ export function createAgentMemory(): Memory {
   return new Memory({ options: { lastMessages: AGENT_MEMORY_LAST_MESSAGES } });
 }
 
+type VisionCountableMessage = {
+  content?: unknown;
+  [key: string]: unknown;
+};
+
+type TokenCounter = (message: VisionCountableMessage) => Promise<number>;
+
+/**
+ * Strip image file parts' base64 payloads so the stock estimator never sees
+ * them, and report how many vision parts were found.
+ */
+function neutralizeVisionParts(
+  message: VisionCountableMessage,
+): { clone: VisionCountableMessage; visionParts: number } {
+  const content = message.content;
+  if (
+    !content ||
+    typeof content !== 'object' ||
+    !Array.isArray((content as { parts?: unknown }).parts)
+  ) {
+    return { clone: message, visionParts: 0 };
+  }
+
+  const record = content as { parts: unknown[] };
+  let visionParts = 0;
+  const parts = record.parts.map((part) => {
+    if (!part || typeof part !== 'object') return part;
+    const partRecord = part as Record<string, unknown>;
+    if (partRecord.type !== 'file') return part;
+    const mimeType =
+      typeof partRecord.mimeType === 'string' ? partRecord.mimeType : '';
+    const data = typeof partRecord.data === 'string' ? partRecord.data : '';
+    if (!mimeType.startsWith('image/') && !data.startsWith('data:image/')) {
+      return part;
+    }
+    visionParts += 1;
+    return { ...partRecord, data: '' };
+  });
+
+  return {
+    clone: {
+      ...message,
+      content: { ...(content as object), parts },
+    } as VisionCountableMessage,
+    visionParts,
+  };
+}
+
+/**
+ * TokenLimiterProcessor that counts user-message image file parts at the fixed
+ * vision-encoder estimate instead of base64 length.
+ *
+ * The base class types `countInputMessageTokens` private, but it is a regular
+ * prototype method at runtime, so the vision-aware counter shadows it as an
+ * own property and delegates to the base implementation with image payloads
+ * neutralized. Everything else (keep-newest input pruning, output truncation,
+ * tripwires) is inherited unchanged.
+ */
+export class VisionAwareTokenLimiterProcessor extends TokenLimiterProcessor {
+  constructor(options: number | { limit: number }) {
+    super(options as ConstructorParameters<typeof TokenLimiterProcessor>[0]);
+
+    const self = this as unknown as { countInputMessageTokens: TokenCounter };
+    const base = (
+      Object.getPrototypeOf(VisionAwareTokenLimiterProcessor.prototype) as {
+        countInputMessageTokens: TokenCounter;
+      }
+    ).countInputMessageTokens;
+
+    self.countInputMessageTokens = async (message) => {
+      const { clone, visionParts } = neutralizeVisionParts(message);
+      return (
+        (await base.call(this, clone)) +
+        visionParts * VISION_PART_ESTIMATE_TOKENS
+      );
+    };
+  }
+}
+
 export function createAgentContextLimiter(): TokenLimiterProcessor {
-  return new TokenLimiterProcessor({
+  return new VisionAwareTokenLimiterProcessor({
     limit: getModelMessageBudget(env.LLM_DEFAULT_MODEL),
   });
 }
@@ -95,6 +193,9 @@ function partChars(part: CharBudgetPart): number {
     case 'reasoning':
       return typeof part.text === 'string' ? part.text.length : 0;
     case 'file':
+      if (typeof part.mediaType === 'string' && part.mediaType.startsWith('image/')) {
+        return VISION_PART_ESTIMATE_CHARS;
+      }
       return dataChars(part.data);
     case 'media':
       return dataChars(part.data);
@@ -146,6 +247,10 @@ const TRUNCATION_MARKER = '…[truncated to fit model context budget]';
 type StringHandle = { len: number; get(): string; set(value: string): void };
 
 const PROTOCOL_FIELDS = new Set(['role', 'type', 'toolCallId', 'toolName', 'id', 'name']);
+// Base64 payloads (file/media parts) are binary data, not sliceable text: a
+// halved data string is a corrupted image, so budget enforcement must drop or
+// keep whole parts instead of truncating these fields.
+const BINARY_PAYLOAD_FIELDS = new Set(['data', 'image']);
 
 function collectStringHandles(root: unknown, out: StringHandle[]): void {
   if (root == null || typeof root !== 'object') return;
@@ -173,7 +278,7 @@ function collectStringHandles(root: unknown, out: StringHandle[]): void {
   for (const key of Object.keys(root as Record<string, unknown>)) {
     const value = (root as Record<string, unknown>)[key];
     if (typeof value === 'string') {
-      if (PROTOCOL_FIELDS.has(key)) continue;
+      if (PROTOCOL_FIELDS.has(key) || BINARY_PAYLOAD_FIELDS.has(key)) continue;
       const owner = root as Record<string, unknown>;
       out.push({
         len: value.length,

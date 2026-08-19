@@ -179,6 +179,19 @@ curl \
 
 Set `LLM_DEFAULT_MODEL` to an exact returned `id`, without adding Chekku's internal gateway prefix.
 
+## Chat file uploads
+
+The chat composer accepts text files, images, and PDFs. Processing is entirely in the browser; the agent server only receives the assembled multimodal message. Operational limits:
+
+- At most 8 attachments and 8 MiB of base64 per message (enforced client-side with fixed error messages).
+- Text files are capped at 256 KiB each; larger files are truncated with a visible marker.
+- Images larger than 1568 px long edge or 600 KB are downscaled and re-encoded as JPEG before sending.
+- PDFs render to page images in the browser: at most 20 pages, each ≤1580 px long edge. A `pdfjs-dist` worker loads from the client bundle; if the bundler cannot emit it, pdf.js falls back to its main-thread worker.
+
+The Mastra server sets `bodySizeLimit` to 12 MiB (`agent/src/mastra/index.ts`) so base64-inflated upload messages pass the default 4.5 MiB Hono body limit. Raise it only together with the client's 8 MiB cap — both values are documented in `docs/ARCHITECTURE.md`.
+
+Uploads persist only as message parts in Mastra Memory (Postgres). There is no Garage involvement and no upload directory to back up or prune.
+
 ## SearXNG search
 
 Local SearXNG runs pinned image `docker.io/searxng/searxng:2026.7.18-277d8469c`. Compose publishes container port `8080` only on loopback at `127.0.0.1:8888`; the container health check calls its internal `http://127.0.0.1:8080/healthz`. Tracked `searxng/settings.yml` enables JSON search with POST requests, safe-search level 1, page limit 5, a 5-second engine request timeout, and a 10-second maximum engine request timeout.

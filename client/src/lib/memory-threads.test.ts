@@ -183,4 +183,108 @@ describe('agent-scoped memory threads', () => {
       listThreadMessages('main-agent', 'main-agent-local-user-a', 'local-user'),
     ).rejects.toThrow('Server error');
   });
+
+  it('restores image attachments from persisted format-2 parts alongside flattened text', async () => {
+    threadListMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'msg-1',
+          role: 'user',
+          createdAt: '2026-08-19T10:00:00.000Z',
+          content: {
+            format: 2,
+            parts: [
+              { type: 'text', text: 'Summarize this photo.' },
+              {
+                type: 'file',
+                mimeType: 'image/png',
+                filename: 'photo.png',
+                data: 'data:image/png;base64,QUJD',
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    const messages = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    expect(messages).toEqual([
+      {
+        id: 'msg-1',
+        role: 'user',
+        content: 'Summarize this photo.',
+        createdAt: Date.parse('2026-08-19T10:00:00.000Z'),
+        attachments: [
+          { mimeType: 'image/png', dataUrl: 'data:image/png;base64,QUJD', filename: 'photo.png' },
+        ],
+      },
+    ]);
+  });
+
+  it('keeps an image-only user message even when no text part survives', async () => {
+    threadListMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'msg-2',
+          role: 'user',
+          createdAt: '2026-08-19T10:01:00.000Z',
+          content: {
+            format: 2,
+            parts: [
+              {
+                type: 'file',
+                mimeType: 'image/jpeg',
+                data: 'QUJD',
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    const messages = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.content).toBe('');
+    expect(messages[0]?.attachments).toEqual([
+      { mimeType: 'image/jpeg', dataUrl: 'data:image/jpeg;base64,QUJD' },
+    ]);
+  });
+
+  it('ignores non-image file parts when restoring attachments', async () => {
+    threadListMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'msg-3',
+          role: 'user',
+          createdAt: '2026-08-19T10:02:00.000Z',
+          content: {
+            format: 2,
+            parts: [
+              { type: 'text', text: 'Here you go.' },
+              { type: 'file', mimeType: 'application/pdf', data: 'data:application/pdf;base64,QUJD' },
+            ],
+          },
+        },
+      ],
+    });
+
+    const messages = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.attachments).toBeUndefined();
+  });
 });

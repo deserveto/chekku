@@ -422,6 +422,18 @@ Every thread is owned by an agent and resource:
 
 The client validates this prefix before listing, reading, renaming, or deleting a thread. Changing agents creates or opens a thread owned by that agent; a conversation cannot silently switch its owner.
 
+## Chat file uploads
+
+The chat composer accepts text files, images, and PDFs. All processing is client-side (`client/src/lib/chat-attachments.ts` + `chat-attachments-browser.ts`):
+
+1. **Text formats** (txt, md, csv, tsv, json, log, xml, yml/yaml) are read as UTF-8, capped at 256 KiB, and inlined into the user message as fenced blocks labeled untrusted data.
+2. **Images** (png/jpeg/webp) are passed through when small (≤1568 px long edge, ≤600 KB) or downscaled/re-encoded to JPEG in a canvas, then sent as native multimodal image parts (raw base64 + `mimeType`).
+3. **PDFs** are rendered to page images with `pdfjs-dist` in the browser (≤20 pages, ≤1580 px long edge per page) — the OpenAI-compatible gateway only accepts `image/*` file parts, so page images are the only PDF transport.
+
+The multimodal message (one text part with prompt, wrapped text blocks, and per-image markers, followed by image parts) flows through the same `/api/agent` proxy and Mastra Memory as any chat turn. The agent server's `bodySizeLimit` is 12 MiB to accommodate base64-inflated payloads; the client caps totals at 8 MiB of base64 and 8 attachments per message. Uploads are never written to Garage — they persist only as message parts in Postgres through Mastra Memory, and thread history restores image attachments from the persisted parts.
+
+On the agent side, both context-bounding layers are vision-aware: the char-budget guard counts user-message image file parts at a fixed vision-cost estimate (`VISION_PART_ESTIMATE_CHARS`) instead of base64 length and never slices binary payload fields during truncation, so uploaded images cannot be corrupted by context pruning; and the token limiter (`VisionAwareTokenLimiterProcessor` from `createAgentContextLimiter()`) applies the same estimate because the stock Mastra limiter tokenizes the full base64 of non-text parts and would reject multi-page uploads with a tripwire before generation starts. `tripwire` stream chunks surface as visible assistant errors in the chat UI rather than a silently ended stream.
+
 ## Client boundaries
 
 The browser uses `@mastra/client-js` with the Next.js origin and `/api/agent` prefix. The catch-all proxy:
