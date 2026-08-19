@@ -55,6 +55,12 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/agent/node_modules ./agent/node_modules
 COPY --from=builder /app/storage ./storage
 COPY --from=builder /app/agent/.mastra ./agent/.mastra
+# Brand logo for the visual compositor. `resolveBrandLogoPath()` resolves the
+# logo at RUNTIME by walking up from process.cwd() (WORKDIR /app/agent) looking
+# for agent/src/assets/image.png — mastra build cannot inline a runtime-computed
+# path, so the asset must exist in the image or every generate_image call pays
+# for the provider image and then fails composition.
+COPY --from=builder /app/agent/src/assets ./agent/src/assets
 COPY --from=builder /app/agent/package.json ./agent/package.json
 COPY --from=builder /app/package.json ./package.json
 # Pin the agent browser to the system Chromium, bind off loopback, and keep the

@@ -90,11 +90,13 @@ LLM_IMAGE_MODEL=gemini-3.1-flash-image
 #LLM_IMAGE_ENDPOINT_PATH=/images/generations
 ```
 
-`LLM_IMAGE_MODEL` is the fixed model id invoked by the `generate_image` tool; it never comes from tool or model input. Empty/unset fails closed with `Image generation is not configured.` without preventing other agent features from starting. `LLM_IMAGE_ENDPOINT_PATH` defaults to the OpenAI Images API standard path (`/images/generations`); override it only when the configured gateway exposes image generation under a different path. Both use the existing `LLM_BASE_URL` and `LLM_API_KEY`; no second key is required.
+`LLM_IMAGE_MODEL` is the fixed model id invoked by the Visual Content Agent's image tools — generation output in `generate_image` (and the dev-only `preview_image`) plus multimodal vision input in `review_image` (the self-review loop, capped server-side at `MAX_VISUAL_ASSETS_PER_POST = 3` assets per post); it never comes from tool or model input. Empty/unset fails closed with `Image generation is not configured.` without preventing other agent features from starting. `LLM_IMAGE_ENDPOINT_PATH` defaults to the OpenAI Images API standard path (`/images/generations`); override it only when the configured gateway exposes image generation under a different path. Both use the existing `LLM_BASE_URL` and `LLM_API_KEY`; no second key is required.
 
 The image-generation HTTP adapter assumes the OpenAI Images API standard contract (`POST {LLM_BASE_URL}/images/generations` with `response_format: b64_json`). If the live gateway does not implement that contract, only `agent/src/image-generation/client.ts` needs adjustment.
 
 Image generation is on-demand only. Ask the Social Media Supervisor to generate a visual for a specific approved post; it delegates to the Visual Content Agent, which calls `generate_image`. The tool verifies the post is `APPROVED` from persisted metadata, stores the image bytes in Garage, attaches the asset to the post's metadata, and returns the asset id plus the application-facing image URL. Revisions generate a new asset and preserve the previous one. Images are served at `GET /api/storage/social-posts/<postId>/visuals/<assetId>`.
+
+Dev-only chat previews: outside production, the Visual Content Agent also exposes a `preview_image` tool for an ad-hoc chat visual that has no `postId`. It generates a standalone image through the same fixed model, stores it under an isolated `chat-previews/<previewId>.<ext>` prefix (never `social-posts/`, so the social-posts list is unaffected), and returns a URL. Previews are served at `GET /api/storage/chat-previews/[file]` (identity-checked, 404 in production). This lets the chat show a generated image directly without an approved post and without touching `/social-posts`.
 
 The weekly workflow creates posts in the `DRAFT` status. To approve one for visual generation, open it on the social-posts detail page and use the Approve control, which issues `PATCH /api/storage/social-posts/[postId]` to transition `DRAFT → APPROVED` (the only permitted status mutation; `APPROVED` and `PUBLISHED` are terminal for this iteration). The `generate_image` tool rejects any post that is not `APPROVED`.
 
@@ -134,13 +136,14 @@ Flow:
 1. Sign up at `/signup` with email and password. Better Auth creates the user (unverified) and sends a verification email.
 2. Verify the email. In production with `RESEND_API_KEY` set, the link is delivered through Resend. In local dev without `RESEND_API_KEY`, the verification URL is logged to the server console.
 3. Sign in at `/login`. Better Auth rejects unverified accounts and resends the verification email on attempt.
-4. After verification and sign-in, the session cookie identifies the user. `getUserId()` / `requireUserId()` in `client/src/server/auth.ts` resolve `session.user.id` server-side; unauthenticated requests hit `/login` (or 403 on storage APIs).
+4. Password reset: request a link at `/forgot-password`; the reset link is valid for one hour and can be used once. In dev the link is printed to the server console when `RESEND_API_KEY` is unset. A signed-in user must sign out before opening a reset link — session-carrying browsers are redirected from `/reset-password` to `/agents` (intentional, and asserted in the auth-rate-limit tests). The reset token transits the URL query (`?token=...`) on the page GET, so it can reach browser history and access logs; exposure is mitigated by the token's 62^24 entropy, single use, one-hour expiry, and full session revocation on use.
+5. After verification and sign-in, the session cookie identifies the user. `getUserId()` / `requireUserId()` in `client/src/server/auth.ts` resolve `session.user.id` server-side; unauthenticated requests hit `/login` (or 403 on storage APIs).
 
 **Production:** inject `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `AUTH_DATABASE_URL`, and (for real email delivery) `RESEND_API_KEY` / `RESEND_FROM_EMAIL` via the hosting platform's secret or env configuration — not via committed files. Set `BETTER_AUTH_URL` to the real **HTTPS** origin so Better Auth issues `secure` session cookies. Run `npm run db:migrate` as a deploy release step.
 
 #### Rate limiting
 
-Signup, sign-in, and verification-email resend are throttled in-process at 5 requests / 60s per scope. By default the limiter does **not** trust `x-forwarded-for` (it is attacker-controlled when the deployment is not behind a trusted reverse proxy that overwrites the header); every anonymous client shares one bucket per scope, which keeps the cap enforced but is stricter than ideal in dev.
+Signup, sign-in, verification-email resend, and password-reset requests are throttled in-process at 5 requests / 60s per scope. By default the limiter does **not** trust `x-forwarded-for` (it is attacker-controlled when the deployment is not behind a trusted reverse proxy that overwrites the header); every anonymous client shares one bucket per scope, which keeps the cap enforced but is stricter than ideal in dev.
 
 Set `RATE_LIMIT_TRUST_PROXY=true` in `client/.env.local` only when Chekku sits behind a trusted proxy that supplies a verifiable client IP in `x-forwarded-for` (e.g. most managed Node hosts, Cloudflare, or an nginx config that sets the header to `$remote_addr`). Without that guarantee, leave it unset. The limiter is in-memory per process and intended for single-instance v1 deployments; distributed rate limiting is deferred.
 
@@ -191,6 +194,20 @@ The chat composer accepts text files, images, and PDFs. Processing is entirely i
 The Mastra server sets `bodySizeLimit` to 12 MiB (`agent/src/mastra/index.ts`) so base64-inflated upload messages pass the default 4.5 MiB Hono body limit. Raise it only together with the client's 8 MiB cap — both values are documented in `docs/ARCHITECTURE.md`.
 
 Uploads persist only as message parts in Mastra Memory (Postgres). There is no Garage involvement and no upload directory to back up or prune.
+
+## Agent runs
+
+Chat execution is server-owned. Each prompt creates a run that keeps executing after the browser navigates away, reloads, or closes; the UI reconnects by replaying run events and never restarts the prompt. One non-terminal run is allowed per agent/thread/resource.
+
+Browser-facing endpoints derive identity from the Better Auth session:
+
+- `POST /api/runs` starts a run with `{ agentId, threadId, prompt, content? }`. `content` is the optional validated multimodal parts array and is passed transiently to execution; run summaries store only `prompt`. Responses are `202 { run }`, `409 { run }` for an existing thread run, or `429 { error }` at a concurrency cap.
+- `GET /api/runs/active?agentId&threadId` returns the thread's active run or `204`.
+- `GET /api/runs/list[?agentId]` lists active runs for sidebar status.
+- `GET /api/runs/<runId>/events?offset=N` provides replay-then-live SSE.
+- `POST /api/runs/<runId>/cancel` cancels exactly that run and is idempotent.
+
+The registry is in-memory and single-instance. Terminal runs remain replayable for 30 minutes; event buffers are capped at 4 MiB / 10,000 events. Concurrent running runs are capped at 4 per user and 64 across the server, and a watchdog force-fails runs older than 30 minutes. Restarting the agent server kills in-flight runs; completed turns remain in Mastra Memory.
 
 ## SearXNG search
 
@@ -502,6 +519,10 @@ Review interfaces:
 - `/social-posts` lists post id, created time, topic, special day, and status newest first.
 - `/social-posts/[postId]` renders caption, metadata, then the brief that generated it.
 - `GET /api/storage/social-posts` and `GET /api/storage/social-posts/[postId]` return bounded JSON after server identity validation.
+
+Manual trigger (dev-only):
+
+- Outside production, the "Run weekly drafts now" button on `/social-posts` (or `POST /api/storage/social-posts/run-weekly-drafts`, identity-checked) starts `weekly-social-drafts` fire-and-forget so a developer can produce `DRAFT` posts on demand without waiting for the Monday cron. The run is the same code path as the scheduled fire; refresh `/social-posts` a few moments later to see the new drafts. Chat drafting itself remains ephemeral text — only the workflow (scheduled or manually triggered) creates posts.
 
 ## Common failures
 

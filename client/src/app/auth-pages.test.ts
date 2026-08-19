@@ -14,6 +14,8 @@ const authMocks = vi.hoisted(() => ({
   signInEmail: vi.fn(async () => ({ error: null })),
   signUpEmail: vi.fn(async () => ({ error: null })),
   sendVerificationEmail: vi.fn(async () => ({ error: null })),
+  requestPasswordReset: vi.fn(async () => ({ error: null })),
+  resetPassword: vi.fn(async () => ({ error: null })),
 }));
 
 const navigationMocks = vi.hoisted(() => ({
@@ -27,6 +29,8 @@ vi.mock('@/lib/auth-client', () => ({
     useSession: () => ({ data: null, isPending: false }),
     signOut: vi.fn(async () => ({ success: true })),
     sendVerificationEmail: authMocks.sendVerificationEmail,
+    requestPasswordReset: authMocks.requestPasswordReset,
+    resetPassword: authMocks.resetPassword,
   },
 }));
 
@@ -63,6 +67,8 @@ describe('login page', () => {
     expect(markup).toContain('type="email"');
     expect(markup).toContain('type="password"');
     expect(markup).toContain('href="/signup"');
+    // Mirror Better Auth's server-side password limit on the client.
+    expect(markup.match(/maxLength="128"/g)).toHaveLength(1);
   });
 
   it('shows that email verification succeeded when redirected from the verification link', async () => {
@@ -106,6 +112,13 @@ describe('login page', () => {
     expect(markup).toContain('Low-poly illuminated path through dark mountains');
     expect(markup).toContain('A calmer place to run your agents.');
   });
+
+  it('links to the forgot-password page under the password field', async () => {
+    const LoginPage = (await import('./login/page')).default;
+    const markup = renderToStaticMarkup(createElement(LoginPage));
+    expect(markup).toContain('href="/forgot-password"');
+    expect(markup).toContain('Forgot password?');
+  });
 });
 
 describe('signup page', () => {
@@ -115,6 +128,8 @@ describe('signup page', () => {
     expect(markup).toContain('type="email"');
     expect(markup).toContain('type="password"');
     expect(markup).toContain('href="/login"');
+    // Mirror Better Auth's server-side password limit on the client.
+    expect(markup.match(/maxLength="128"/g)).toHaveLength(2);
   });
 
   it('sends successful email verification back to login', async () => {
@@ -128,6 +143,7 @@ describe('signup page', () => {
       setInputValue(inputs[0], 'Example User');
       setInputValue(inputs[1], 'user@example.test');
       setInputValue(inputs[2], 'password123');
+      setInputValue(inputs[3], 'password123');
       container
         .querySelector('form')
         ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
@@ -143,6 +159,57 @@ describe('signup page', () => {
     await act(async () => root.unmount());
   });
 
+  it('renders a confirm password field that must match before sign-up', async () => {
+    const SignupPage = (await import('./signup/page')).default;
+    const container = document.createElement('div');
+    const root = createRoot(container);
+
+    await act(async () => root.render(createElement(SignupPage)));
+    const inputs = container.querySelectorAll('input');
+    expect(inputs.length).toBe(4);
+    await act(async () => {
+      setInputValue(inputs[0], 'Example User');
+      setInputValue(inputs[1], 'user@example.test');
+      setInputValue(inputs[2], 'password123');
+      setInputValue(inputs[3], 'password999');
+      container
+        .querySelector('form')
+        ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+
+    expect(authMocks.signUpEmail).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('Passwords do not match.');
+    await act(async () => root.unmount());
+  });
+
+  it('recovers from a mismatch once the confirm field is corrected', async () => {
+    const SignupPage = (await import('./signup/page')).default;
+    const container = document.createElement('div');
+    const root = createRoot(container);
+
+    await act(async () => root.render(createElement(SignupPage)));
+    const inputs = container.querySelectorAll('input');
+    await act(async () => {
+      setInputValue(inputs[0], 'Example User');
+      setInputValue(inputs[1], 'user@example.test');
+      setInputValue(inputs[2], 'password123');
+      setInputValue(inputs[3], 'password999');
+      container
+        .querySelector('form')
+        ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+    await act(async () => {
+      setInputValue(inputs[3], 'password123');
+      container
+        .querySelector('form')
+        ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+
+    expect(authMocks.signUpEmail).toHaveBeenCalledTimes(1);
+    expect(container.textContent).not.toContain('Passwords do not match.');
+    await act(async () => root.unmount());
+  });
+
   it('uses distinct new-journey artwork in the shared split composition', async () => {
     const SignupPage = (await import('./signup/page')).default;
     const markup = renderToStaticMarkup(createElement(SignupPage));
@@ -153,13 +220,26 @@ describe('signup page', () => {
     expect(markup).toContain('Build a studio that thinks with you.');
   });
 
-  it('fits the split composition inside short desktop viewports', () => {
-    expect(studioCss).toContain('@media (max-height: 800px) and (min-width: 761px)');
-    expect(studioCss).toMatch(/max-height: 800px[\s\S]*\.auth-visual\s*\{[^}]*min-height:\s*0/);
+  it('compacts the split composition so laptop viewports fit even with form errors', () => {
+    expect(studioCss).toContain('@media (max-height: 950px) and (min-width: 761px)');
+    expect(studioCss).toMatch(/max-height: 950px[\s\S]*\.auth-visual\s*\{[^}]*min-height:\s*0/);
   });
 
   it('keeps tall mobile signup content scrollable inside the viewport', () => {
     expect(studioCss).toMatch(/\.auth-shell\s*\{[^}]*height:\s*100dvh[^}]*overflow-y:\s*auto/);
+  });
+
+  it('anchors oversized auth cards to the top so growing forms stay reachable', () => {
+    expect(studioCss).toMatch(/\.auth-frame\s*\{[^}]*margin:\s*auto/);
+    const shellBlock = studioCss.match(/\.auth-shell\s*\{[^}]*\}/)?.[0] ?? '';
+    expect(shellBlock).not.toContain('place-content: center');
+  });
+
+  it('pins the visual scrim to fixed lengths so the quote keeps contrast at any card height', () => {
+    const shadeBlock = studioCss.match(/\.auth-visual-shade\s*\{[^}]*\}/)?.[0] ?? '';
+    expect(shadeBlock).not.toContain('transparent');
+    expect(shadeBlock).toContain('200px');
+    expect(shadeBlock).toContain('340px');
   });
 
   it('keeps the verification-success state in the shared auth composition', () => {
@@ -214,5 +294,233 @@ describe('verify-email page', () => {
     expect(markup).toContain('auth-verification-panel');
     expect(markup).toContain('Low-poly coastal beacon sending a warm signal at dawn');
     expect(markup).toContain('A clear signal. A private workspace.');
+  });
+});
+
+describe('forgot-password page', () => {
+  it('renders an email form and a back-to-login link', async () => {
+    const ForgotPage = (await import('./forgot-password/page')).default;
+    const markup = renderToStaticMarkup(createElement(ForgotPage));
+    expect(markup).toContain('type="email"');
+    expect(markup).toContain('href="/login"');
+  });
+
+  it('requests a reset link addressed to /reset-password', async () => {
+    const ForgotPage = (await import('./forgot-password/page')).default;
+    const container = document.createElement('div');
+    const root = createRoot(container);
+
+    await act(async () => root.render(createElement(ForgotPage)));
+    const input = container.querySelector('input');
+    await act(async () => {
+      if (input) setInputValue(input, 'user@example.test');
+      container
+        .querySelector('form')
+        ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+
+    expect(authMocks.requestPasswordReset).toHaveBeenCalledWith({
+      email: 'user@example.test',
+      redirectTo: '/reset-password',
+    });
+    expect(authMocks.requestPasswordReset).toHaveBeenCalledTimes(1);
+    await act(async () => root.unmount());
+  });
+
+  it('shows the enumeration-safe success state after submitting', async () => {
+    const ForgotPage = (await import('./forgot-password/page')).default;
+    const container = document.createElement('div');
+    const root = createRoot(container);
+
+    await act(async () => root.render(createElement(ForgotPage)));
+    const input = container.querySelector('input');
+    await act(async () => {
+      if (input) setInputValue(input, 'user@example.test');
+      container
+        .querySelector('form')
+        ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+
+    expect(container.textContent).toContain(
+      'If that account exists, a reset link is on its way.',
+    );
+    await act(async () => root.unmount());
+  });
+
+  it('shows a bounded failure note when the reset email cannot be sent', async () => {
+    authMocks.requestPasswordReset.mockResolvedValueOnce({
+      error: { code: 'INTERNAL_SERVER_ERROR', message: 'raw provider detail' },
+    });
+    const ForgotPage = (await import('./forgot-password/page')).default;
+    const container = document.createElement('div');
+    const root = createRoot(container);
+
+    await act(async () => root.render(createElement(ForgotPage)));
+    const input = container.querySelector('input');
+    await act(async () => {
+      if (input) setInputValue(input, 'user@example.test');
+      container
+        .querySelector('form')
+        ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+
+    expect(container.textContent).toContain(
+      'Failed to send reset email. Try again in a minute.',
+    );
+    expect(container.textContent).not.toContain('INTERNAL_SERVER_ERROR');
+    expect(container.textContent).not.toContain('raw provider detail');
+    await act(async () => root.unmount());
+  });
+});
+
+describe('reset-password page', () => {
+  it('renders the new-password form when a token is present', async () => {
+    navigationMocks.searchParams = new URLSearchParams('token=tok123');
+    const ResetPage = (await import('./reset-password/page')).default;
+    const markup = renderToStaticMarkup(createElement(ResetPage));
+    expect(markup).toContain('type="password"');
+    expect(markup).toContain('New password');
+    expect(markup).toContain('Confirm password');
+    // Mirror Better Auth's server-side password limit on the client so an
+    // oversized managed passphrase cannot dead-end against PASSWORD_TOO_LONG.
+    expect(markup.match(/maxLength="128"/g)).toHaveLength(2);
+  });
+
+  it('shows a bounded invalid-link panel without a token and never renders raw error codes', async () => {
+    navigationMocks.searchParams = new URLSearchParams(
+      'error=INVALID_TOKEN&error_description=raw%20provider%20detail',
+    );
+    const ResetPage = (await import('./reset-password/page')).default;
+    const markup = renderToStaticMarkup(createElement(ResetPage));
+    expect(markup).toContain(
+      'This reset link is invalid or has expired. Request a new link and try again.',
+    );
+    expect(markup).toContain('href="/forgot-password"');
+    expect(markup).not.toContain('INVALID_TOKEN');
+    expect(markup).not.toContain('raw provider detail');
+  });
+
+  it('resets the password through the token on matching inputs', async () => {
+    navigationMocks.searchParams = new URLSearchParams('token=tok123');
+    const ResetPage = (await import('./reset-password/page')).default;
+    const container = document.createElement('div');
+    const root = createRoot(container);
+
+    await act(async () => root.render(createElement(ResetPage)));
+    const inputs = container.querySelectorAll('input[type="password"]');
+    await act(async () => {
+      setInputValue(inputs[0] as HTMLInputElement, 'password123');
+      setInputValue(inputs[1] as HTMLInputElement, 'password123');
+      container
+        .querySelector('form')
+        ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+
+    expect(authMocks.resetPassword).toHaveBeenCalledWith({
+      newPassword: 'password123',
+      token: 'tok123',
+    });
+    expect(authMocks.resetPassword).toHaveBeenCalledTimes(1);
+    await act(async () => root.unmount());
+  });
+
+  it('blocks submit and stays bounded when the passwords do not match', async () => {
+    navigationMocks.searchParams = new URLSearchParams('token=tok123');
+    const ResetPage = (await import('./reset-password/page')).default;
+    const container = document.createElement('div');
+    const root = createRoot(container);
+
+    await act(async () => root.render(createElement(ResetPage)));
+    const inputs = container.querySelectorAll('input[type="password"]');
+    await act(async () => {
+      setInputValue(inputs[0] as HTMLInputElement, 'password123');
+      setInputValue(inputs[1] as HTMLInputElement, 'password999');
+      container
+        .querySelector('form')
+        ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+
+    expect(authMocks.resetPassword).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('Passwords do not match.');
+    await act(async () => root.unmount());
+  });
+
+  it('shows the success panel after resetting', async () => {
+    navigationMocks.searchParams = new URLSearchParams('token=tok123');
+    const ResetPage = (await import('./reset-password/page')).default;
+    const container = document.createElement('div');
+    const root = createRoot(container);
+
+    await act(async () => root.render(createElement(ResetPage)));
+    const inputs = container.querySelectorAll('input[type="password"]');
+    await act(async () => {
+      setInputValue(inputs[0] as HTMLInputElement, 'password123');
+      setInputValue(inputs[1] as HTMLInputElement, 'password123');
+      container
+        .querySelector('form')
+        ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+
+    expect(container.textContent).toContain('Your password has been reset.');
+    // Pin the session-revocation copy so it cannot silently drift.
+    expect(container.textContent).toContain(
+      'Every signed-in session was signed out.',
+    );
+    expect(container.textContent).toContain('sign in');
+    await act(async () => root.unmount());
+  });
+
+  it('maps a failed reset submit to the bounded invalid-link message, never raw provider detail', async () => {
+    navigationMocks.searchParams = new URLSearchParams('token=tok123');
+    authMocks.resetPassword.mockResolvedValueOnce({
+      error: { code: 'INVALID_TOKEN', message: 'raw provider detail' },
+    });
+    const ResetPage = (await import('./reset-password/page')).default;
+    const container = document.createElement('div');
+    const root = createRoot(container);
+
+    await act(async () => root.render(createElement(ResetPage)));
+    const inputs = container.querySelectorAll('input[type="password"]');
+    await act(async () => {
+      setInputValue(inputs[0] as HTMLInputElement, 'password123');
+      setInputValue(inputs[1] as HTMLInputElement, 'password123');
+      container
+        .querySelector('form')
+        ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+
+    expect(container.textContent).toContain(
+      'This reset link is invalid or has expired. Request a new link and try again.',
+    );
+    expect(container.textContent).not.toContain('INVALID_TOKEN');
+    expect(container.textContent).not.toContain('raw provider detail');
+    await act(async () => root.unmount());
+  });
+
+  it('distinguishes password-length failures from a broken reset link', async () => {
+    navigationMocks.searchParams = new URLSearchParams('token=tok123');
+    authMocks.resetPassword.mockResolvedValueOnce({
+      error: { code: 'PASSWORD_TOO_LONG', message: 'Password too long' },
+    });
+    const ResetPage = (await import('./reset-password/page')).default;
+    const container = document.createElement('div');
+    const root = createRoot(container);
+
+    await act(async () => root.render(createElement(ResetPage)));
+    const inputs = container.querySelectorAll('input[type="password"]');
+    await act(async () => {
+      setInputValue(inputs[0] as HTMLInputElement, 'password123');
+      setInputValue(inputs[1] as HTMLInputElement, 'password123');
+      container
+        .querySelector('form')
+        ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+
+    expect(container.textContent).toContain('Password must be 8-128 characters.');
+    expect(container.textContent).not.toContain(
+      'This reset link is invalid or has expired',
+    );
+    expect(container.textContent).not.toContain('Password too long');
+    await act(async () => root.unmount());
   });
 });

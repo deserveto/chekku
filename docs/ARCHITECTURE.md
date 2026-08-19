@@ -187,9 +187,13 @@ The Strategist keeps approved strategies inside its Mastra Memory thread only. D
 
 ### Visual Content Agent
 
-`visual-content-agent` is a code-defined image-generation agent and the third sub-agent under the Social Media Supervisor. It shares the common server orchestration model (`getServerModel()`), Mastra Memory, and the context-limiter + gateway-compatibility + char-budget-guard processor stack. It binds exactly one tool: `generate_image`. The fixed image model (`gemini-3.1-flash-image`) is invoked only inside that tool, never as the agent's orchestration model.
+`visual-content-agent` is a code-defined image-generation agent and the third sub-agent under the Social Media Supervisor. It shares the common server orchestration model (`getServerModel()`), Mastra Memory, and the context-limiter + gateway-compatibility + char-budget-guard processor stack. In production it binds exactly two tools: `generate_image` and its read-only companion `review_image`. Outside production it additionally registers the dev-only, post-less `preview_image` for ad-hoc chat visuals. The fixed image model (`LLM_IMAGE_MODEL`) is invoked only inside those tools — output in `generate_image` (and dev `preview_image`), multimodal vision input in `review_image` — never as the agent's orchestration model.
 
-Image generation is on-demand only: the user must explicitly ask the supervisor to generate a visual, and the supervisor delegates to this agent. The tool loads the named social post, verifies its persisted status is exactly `APPROVED`, calls the image-generation provider boundary (`agent/src/image-generation/`), stores the returned bytes in Garage under the historical `social-media-agent` namespace, and attaches the asset to the post's canonical metadata (written last). It never generates automatically after the Content Writer finishes or inside the `weekly-social-drafts` workflow.
+The visual pipeline is split (Rafiqspace upgrade): the image-generation gateway contributes ONLY the background visual; typography and the brand logo are owned by the application compositor (`agent/src/image-generation/compositor.ts`, backed by `@napi-rs/canvas`). The agent assembles a structured `VisualBrief` with a pure-visual `imagePrompt` (text/logo requests are negative instructions) plus text layers (headline, 2–3 verified facts, optional context, source attribution). The compositor overlays the text and stamps the real Rafiqspace logo PNG (`agent/src/assets/image.png`) onto every visual; the image model never renders text or logos. Pillar-aware composition plans (`COMPOSITION_PLANS`) define palette and zones per pillar, and every wrapped text line is clamped to its column with an ellipsis so schema-valid over-long input can never raster-clip at the canvas edge.
+
+Pembahasan 1 self-review loop: after every successful post-bound `generate_image`, the agent must call `review_image` on the freshly attached asset. `review_image` invokes the same fixed image model through `/chat/completions` with an `image_url` content part (`agent/src/image-generation/review-client.ts`), returns `{ postId, assetId, score, issues, suggestion, model, reviewedAt }`, and the agent treats `score >= 85` as pass. On fail it refines the prompt and regenerates, bounded server-side by `MAX_VISUAL_ASSETS_PER_POST = 3` (one initial generation plus two retries). Review is advisory — a provider failure or unparseable verdict resolves to a pass (score 100) so a flaky reviewer never blocks the loop.
+
+Image generation is on-demand only: the user must explicitly ask the supervisor to generate a visual, and the supervisor delegates after the conversational approval checkpoint (the supervisor proposes a concrete visual concept and waits for an explicit affirmative; it never invents the visual silently). The tool loads the named social post, verifies its persisted status is exactly `APPROVED`, calls the image-generation provider boundary (`agent/src/image-generation/`), stores the returned bytes in Garage under the historical `social-media-agent` namespace, and attaches the asset to the post's canonical metadata (written last). It never generates automatically after the Content Writer finishes or inside the `weekly-social-drafts` workflow.
 
 Revisions regenerate: a new `sva_` asset id and object key are produced and the previous asset is preserved in `visualAssets`; there is no editing, inpainting, or image-to-image path. Images are served through the stable application route `GET /api/storage/social-posts/<postId>/visuals/<assetId>`, which validates both canonical ids, verifies the asset belongs to the post through persisted metadata, and never accepts an arbitrary object key.
 
@@ -430,9 +434,27 @@ The chat composer accepts text files, images, and PDFs. All processing is client
 2. **Images** (png/jpeg/webp) are passed through when small (≤1568 px long edge, ≤600 KB) or downscaled/re-encoded to JPEG in a canvas, then sent as native multimodal image parts (raw base64 + `mimeType`).
 3. **PDFs** are rendered to page images with `pdfjs-dist` in the browser (≤20 pages, ≤1580 px long edge per page) — the OpenAI-compatible gateway only accepts `image/*` file parts, so page images are the only PDF transport.
 
-The multimodal message (one text part with prompt, wrapped text blocks, and per-image markers, followed by image parts) flows through the same `/api/agent` proxy and Mastra Memory as any chat turn. The agent server's `bodySizeLimit` is 12 MiB to accommodate base64-inflated payloads; the client caps totals at 8 MiB of base64 and 8 attachments per message. Uploads are never written to Garage — they persist only as message parts in Postgres through Mastra Memory, and thread history restores image attachments from the persisted parts.
+The multimodal message (one text part with prompt, wrapped text blocks, and per-image markers, followed by image parts) is sent as transient `content` on `POST /api/runs`. The run registry keeps only the bounded display `prompt`; the execution driver passes `content` directly to `agent.stream()`, and Mastra Memory persists it with the completed turn. The agent server's `bodySizeLimit` is 12 MiB to accommodate base64-inflated payloads; the client caps totals at 8 MiB of base64 and 8 attachments per message. Uploads are never written to Garage — they persist only as message parts in Postgres through Mastra Memory, and thread history restores image attachments from the persisted parts.
 
 On the agent side, both context-bounding layers are vision-aware: the char-budget guard counts user-message image file parts at a fixed vision-cost estimate (`VISION_PART_ESTIMATE_CHARS`) instead of base64 length and never slices binary payload fields during truncation, so uploaded images cannot be corrupted by context pruning; and the token limiter (`VisionAwareTokenLimiterProcessor` from `createAgentContextLimiter()`) applies the same estimate because the stock Mastra limiter tokenizes the full base64 of non-text parts and would reject multi-page uploads with a tripwire before generation starts. `tripwire` stream chunks surface as visible assistant errors in the chat UI rather than a silently ended stream.
+
+## Agent run lifecycle
+
+Agent execution is server-owned and independent of any browser connection. ChatStudio does not hold the model stream: sending a message creates a **run** on the agent server, and the UI merely observes that run.
+
+```text
+ChatStudio ──POST /api/runs──────────▶ Next.js identity seam ──▶ agent server run manager
+                 (prompt, optional content)   (injects resourceId)           │
+ChatStudio ◀──SSE /api/runs/:runId/events── Next.js proxy ◀── run registry ◀── agent.stream()
+```
+
+- **Ownership.** The run manager lives in `agent/src/mastra/runs/`: an in-memory registry plus an execution driver that consumes `agent.stream()` with a server-owned `AbortController`. Navigating away, reloading, or closing the tab only drops observation; the run continues.
+- **Concurrency.** At most one non-terminal run per `(agentId, threadId, resourceId)`; duplicates receive `409 Conflict` with the active run so the client attaches instead of duplicating.
+- **Reconnection.** `GET /api/runs/:runId/events?offset=N` replays buffered events and then streams live. The client reconnects from the last sequence and never restarts the prompt.
+- **Cancellation.** `POST /api/runs/:runId/cancel` aborts exactly that run's signal and is idempotent for terminal runs.
+- **First-turn titles.** The server creates a missing Memory thread titled from the display prompt before responding. For attachment-only turns the first filename becomes that prompt.
+- **Identity.** The Next.js `/api/runs/*` seam derives `resourceId` from the Better Auth session, discards client-supplied values, and validates thread ownership.
+- **Limits.** Event buffers are bounded to 4 MiB / 10,000 events, terminal runs are retained 30 minutes, and an agent-server restart kills in-flight runs with the in-memory registry.
 
 ## Client boundaries
 
@@ -444,6 +466,8 @@ The browser uses `@mastra/client-js` with the Next.js origin and `/api/agent` pr
 - attaches an optional service credential;
 - supports GET, POST, PUT, PATCH, DELETE, and HEAD;
 - streams the upstream response back to the browser.
+
+The `/api/runs/*` proxy (`client/src/app/api/runs/[[...path]]/route.ts`) is the separate chat-execution surface. It resolves the same identity seam, injects `resourceId = session.user.id`, validates thread ownership for run starts and active-run lookups, and streams SSE bodies through unchanged.
 
 The current identity implementation is intentionally replaceable. Future OIDC must preserve the same resource and thread-ownership checks.
 
@@ -464,6 +488,7 @@ Chat report links use URL-encoded relative `/reports/<reportId>` or `/reports/co
 ### Next.js
 
 - `/` redirects to `/agents`.
+- `/login`, `/signup`, `/verify-email`, `/forgot-password`, and `/reset-password` render the email/password auth pages.
 - `/agents` lists code-defined and stored agents.
 - `/agents/new` creates a stored agent.
 - `/agents/[id]/edit` edits a stored agent.
@@ -485,6 +510,23 @@ Chat report links use URL-encoded relative `/reports/<reportId>` or `/reports/co
 - `GET /api/storage/social-posts/[postId]` returns one post after identity and ID validation.
 - `PATCH /api/storage/social-posts/[postId]` transitions a post `DRAFT → APPROVED` (the only allowed status mutation) after identity and ID validation; the body selects the approval transition and the server helper (`updateSocialPostStatus`) rewrites canonical metadata last.
 - `GET /api/storage/social-posts/[postId]/visuals/[assetId]` returns one visual asset's image bytes with the correct `Content-Type` after identity and both ID validation.
+
+Password reset uses Better Auth's native flow: `/forgot-password` calls
+`authClient.requestPasswordReset({ email, redirectTo: '/reset-password' })`;
+the emailed link (`/api/auth/reset-password/:token`) redirects to
+`/reset-password?token=...` for a single-use, one-hour token. The token
+transits the URL query on the page GET (browser-history/access-log exposure,
+mitigated by 62^24 entropy, single use, expiry, and session revocation).
+Signed-in browsers are redirected from `/reset-password` to `/agents`, so a
+user must sign out before opening a reset link. A successful
+reset revokes every session for the user (`revokeSessionsOnPasswordReset`).
+Requests to `POST /request-password-reset` are rate-limited (5/min) by the
+middleware `password-reset` scope; the reset mail itself is sent
+fire-and-forget via `advanced.backgroundTasks` so response timing does not
+reveal whether an address is registered. The reset mail reuses the Resend transport
+(`RESEND_API_KEY` / `RESEND_FROM_EMAIL`, dev console fallback when unset).
+Signup requires typing the password twice; the match check is client-side
+only and never reaches `signUp.email` on mismatch.
 
 ### Mastra custom routes
 

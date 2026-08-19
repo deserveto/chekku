@@ -7,8 +7,11 @@ const {
   listAgentSkills,
   listAgentThreads,
   listThreadMessages,
-  renameThread,
-  agentStream,
+  startRun,
+  getActiveRun,
+  listActiveRuns,
+  cancelRun,
+  observeRunEvents,
   router,
   browserImageDeps,
   browserPdfDeps,
@@ -16,8 +19,11 @@ const {
   listAgentSkills: vi.fn(),
   listAgentThreads: vi.fn(),
   listThreadMessages: vi.fn(),
-  renameThread: vi.fn(),
-  agentStream: vi.fn(),
+  startRun: vi.fn(),
+  getActiveRun: vi.fn(),
+  listActiveRuns: vi.fn(),
+  cancelRun: vi.fn(),
+  observeRunEvents: vi.fn(),
   router: {
     push: vi.fn(),
     replace: vi.fn(),
@@ -69,16 +75,18 @@ vi.mock('@/lib/memory-threads', () => ({
   listAgentThreads,
   listThreadMessages,
   removeThread: vi.fn(),
-  renameThread,
 }));
-vi.mock('@/lib/mastra-client', () => ({
-  mastraClient: {
-    getAgent: vi.fn(() => ({
-      stream: agentStream,
-      abortThread: vi.fn(),
-    })),
-  },
-}));
+vi.mock('@/lib/agent-runs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/agent-runs')>();
+  return {
+    ...actual,
+    startRun,
+    getActiveRun,
+    listActiveRuns,
+    cancelRun,
+    observeRunEvents,
+  };
+});
 vi.mock('@/lib/model-registry', () => ({
   loadModelRegistry: vi.fn(async () => ({
     configured: true,
@@ -173,9 +181,10 @@ async function submitComposer(): Promise<void> {
 }
 
 function sentMessages(): SentMessage[] {
-  return agentStream.mock.calls.flatMap(
-    (call) => call[0] as SentMessage[],
-  );
+  return startRun.mock.calls.map((call) => ({
+    role: 'user',
+    content: call[0].content,
+  })) as SentMessage[];
 }
 
 beforeEach(async () => {
@@ -183,16 +192,20 @@ beforeEach(async () => {
   listAgentSkills.mockResolvedValue([]);
   listAgentThreads.mockResolvedValue([]);
   listThreadMessages.mockResolvedValue([]);
-  renameThread.mockResolvedValue(undefined);
-  agentStream.mockResolvedValue({
-    processDataStream: async ({
-      onChunk,
-    }: {
-      onChunk: (chunk: { type: string; payload: Record<string, unknown> }) => void;
-    }) => {
-      onChunk({ type: 'finish', payload: {} });
-    },
+  startRun.mockResolvedValue({
+    id: 'run_20260101000000_00000001',
+    resourceId: 'local-user',
+    agentId: 'main-agent',
+    threadId: activeThreadId,
+    prompt: 'attachment',
+    status: 'running',
+    startedAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
   });
+  getActiveRun.mockResolvedValue(null);
+  listActiveRuns.mockResolvedValue([]);
+  cancelRun.mockResolvedValue(undefined);
+  observeRunEvents.mockImplementation(() => new Promise<void>(() => undefined));
   let uuidCounter = 0;
   vi.spyOn(crypto, 'randomUUID').mockImplementation(
     () =>
@@ -279,11 +292,8 @@ describe('ChatStudio file uploads', () => {
     expect(thumb?.getAttribute('src')).toBe('data:image/png;base64,QUJD');
     expect(thumb?.getAttribute('alt')).toBe('photo.png');
 
-    expect(renameThread).toHaveBeenCalledWith(
-      'main-agent',
-      activeThreadId,
-      'local-user',
-      'photo.png',
+    expect(startRun).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: 'photo.png' }),
     );
   });
 
@@ -386,21 +396,17 @@ describe('ChatStudio file uploads', () => {
     expect(sentMessages()).toHaveLength(1);
   });
 
-  it('surfaces tripwire chunks as an assistant error instead of ending silently', async () => {
-    agentStream.mockResolvedValueOnce({
-      processDataStream: async ({
-        onChunk,
-      }: {
-        onChunk: (chunk: { type: string; payload: Record<string, unknown> }) => void;
-      }) => {
-        onChunk({
-          type: 'tripwire',
-          payload: {
-            reason:
-              'TokenLimiterProcessor: No messages fit within the remaining token budget.',
-          },
-        });
-      },
+  it('surfaces a server-reported tripwire as an assistant error', async () => {
+    observeRunEvents.mockImplementationOnce(async (_runId, options) => {
+      options.onEvent({
+        sequence: 0,
+        type: 'error',
+        payload: {
+          error:
+            'Request stopped by a safety limit. TokenLimiterProcessor: No messages fit within the remaining token budget.',
+        },
+        createdAt: '',
+      });
     });
 
     await enterComposerText('hello');

@@ -74,9 +74,13 @@ function LoginContent() {
               onChange={(event) => setPassword(event.target.value)}
               required
               autoComplete="current-password"
+              maxLength={128}
               placeholder="••••••••"
             />
           </label>
+          <p className="auth-foot">
+            <Link href="/forgot-password">Forgot password?</Link>
+          </p>
           <button className="auth-primary" type="submit" disabled={pending}>
             {pending ? 'Signing in…' : 'Sign in'}
           </button>

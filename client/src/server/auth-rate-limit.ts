@@ -9,7 +9,13 @@ const MAX_BUCKETS = 10_000;
 // at the cost of stricter-than-ideal fairness in dev/unsigned deployments.
 const UNTRUSTED_IP_KEY = 'unknown';
 
-const PUBLIC_PATHS = new Set(['/login', '/signup', '/verify-email']);
+const PUBLIC_PATHS = new Set([
+  '/login',
+  '/signup',
+  '/verify-email',
+  '/forgot-password',
+  '/reset-password',
+]);
 // Everything under /public is share-token gated, not session gated: the page
 // itself resolves the `?t=` token and 404s without it. Recipients of a share
 // link have no account, so the session redirect must not intercept them.

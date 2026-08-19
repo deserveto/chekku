@@ -14,7 +14,8 @@ export type ImageGenerationErrorCategory =
   | 'unavailable'
   | 'format'
   | 'tooLarge'
-  | 'invalid';
+  | 'invalid'
+  | 'review-failed';
 
 const ERROR_MESSAGES: Record<ImageGenerationErrorCategory, string> = {
   configuration: 'Image generation is not configured.',
@@ -24,6 +25,7 @@ const ERROR_MESSAGES: Record<ImageGenerationErrorCategory, string> = {
   format: 'Image generation returned an unsupported format.',
   tooLarge: 'Image generation returned too much data.',
   invalid: 'Image generation returned an invalid response.',
+  'review-failed': 'Image review is unavailable. Try again later.',
 };
 
 export class ImageGenerationClientError extends Error {

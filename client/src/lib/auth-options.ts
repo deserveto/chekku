@@ -2,11 +2,15 @@
 // and of any import that reaches it: @better-auth/cli loads this module (through
 // auth-migrate.ts) to derive the schema, and it aborts on any config whose
 // import graph touches `server-only`. Runtime server code composes these options
-// with the real email transport in auth.ts, which keeps the `server-only` guard.
+// with the real email transports in auth.ts, which keeps the `server-only` guard.
 import { Pool } from 'pg';
 import { withEmailVerificationCallback } from './auth-redirects';
 
 interface SendVerificationEmail {
+  (args: { user: { email: string }; url: string }): Promise<void>;
+}
+
+interface SendResetPassword {
   (args: { user: { email: string }; url: string }): Promise<void>;
 }
 
@@ -17,6 +21,8 @@ interface BuildAuthOptionsArgs {
   // Required rather than defaulted: a no-op fallback would silently disable
   // verification delivery, and every signup depends on that mail arriving.
   sendVerificationEmail: SendVerificationEmail;
+  // Required for the same reason: reset links must actually be delivered.
+  sendResetPassword: SendResetPassword;
 }
 
 export function buildAuthOptions(args: BuildAuthOptionsArgs) {
@@ -24,9 +30,24 @@ export function buildAuthOptions(args: BuildAuthOptionsArgs) {
     baseURL: args.baseURL,
     secret: args.secret,
     database: new Pool({ connectionString: args.connectionString }),
+    advanced: {
+      // Without a handler, Better Auth's `runInBackgroundOrAwait` degrades to
+      // a plain await: the reset endpoint then waits out the Resend round
+      // trip for existing accounts only, a response-time oracle that
+      // distinguishes registered emails. Registering the task runs the send
+      // fire-and-forget; send failures stay swallowed server-side (Better
+      // Auth pre-catches, and the local catch guards against a raw promise).
+      backgroundTasks: {
+        handler: (task: Promise<unknown>) => {
+          task.catch(() => {});
+        },
+      },
+    },
     emailAndPassword: {
       enabled: true,
       requireEmailVerification: true,
+      revokeSessionsOnPasswordReset: true,
+      sendResetPassword: args.sendResetPassword,
     },
     emailVerification: {
       sendOnSignIn: true,

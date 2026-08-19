@@ -211,13 +211,68 @@ function extractFirstEntry(payload: unknown): Record<string, unknown> {
   return first;
 }
 
+const MAX_ERROR_SNIPPET_BYTES = 512;
+
+function scrubSecret(value: string, secret: string): string {
+  const trimmed = secret.trim();
+  if (!trimmed) return value;
+  return value.split(trimmed).join('***');
+}
+
+/**
+ * Read a bounded snippet of a non-ok response body and log it server-side so
+ * an operator can diagnose provider failures (e.g. a 403 model-access denial)
+ * without a manual probe. The snippet is scrubbed of the API key and the log
+ * never reaches the model or the chat stream — the thrown error stays the
+ * fixed, sanitized {@link ImageGenerationClientError}.
+ */
+async function logProviderFailure(response: Response, apiKey: string): Promise<void> {
+  let snippet = '';
+  if (response.body) {
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    try {
+      while (total < MAX_ERROR_SNIPPET_BYTES) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) {
+          chunks.push(value);
+          total += value.byteLength;
+        }
+      }
+      const buf = new Uint8Array(total);
+      let off = 0;
+      for (const chunk of chunks) {
+        buf.set(chunk, off);
+        off += chunk.byteLength;
+      }
+      snippet = new TextDecoder('utf-8', { fatal: false }).decode(buf).replace(/\s+/g, ' ').trim().slice(0, MAX_ERROR_SNIPPET_BYTES);
+    } catch {
+      snippet = '';
+    } finally {
+      try {
+        reader.releaseLock();
+      } catch {
+        // Cleanup must not replace the fixed client error.
+      }
+      cancelBody(response.body);
+    }
+  }
+  const safe = scrubSecret(snippet, apiKey);
+  console.warn(
+    `[image-generation] provider returned status ${response.status}${safe ? `: ${safe}` : ''}`,
+  );
+}
+
 async function readBoundedJson(
   response: Response,
   signal: AbortSignal,
   checkpoint: () => void,
+  apiKey: string,
 ): Promise<unknown> {
   if (!response.ok) {
-    cancelBody(response.body);
+    await logProviderFailure(response, apiKey);
     throw new ImageGenerationClientError(
       response.status === 401 || response.status === 403 ? 'configuration' : 'unavailable',
     );
@@ -312,7 +367,7 @@ async function fetchUrlBytes(
   });
   checkpoint();
   if (!response.ok) {
-    cancelBody(response.body);
+    await logProviderFailure(response, apiKey);
     throw new ImageGenerationClientError(
       response.status === 401 || response.status === 403 ? 'configuration' : 'unavailable',
     );
@@ -441,7 +496,7 @@ export function createOpenAICompatibleImageClient(
           body: JSON.stringify(body),
         });
         checkpoint();
-        const payload = await readBoundedJson(response, requestSignal, checkpoint);
+        const payload = await readBoundedJson(response, requestSignal, checkpoint, config.apiKey);
         checkpoint();
         const entry = extractFirstEntry(payload);
         checkpoint();

@@ -1,4 +1,10 @@
 import { mastraClient } from './mastra-client';
+import {
+  mergeAdjacentAssistantTurns,
+  restoreAssistantParts,
+  type FlatToolResult,
+} from './assistant-parts';
+import type { AssistantPart } from './types';
 import { isOwnedThreadId } from './thread-id';
 
 export interface StudioThread {
@@ -19,6 +25,12 @@ export interface StudioMemoryMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  /**
+   * Chronological assistant-turn parts rebuilt from Mastra Memory's stored
+   * `tool-invocation` parts, so restored threads keep their tool call
+   * timeline. Absent for user messages and turns without tool activity.
+   */
+  parts?: AssistantPart[];
   createdAt: number;
   attachments?: StudioMemoryAttachment[];
 }
@@ -93,14 +105,8 @@ function normalizeThread(
 }
 
 function attachmentsFromContent(content: unknown): StudioMemoryAttachment[] {
-  const parts = Array.isArray(content)
-    ? content
-    : content && typeof content === 'object' && Array.isArray((content as Record<string, unknown>).parts)
-      ? ((content as Record<string, unknown>).parts as unknown[])
-      : [];
-
   const attachments: StudioMemoryAttachment[] = [];
-  for (const part of parts) {
+  for (const part of partsFromContent(content)) {
     if (!part || typeof part !== 'object') continue;
     const record = part as Record<string, unknown>;
     if (record.type !== 'file') continue;
@@ -120,28 +126,100 @@ function attachmentsFromContent(content: unknown): StudioMemoryAttachment[] {
   return attachments;
 }
 
-function normalizeMessage(value: unknown): StudioMemoryMessage | undefined {
+function normalizeMessage(
+  value: unknown,
+  flatToolResults?: ReadonlyMap<string, FlatToolResult>,
+): StudioMemoryMessage | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const row = value as Record<string, unknown>;
   const role = row.role;
 
   if (role !== 'user' && role !== 'assistant') return undefined;
 
-  const content = textFromContent(row.content);
+  const id =
+    typeof row.id === 'string' && row.id
+      ? row.id
+      : crypto.randomUUID();
+
+  const restored =
+    role === 'assistant'
+      ? restoreAssistantParts(row.content, id, flatToolResults)
+      : undefined;
+  const content = restored ? restored.text : textFromContent(row.content);
+  const parts = restored?.parts.length ? restored.parts : undefined;
   const attachments = attachmentsFromContent(row.content);
-  if (role === 'assistant' && !content) return undefined;
+  if (!content && !parts && role === 'assistant') return undefined;
   if (role === 'user' && !content && attachments.length === 0) return undefined;
 
   return {
-    id:
-      typeof row.id === 'string' && row.id
-        ? row.id
-        : crypto.randomUUID(),
+    id,
     role,
     content,
+    ...(parts ? { parts } : {}),
     createdAt: toTimestamp(row.createdAt),
     ...(attachments.length > 0 ? { attachments } : {}),
   };
+}
+
+/**
+ * Resolve the message parts from either persisted shape: legacy V1 rows keep
+ * parts as a plain array on `content`, while Mastra V2 rows wrap them in
+ * `content: { format: 2, parts: [...] }`.
+ */
+function partsFromContent(content: unknown): unknown[] {
+  if (Array.isArray(content)) return content;
+  if (content && typeof content === 'object') {
+    const parts = (content as Record<string, unknown>).parts;
+    if (Array.isArray(parts)) return parts;
+  }
+  return [];
+}
+
+/**
+ * Harvest legacy V1 `tool-result` outcomes from every raw memory row (they
+ * persist under separate `role: 'tool'` rows, keyed by the calling assistant
+ * row's `tool-call` part) so the assistant turn's card can be finalized with
+ * its outcome and status.
+ */
+function collectFlatToolResults(
+  rows: unknown[],
+): Map<string, FlatToolResult> {
+  const results = new Map<string, FlatToolResult>();
+
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const rec = row as Record<string, unknown>;
+
+    for (const part of partsFromContent(rec.content)) {
+      if (!part || typeof part !== 'object') continue;
+      const p = part as Record<string, unknown>;
+      if (p.type !== 'tool-result') continue;
+      const toolCallId =
+        typeof p.toolCallId === 'string' ? p.toolCallId : '';
+      if (!toolCallId) continue;
+
+      const output = p.output ?? p.result;
+      let status: FlatToolResult['status'] = 'complete';
+      let value: unknown = output;
+      if (output && typeof output === 'object') {
+        const out = output as Record<string, unknown>;
+        if (typeof out.type === 'string' && 'value' in out) {
+          value = out.value;
+          status =
+            out.type === 'error-text' || out.type === 'error-json'
+              ? 'error'
+              : 'complete';
+        }
+      }
+
+      results.set(toolCallId, {
+        status,
+        ...(value !== undefined ? { result: value } : {}),
+      });
+    }
+  }
+
+  return results;
 }
 
 function assertThreadOwnership(
@@ -215,10 +293,15 @@ export async function listThreadMessages(
 
   if (!Array.isArray(rows)) return [];
 
-  return rows
-    .map(normalizeMessage)
-    .filter((row): row is StudioMemoryMessage => Boolean(row))
-    .sort((a, b) => a.createdAt - b.createdAt);
+  const rowArray = rows;
+  const flatToolResults = collectFlatToolResults(rowArray);
+
+  return mergeAdjacentAssistantTurns(
+    rowArray
+      .map((row) => normalizeMessage(row, flatToolResults))
+      .filter((row): row is StudioMemoryMessage => Boolean(row))
+      .sort((a, b) => a.createdAt - b.createdAt),
+  );
 }
 
 export async function renameThread(

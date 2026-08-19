@@ -198,6 +198,16 @@ describe('requested UI structure', () => {
     expect(types).toMatch(/RESERVED_AGENT_IDS[\s\S]*PM_AGENT_ID/);
   });
 
+  it('clamps every agent-card description to three lines', () => {
+    // Long routing descriptions (e.g. the Strategist's) must not stretch the
+    // card; the CSS clamps to 3 lines while keeping the full text in the DOM.
+    const rule = css.match(/\.studio-agent-card > p\s*\{([^}]*)\}/)?.[1] ?? '';
+    expect(rule).toContain('display: -webkit-box');
+    expect(rule).toContain('-webkit-line-clamp: 3');
+    expect(rule).toContain('-webkit-box-orient: vertical');
+    expect(rule).toContain('overflow: hidden');
+  });
+
   it('renders reusable agent icons and offers an icon selector in the builder', () => {
     expect(agentCatalogSource).toContain('<AgentIcon icon={agent.iconKey} />');
     expect(agentBuilder).toContain('AGENT_ICON_IDS.map');
@@ -236,8 +246,11 @@ describe('requested UI structure', () => {
   it('guards thread deletion against a double-confirm the same way', () => {
     expect(chatStudio).toContain('const deleteInFlightRef = useRef(false)');
     expect(chatStudio).toContain(
-      'if (isStreaming || !target || deleteInFlightRef.current) return',
+      'if (!target || deleteInFlightRef.current) return',
     );
+    // Deletion is blocked only for threads with a live run — never by
+    // component-local streaming state.
+    expect(chatStudio).toContain('if (threadHasActiveRun(target.id))');
     expect(chatStudio).toContain('deleteInFlightRef.current = false');
   });
 
@@ -250,9 +263,16 @@ describe('requested UI structure', () => {
     expect(reducedMotion).toContain('transition: none');
 
     const shortAuth = css.match(
-      /@media \(max-height: 800px\) and \(min-width: 761px\)\s*\{([\s\S]*?)\n\}/,
+      /@media \(max-height: 950px\) and \(min-width: 761px\)\s*\{([\s\S]*?)\n\}/,
     )?.[1] ?? '';
-    expect(shortAuth).toMatch(/\.auth-shell\s*\{[^}]*place-content:\s*start center/s);
+    // Short-viewport alignment is carried by the shell padding and the
+    // frame's min-height: `.auth-frame { margin: auto }` absorbs all free
+    // space, so any place-content here would be inert.
+    expect(shortAuth).toMatch(/\.auth-shell\s*\{[^}]*padding-block:\s*20px/s);
+    expect(shortAuth).toMatch(
+      /\.auth-frame\s*\{[^}]*min-height:\s*calc\(100dvh - 40px\)/s,
+    );
+    expect(shortAuth).not.toMatch(/place-content/);
   });
 
   it('renders the competitive slides route through the shared client component and never touches Garage directly', () => {

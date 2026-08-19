@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildAgentProxyUrl } from './proxy-url';
+import { buildAgentProxyUrl, buildRunsProxyUrl } from './proxy-url';
 
 describe('buildAgentProxyUrl', () => {
   it('maps adapter paths to the Mastra api namespace', () => {
@@ -38,5 +38,31 @@ describe('buildAgentProxyUrl', () => {
     expect(() => buildAgentProxyUrl('http://localhost:4111', ['..'], '')).toThrow('Unsafe');
     expect(() => buildAgentProxyUrl('http://localhost:4111', ['a/b'], '')).toThrow('Unsafe');
     expect(() => buildAgentProxyUrl('http://localhost:4111', ['a?b'], '')).toThrow('Unsafe');
+  });
+});
+
+describe('buildRunsProxyUrl', () => {
+  it('targets the run-start route for an empty path', () => {
+    expect(buildRunsProxyUrl('http://localhost:4111/', [], '?a=1')).toBe(
+      'http://localhost:4111/runs?a=1',
+    );
+  });
+
+  it('joins run subpaths under /runs', () => {
+    expect(
+      buildRunsProxyUrl(
+        'http://localhost:4111',
+        ['run_20260101000000_00000001', 'events'],
+        '?offset=0',
+      ),
+    ).toBe(
+      'http://localhost:4111/runs/run_20260101000000_00000001/events?offset=0',
+    );
+  });
+
+  it('rejects traversal and reserved URL characters', () => {
+    expect(() => buildRunsProxyUrl('http://localhost:4111', ['..'], '')).toThrow('Unsafe');
+    expect(() => buildRunsProxyUrl('http://localhost:4111', ['a/b'], '')).toThrow('Unsafe');
+    expect(() => buildRunsProxyUrl('http://localhost:4111', ['a?b'], '')).toThrow('Unsafe');
   });
 });

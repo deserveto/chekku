@@ -156,7 +156,7 @@ export function buildPostUrl(postId: string, webUrl: string): string {
  *
  * Output contract: a markdown blob with `[TOPIC]`, `[THESIS]`, `HOOKS` (all
  * three angles), `CORE POINTS` (3-5 bullets), `SHORT-FORM BRICK`,
- * `MEDIUM-FORM BRICK`, `VISUAL / VIDEO SCRIPT BRICK`, and
+ * `MEDIUM-FORM BRICK`, `IMAGE BRICK`, and
  * `CALL TO ACTION / ENGAGEMENT` sections — see {@link CANONICAL_UNIT_TEMPLATE}.
  */
 export function buildCanonicalPrompt(topic: Topic, weekStart: string): string {
@@ -179,7 +179,7 @@ Rules:
 - [THESIS] is the angle or point of view — not a topic summary. Make it sharp enough that a reader could disagree with it.
 - HOOKS must include all three angles: Curiosity, Contrarian, Data/Impact. Each hook is a single line, ready to lead a post.
 - CORE POINTS are the substance — 3 to 5 self-contained bullets. Each bullet must make sense on its own.
-- Each platform brick (SHORT-FORM / MEDIUM-FORM / VISUAL-VIDEO) must be self-contained. Do NOT cross-reference ("see above"). A downstream repurpose step will read bricks independently.
+- Each platform brick (SHORT-FORM / MEDIUM-FORM / IMAGE) must be self-contained. Do NOT cross-reference ("see above"). A downstream repurpose step will read bricks independently.
 - Never invent quotes, stats, or facts. If a claim needs a source, leave a [source] placeholder.
 
 DILARANG KERAS (aturan ini wajib dipatuhi tanpa pengecualian):

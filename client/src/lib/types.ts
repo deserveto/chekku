@@ -41,11 +41,18 @@ export type ToolEventStatus =
   | 'complete'
   | 'approval'
   | 'declined'
-  | 'error';
+  | 'error'
+  | 'interrupted';
 
-export type ToolEvent = {
+export type TextAssistantPart = {
+  type: 'text';
   id: string;
-  messageId: string;
+  content: string;
+};
+
+export type ToolAssistantPart = {
+  type: 'tool';
+  id: string;
   toolCallId: string;
   toolName: string;
   status: ToolEventStatus;
@@ -65,10 +72,24 @@ export type ChatAttachmentView = {
   pageCount?: number;
 };
 
+/**
+ * Ordered building block of one assistant turn. Streaming text deltas and
+ * tool events are appended in arrival order so the timeline can render each
+ * tool call at the exact point where it happened relative to the text.
+ */
+export type AssistantPart = TextAssistantPart | ToolAssistantPart;
+
 export type ChatMessage = {
   id: string;
   role: 'user' | 'assistant';
+  /**
+   * Full concatenated text of the turn. Kept in sync with text parts during
+   * streaming so copy actions, empty checks, and Memory-restored messages
+   * (which have no parts) keep working.
+   */
   content: string;
+  /** Present for assistant messages rendered from a live stream or restored parts. */
+  parts?: AssistantPart[];
   error?: boolean;
   createdAt: number;
   attachments?: ChatAttachmentView[];
