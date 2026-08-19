@@ -519,6 +519,46 @@ body.studio-sidebar-resizing * {
   line-height: 21px;
 }
 
+.studio-run-weekly {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.studio-run-weekly button {
+  min-height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--studio-line);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--studio-ink);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.studio-run-weekly button:disabled {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+.studio-run-weekly-note,
+.studio-run-weekly-error {
+  max-width: 260px;
+  font-size: 10px;
+  line-height: 14px;
+  text-align: right;
+}
+
+.studio-run-weekly-note {
+  color: var(--studio-muted);
+}
+
+.studio-run-weekly-error {
+  color: var(--studio-danger);
+}
+
 .studio-eyebrow {
   margin: 0;
   color: var(--studio-muted);
@@ -1104,6 +1144,13 @@ body.studio-sidebar-resizing * {
   color: var(--studio-body);
   font-size: 11px;
   line-height: 18px;
+  /* Long descriptions (e.g. the Strategist's routing contract) must not
+     stretch the card: clamp every agent card to three lines. The full text
+     stays in the DOM. */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .studio-agent-meta {
@@ -2012,10 +2059,43 @@ body.studio-sidebar-resizing * {
 .chat-tool-card pre {
   margin: 0;
   padding: 10px;
-  overflow-x: auto;
+  max-height: 320px;
+  overflow: auto;
   border-top: 1px solid var(--studio-line);
   color: var(--studio-body);
   font: 9px/15px var(--font-dm-mono);
+}
+
+.chat-tool-image-wrap {
+  padding: 9px;
+  border-top: 1px solid var(--studio-line);
+  text-align: center;
+}
+
+.chat-tool-image {
+  max-width: 100%;
+  max-height: 360px;
+  border-radius: 3px;
+  border: 1px solid var(--studio-line);
+  object-fit: contain;
+}
+
+.chat-tool-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.chat-tool-label {
+  padding: 6px 10px 2px;
+  color: var(--studio-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font: 8px var(--font-dm-mono);
+}
+
+.chat-tool-section pre {
+  border-top: none;
 }
 
 .chat-approval-actions {

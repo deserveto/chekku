@@ -431,4 +431,349 @@ describe('agent-scoped memory threads', () => {
       ),
     ).toEqual(['browser_goto', 'text', 'browser_snapshot', 'text']);
   });
+
+  it('restores legacy V1 tool-call parts with outcomes merged from tool rows', async () => {
+    threadListMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'msg-user',
+          role: 'user',
+          content: [{ type: 'text', text: 'draft a post' }],
+          createdAt: '2024-01-01T00:00:00.000Z',
+        },
+        {
+          id: 'msg-asst',
+          role: 'assistant',
+          content: [
+            { type: 'text', text: 'Delegating…' },
+            {
+              type: 'tool-call',
+              toolCallId: 'call_1',
+              toolName: 'search_web',
+              input: { query: 'local-first db' },
+            },
+          ],
+          createdAt: '2024-01-01T00:00:01.000Z',
+        },
+        {
+          id: 'msg-tool',
+          role: 'tool',
+          content: [
+            {
+              type: 'tool-result',
+              toolCallId: 'call_1',
+              toolName: 'search_web',
+              output: { type: 'json', value: { results: ['a', 'b'] } },
+            },
+          ],
+          createdAt: '2024-01-01T00:00:02.000Z',
+        },
+      ],
+    });
+
+    const messages = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    expect(messages.map((m) => m.id)).toEqual(['msg-user', 'msg-asst']);
+    expect(messages[1]?.content).toBe('Delegating…');
+    expect(messages[1]?.parts).toHaveLength(2);
+    expect(messages[1]?.parts?.[1]).toMatchObject({
+      type: 'tool',
+      toolCallId: 'call_1',
+      toolName: 'search_web',
+      status: 'complete',
+      args: { query: 'local-first db' },
+      result: { results: ['a', 'b'] },
+    });
+  });
+
+  it('keeps a legacy V1 assistant message whose only body is a tool call', async () => {
+    threadListMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'msg-asst',
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool-call',
+              toolCallId: 'call_1',
+              toolName: 'get_current_time',
+              input: {},
+            },
+          ],
+          createdAt: '2024-01-01T00:00:00.000Z',
+        },
+      ],
+    });
+
+    const messages = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.content).toBe('');
+    expect(messages[0]?.parts?.[0]).toMatchObject({
+      type: 'tool',
+      toolCallId: 'call_1',
+      status: 'interrupted',
+      args: {},
+    });
+  });
+
+  it('marks a restored V1 tool call as error when the outcome is an error variant', async () => {
+    threadListMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'msg-asst',
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool-call',
+              toolCallId: 'call_1',
+              toolName: 'browser_click',
+              input: { selector: '#go' },
+            },
+          ],
+          createdAt: '2024-01-01T00:00:00.000Z',
+        },
+        {
+          id: 'msg-tool',
+          role: 'tool',
+          content: [
+            {
+              type: 'tool-result',
+              toolCallId: 'call_1',
+              output: { type: 'error-text', value: 'selector not found' },
+            },
+          ],
+          createdAt: '2024-01-01T00:00:01.000Z',
+        },
+      ],
+    });
+
+    const messages = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    expect(messages[0]?.parts?.[0]).toMatchObject({
+      status: 'error',
+      result: 'selector not found',
+    });
+  });
+
+  it('restores a sub-agent delegation invocation with nested tool results intact', async () => {
+    threadListMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'msg-user',
+          role: 'user',
+          content: { format: 2, parts: [{ type: 'text', text: 'Cari berita' }] },
+          createdAt: '2024-01-01T00:00:00.000Z',
+        },
+        {
+          id: 'msg-asst',
+          role: 'assistant',
+          content: {
+            format: 2,
+            content: 'Hasil riset…',
+            parts: [
+              { type: 'step-start' },
+              { type: 'text', text: 'Hasil riset…' },
+              {
+                type: 'tool-invocation',
+                toolInvocation: {
+                  toolCallId: 'call_strategist',
+                  toolName: 'agent-socialMediaStrategistAgent',
+                  args: { prompt: 'Cari berita teknologi terbaru' },
+                  state: 'result',
+                  result: {
+                    text: 'Content pillar: TECHNOLOGY & AI TRENDS',
+                    subAgentThreadId: 'thread-strategist',
+                    subAgentResourceId: 'user-socialMediaStrategistAgent',
+                    subAgentToolResults: [
+                      {
+                        toolName: 'search_web',
+                        toolCallId: 'chatcmpl-tool-95a456ca49c13702',
+                        result: {
+                          query: 'berita teknologi AI',
+                          results: [{ url: 'https://mediaindonesia.com/x', title: 'AI' }],
+                        },
+                      },
+                    ],
+                  },
+                },
+              },
+            ],
+          },
+          createdAt: '2024-01-01T00:00:01.000Z',
+        },
+      ],
+    });
+
+    const messages = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    expect(messages).toHaveLength(2);
+    expect(messages[1]?.content).toBe('Hasil riset…');
+    const delegation = messages[1]?.parts?.find(
+      (part) => part.type === 'tool',
+    );
+    expect(delegation).toMatchObject({
+      toolCallId: 'call_strategist',
+      toolName: 'agent-socialMediaStrategistAgent',
+      status: 'complete',
+    });
+    const nested = (delegation as { result?: { subAgentToolResults?: Array<{ result?: { results?: unknown[] } }> } })
+      .result?.subAgentToolResults ?? [];
+    expect(nested[0]?.result?.results).toHaveLength(1);
+  });
+
+  it('keeps a V2 tool-only delegation message and preserves the nested chat-preview image URL', async () => {
+    threadListMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'msg-asst',
+          role: 'assistant',
+          content: {
+            format: 2,
+            parts: [
+              {
+                type: 'tool-invocation',
+                toolInvocation: {
+                  toolCallId: 'call_visual',
+                  toolName: 'agent-visualContentAgent',
+                  args: { postId: 'smp_1' },
+                  state: 'result',
+                  result: {
+                    text: 'Visual generated.',
+                    subAgentToolResults: [
+                      {
+                        toolName: 'generate_image',
+                        toolCallId: 'call_gen',
+                        result: {
+                          imageUrl:
+                            '/api/storage/chat-previews/prev_20260815121042_1d47453e.png',
+                        },
+                      },
+                    ],
+                  },
+                },
+              },
+            ],
+          },
+          createdAt: '2024-01-01T00:00:00.000Z',
+        },
+      ],
+    });
+
+    const messages = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.content).toBe('');
+    const tool = messages[0]?.parts?.[0];
+    expect(tool).toMatchObject({
+      type: 'tool',
+      toolCallId: 'call_visual',
+      toolName: 'agent-visualContentAgent',
+      status: 'complete',
+    });
+    const nested = (tool as { result?: { subAgentToolResults?: Array<{ result?: { imageUrl?: string } }> } })
+      .result?.subAgentToolResults ?? [];
+    expect(nested[0]?.result?.imageUrl).toBe(
+      '/api/storage/chat-previews/prev_20260815121042_1d47453e.png',
+    );
+  });
+
+  it('maps a V2 output-error invocation to an error part', async () => {
+    threadListMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'msg-asst',
+          role: 'assistant',
+          content: {
+            format: 2,
+            parts: [
+              {
+                type: 'tool-invocation',
+                toolInvocation: {
+                  toolCallId: 'call_err',
+                  toolName: 'generate_image',
+                  args: { prompt: 'x' },
+                  state: 'output-error',
+                  errorText: 'Image generation is not configured',
+                },
+              },
+            ],
+          },
+          createdAt: '2024-01-01T00:00:00.000Z',
+        },
+      ],
+    });
+
+    const messages = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    expect(messages[0]?.parts?.[0]).toMatchObject({
+      toolCallId: 'call_err',
+      status: 'error',
+      result: 'Image generation is not configured',
+    });
+  });
+
+  it('marks a still-running V2 invocation as interrupted on restore', async () => {
+    threadListMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'msg-asst',
+          role: 'assistant',
+          content: {
+            format: 2,
+            parts: [
+              {
+                type: 'tool-invocation',
+                toolInvocation: {
+                  toolCallId: 'call_pending',
+                  toolName: 'search_web',
+                  args: { query: 'ai' },
+                  state: 'call',
+                },
+              },
+            ],
+          },
+          createdAt: '2024-01-01T00:00:00.000Z',
+        },
+      ],
+    });
+
+    const messages = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    expect(messages[0]?.parts?.[0]).toMatchObject({
+      toolCallId: 'call_pending',
+      status: 'interrupted',
+    });
+    expect(
+      (messages[0]?.parts?.[0] as { result?: unknown }).result,
+    ).toBeUndefined();
+  });
 });

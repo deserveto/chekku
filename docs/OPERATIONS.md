@@ -90,11 +90,13 @@ LLM_IMAGE_MODEL=gemini-3.1-flash-image
 #LLM_IMAGE_ENDPOINT_PATH=/images/generations
 ```
 
-`LLM_IMAGE_MODEL` is the fixed model id invoked by the `generate_image` tool; it never comes from tool or model input. Empty/unset fails closed with `Image generation is not configured.` without preventing other agent features from starting. `LLM_IMAGE_ENDPOINT_PATH` defaults to the OpenAI Images API standard path (`/images/generations`); override it only when the configured gateway exposes image generation under a different path. Both use the existing `LLM_BASE_URL` and `LLM_API_KEY`; no second key is required.
+`LLM_IMAGE_MODEL` is the fixed model id invoked by the Visual Content Agent's image tools — generation output in `generate_image` (and the dev-only `preview_image`) plus multimodal vision input in `review_image` (the self-review loop, capped server-side at `MAX_VISUAL_ASSETS_PER_POST = 3` assets per post); it never comes from tool or model input. Empty/unset fails closed with `Image generation is not configured.` without preventing other agent features from starting. `LLM_IMAGE_ENDPOINT_PATH` defaults to the OpenAI Images API standard path (`/images/generations`); override it only when the configured gateway exposes image generation under a different path. Both use the existing `LLM_BASE_URL` and `LLM_API_KEY`; no second key is required.
 
 The image-generation HTTP adapter assumes the OpenAI Images API standard contract (`POST {LLM_BASE_URL}/images/generations` with `response_format: b64_json`). If the live gateway does not implement that contract, only `agent/src/image-generation/client.ts` needs adjustment.
 
 Image generation is on-demand only. Ask the Social Media Supervisor to generate a visual for a specific approved post; it delegates to the Visual Content Agent, which calls `generate_image`. The tool verifies the post is `APPROVED` from persisted metadata, stores the image bytes in Garage, attaches the asset to the post's metadata, and returns the asset id plus the application-facing image URL. Revisions generate a new asset and preserve the previous one. Images are served at `GET /api/storage/social-posts/<postId>/visuals/<assetId>`.
+
+Dev-only chat previews: outside production, the Visual Content Agent also exposes a `preview_image` tool for an ad-hoc chat visual that has no `postId`. It generates a standalone image through the same fixed model, stores it under an isolated `chat-previews/<previewId>.<ext>` prefix (never `social-posts/`, so the social-posts list is unaffected), and returns a URL. Previews are served at `GET /api/storage/chat-previews/[file]` (identity-checked, 404 in production). This lets the chat show a generated image directly without an approved post and without touching `/social-posts`.
 
 The weekly workflow creates posts in the `DRAFT` status. To approve one for visual generation, open it on the social-posts detail page and use the Approve control, which issues `PATCH /api/storage/social-posts/[postId]` to transition `DRAFT → APPROVED` (the only permitted status mutation; `APPROVED` and `PUBLISHED` are terminal for this iteration). The `generate_image` tool rejects any post that is not `APPROVED`.
 
@@ -512,6 +514,10 @@ Review interfaces:
 - `/social-posts` lists post id, created time, topic, special day, and status newest first.
 - `/social-posts/[postId]` renders caption, metadata, then the brief that generated it.
 - `GET /api/storage/social-posts` and `GET /api/storage/social-posts/[postId]` return bounded JSON after server identity validation.
+
+Manual trigger (dev-only):
+
+- Outside production, the "Run weekly drafts now" button on `/social-posts` (or `POST /api/storage/social-posts/run-weekly-drafts`, identity-checked) starts `weekly-social-drafts` fire-and-forget so a developer can produce `DRAFT` posts on demand without waiting for the Monday cron. The run is the same code path as the scheduled fire; refresh `/social-posts` a few moments later to see the new drafts. Chat drafting itself remains ephemeral text — only the workflow (scheduled or manually triggered) creates posts.
 
 ## Common failures
 

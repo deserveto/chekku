@@ -198,6 +198,16 @@ describe('requested UI structure', () => {
     expect(types).toMatch(/RESERVED_AGENT_IDS[\s\S]*PM_AGENT_ID/);
   });
 
+  it('clamps every agent-card description to three lines', () => {
+    // Long routing descriptions (e.g. the Strategist's) must not stretch the
+    // card; the CSS clamps to 3 lines while keeping the full text in the DOM.
+    const rule = css.match(/\.studio-agent-card > p\s*\{([^}]*)\}/)?.[1] ?? '';
+    expect(rule).toContain('display: -webkit-box');
+    expect(rule).toContain('-webkit-line-clamp: 3');
+    expect(rule).toContain('-webkit-box-orient: vertical');
+    expect(rule).toContain('overflow: hidden');
+  });
+
   it('renders reusable agent icons and offers an icon selector in the builder', () => {
     expect(agentCatalogSource).toContain('<AgentIcon icon={agent.iconKey} />');
     expect(agentBuilder).toContain('AGENT_ICON_IDS.map');

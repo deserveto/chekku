@@ -135,6 +135,41 @@ export type RestoredAssistantTurn = {
   parts: AssistantPart[];
 };
 
+/**
+ * A tool outcome harvested from a separate persisted row (legacy V1 storage
+ * writes `tool-result` parts under a `role: 'tool'` row keyed by the calling
+ * assistant row's `tool-call`). Keyed by `toolCallId`.
+ */
+export type FlatToolResult = {
+  status: ToolEventStatus;
+  result?: unknown;
+};
+
+/**
+ * Unwrap a persisted tool-result `output` (AI SDK v2
+ * `LanguageModelV2ToolResultOutput`) to its inner value and detect error
+ * variants so restored cards render with the right status.
+ */
+function unwrapToolOutput(
+  output: unknown,
+): { value: unknown; error: boolean } {
+  if (output && typeof output === 'object') {
+    const rec = output as Record<string, unknown>;
+    const type = rec.type;
+    if (typeof type === 'string' && 'value' in rec) {
+      return {
+        value: rec.value,
+        error: type === 'error-text' || type === 'error-json',
+      };
+    }
+  }
+  return { value: output, error: false };
+}
+
+function flatString(value: unknown): string | undefined {
+  return typeof value === 'string' && value ? value : undefined;
+}
+
 function restoredToolStatus(invocation: Record<string, unknown>): ToolEventStatus {
   if (typeof invocation.errorText === 'string' && invocation.errorText) {
     return 'error';
@@ -142,6 +177,8 @@ function restoredToolStatus(invocation: Record<string, unknown>): ToolEventStatu
   switch (invocation.state) {
     case 'result':
       return 'complete';
+    case 'output-error':
+      return 'error';
     case 'approval-requested':
       return 'approval';
     case 'declined':
@@ -185,26 +222,37 @@ function restoredToolPart(
 }
 
 /**
- * Rebuild an assistant turn's ordered parts from a Mastra Memory V2 message
- * (`content: { format: 2, parts: [...] }`). Only `text` and
- * `tool-invocation` parts are kept — reasoning is never surfaced and
- * step/source/file/data parts have no timeline representation yet. Returns
- * undefined when the payload carries no `parts` array so legacy formats can
- * fall back to plain text extraction.
+ * Rebuild an assistant turn's ordered parts from persisted Memory content,
+ * resolving either shape: Mastra V2 rows wrap parts in
+ * `content: { format: 2, parts: [...] }` while legacy V1 rows keep parts as a
+ * plain array on `content` (with `tool-result` outcomes sometimes stored under
+ * a separate `role: 'tool'` row — supplied via `flatToolResults`). Only `text`,
+ * `tool-invocation`, and legacy `tool-call`/`tool-result` parts are kept —
+ * reasoning is never surfaced and step/source/file/data parts have no timeline
+ * representation yet. Returns undefined when the payload carries no parts so
+ * legacy text-only formats can fall back to plain text extraction.
  */
 export function restoreAssistantParts(
   content: unknown,
   idPrefix: string,
+  flatToolResults?: ReadonlyMap<string, FlatToolResult>,
 ): RestoredAssistantTurn | undefined {
-  if (!content || typeof content !== 'object') return undefined;
-  const record = content as Record<string, unknown>;
-  if (!Array.isArray(record.parts)) return undefined;
+  const record =
+    content && typeof content === 'object' && !Array.isArray(content)
+      ? (content as Record<string, unknown>)
+      : undefined;
+  const partsList: unknown[] | undefined = Array.isArray(content)
+    ? content
+    : record && Array.isArray(record.parts)
+      ? (record.parts as unknown[])
+      : undefined;
+  if (!partsList) return undefined;
 
-  const parts: AssistantPart[] = [];
+  let parts: AssistantPart[] = [];
   const texts: string[] = [];
   let counter = 0;
 
-  for (const entry of record.parts) {
+  for (const entry of partsList) {
     if (!entry || typeof entry !== 'object') continue;
     const part = entry as Record<string, unknown>;
 
@@ -221,11 +269,44 @@ export function restoreAssistantParts(
     if (part.type === 'tool-invocation') {
       const tool = restoredToolPart(part.toolInvocation, `${idPrefix}-t${counter++}`);
       if (tool) parts.push(tool);
+      continue;
+    }
+
+    // Legacy V1 flat parts. `tool-call` creates the card at its chronological
+    // position; a same-row `tool-result` (or the cross-row outcome passed via
+    // `flatToolResults`) finalizes it in place through the same
+    // toolCallId-keyed upsert the live stream uses.
+    if (part.type === 'tool-call' || part.type === 'tool-result') {
+      const toolCallId = flatString(part.toolCallId);
+      if (!toolCallId) continue;
+      const toolName = flatString(part.toolName);
+
+      if (part.type === 'tool-call') {
+        const flat = flatToolResults?.get(toolCallId);
+        parts = upsertToolPart(parts, {
+          toolCallId,
+          ...(toolName !== undefined ? { toolName } : {}),
+          status: flat ? flat.status : 'interrupted',
+          ...(part.input !== undefined || part.args !== undefined
+            ? { args: part.input ?? part.args }
+            : {}),
+          ...(flat?.result !== undefined ? { result: flat.result } : {}),
+        });
+        continue;
+      }
+
+      const { value, error } = unwrapToolOutput(part.output ?? part.result);
+      parts = upsertToolPart(parts, {
+        toolCallId,
+        ...(toolName !== undefined ? { toolName } : {}),
+        status: error ? 'error' : 'complete',
+        result: value,
+      });
     }
   }
 
   let text = texts.join('\n');
-  if (!text && typeof record.content === 'string' && record.content) {
+  if (!text && typeof record?.content === 'string' && record.content) {
     text = record.content;
     parts.push({
       type: 'text',

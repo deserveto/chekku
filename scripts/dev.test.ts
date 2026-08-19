@@ -479,9 +479,9 @@ describe('development launcher', () => {
     // Git Bash process startup on Windows can add several seconds around the
     // intentional five-second poll interval. Keep the ceiling below the
     // configured test timeout while allowing that platform overhead.
-    expect(Date.now() - startedAt).toBeLessThan(10_000);
+    expect(Date.now() - startedAt).toBeLessThan(process.platform === 'win32' ? 15_000 : 10_000);
     expect(readFileSync(resolve(healthyRoot, 'mock-log/inspect-count-garage'), 'utf8')).toBe('2');
-  }, 12_000);
+  }, process.platform === 'win32' ? 25_000 : 12_000);
 
   it('normalizes a leading-zero decimal readiness timeout in output', () => {
     const timeoutRoot = fixture();
@@ -842,7 +842,9 @@ describe('development launcher', () => {
 
     try {
       expect(result.status, result.stderr).toBe(7);
-      expect(Date.now() - startedAt).toBeLessThan(4_000);
+      // Git Bash spawn overhead on Windows inflates the bounded-grace wall
+      // clock well past the intentional ~1.5s of sleeps.
+      expect(Date.now() - startedAt).toBeLessThan(process.platform === 'win32' ? 8_000 : 4_000);
       expect(run(root, ['-c', `! kill -0 ${child} 2>/dev/null`]).status).toBe(0);
     } finally {
       spawnSync(bash, ['-c', `kill -KILL -- -${group} 2>/dev/null || true`]);

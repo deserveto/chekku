@@ -2,6 +2,7 @@ import { mastraClient } from './mastra-client';
 import {
   mergeAdjacentAssistantTurns,
   restoreAssistantParts,
+  type FlatToolResult,
 } from './assistant-parts';
 import type { AssistantPart } from './types';
 import { isOwnedThreadId } from './thread-id';
@@ -93,7 +94,10 @@ function normalizeThread(
   };
 }
 
-function normalizeMessage(value: unknown): StudioMemoryMessage | undefined {
+function normalizeMessage(
+  value: unknown,
+  flatToolResults?: ReadonlyMap<string, FlatToolResult>,
+): StudioMemoryMessage | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const row = value as Record<string, unknown>;
   const role = row.role;
@@ -106,7 +110,9 @@ function normalizeMessage(value: unknown): StudioMemoryMessage | undefined {
       : crypto.randomUUID();
 
   const restored =
-    role === 'assistant' ? restoreAssistantParts(row.content, id) : undefined;
+    role === 'assistant'
+      ? restoreAssistantParts(row.content, id, flatToolResults)
+      : undefined;
   const content = restored ? restored.text : textFromContent(row.content);
   const parts = restored?.parts.length ? restored.parts : undefined;
   if (!content && !parts && role === 'assistant') return undefined;
@@ -118,6 +124,67 @@ function normalizeMessage(value: unknown): StudioMemoryMessage | undefined {
     ...(parts ? { parts } : {}),
     createdAt: toTimestamp(row.createdAt),
   };
+}
+
+/**
+ * Resolve the message parts from either persisted shape: legacy V1 rows keep
+ * parts as a plain array on `content`, while Mastra V2 rows wrap them in
+ * `content: { format: 2, parts: [...] }`.
+ */
+function partsFromContent(content: unknown): unknown[] {
+  if (Array.isArray(content)) return content;
+  if (content && typeof content === 'object') {
+    const parts = (content as Record<string, unknown>).parts;
+    if (Array.isArray(parts)) return parts;
+  }
+  return [];
+}
+
+/**
+ * Harvest legacy V1 `tool-result` outcomes from every raw memory row (they
+ * persist under separate `role: 'tool'` rows, keyed by the calling assistant
+ * row's `tool-call` part) so the assistant turn's card can be finalized with
+ * its outcome and status.
+ */
+function collectFlatToolResults(
+  rows: unknown[],
+): Map<string, FlatToolResult> {
+  const results = new Map<string, FlatToolResult>();
+
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const rec = row as Record<string, unknown>;
+
+    for (const part of partsFromContent(rec.content)) {
+      if (!part || typeof part !== 'object') continue;
+      const p = part as Record<string, unknown>;
+      if (p.type !== 'tool-result') continue;
+      const toolCallId =
+        typeof p.toolCallId === 'string' ? p.toolCallId : '';
+      if (!toolCallId) continue;
+
+      const output = p.output ?? p.result;
+      let status: FlatToolResult['status'] = 'complete';
+      let value: unknown = output;
+      if (output && typeof output === 'object') {
+        const out = output as Record<string, unknown>;
+        if (typeof out.type === 'string' && 'value' in out) {
+          value = out.value;
+          status =
+            out.type === 'error-text' || out.type === 'error-json'
+              ? 'error'
+              : 'complete';
+        }
+      }
+
+      results.set(toolCallId, {
+        status,
+        ...(value !== undefined ? { result: value } : {}),
+      });
+    }
+  }
+
+  return results;
 }
 
 function assertThreadOwnership(
@@ -191,9 +258,12 @@ export async function listThreadMessages(
 
   if (!Array.isArray(rows)) return [];
 
+  const rowArray = rows;
+  const flatToolResults = collectFlatToolResults(rowArray);
+
   return mergeAdjacentAssistantTurns(
-    rows
-      .map(normalizeMessage)
+    rowArray
+      .map((row) => normalizeMessage(row, flatToolResults))
       .filter((row): row is StudioMemoryMessage => Boolean(row))
       .sort((a, b) => a.createdAt - b.createdAt),
   );

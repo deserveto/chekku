@@ -41,3 +41,45 @@ export interface ImageGenerationResult {
 export interface ImageGenerationClient {
   generate(request: ImageGenerationRequest, signal?: AbortSignal): Promise<ImageGenerationResult>;
 }
+
+/**
+ * Verdict returned by the multimodal image review client. The reviewer is the
+ * same fixed image model (`LLM_IMAGE_MODEL`, e.g. gemini-flash-image), invoked
+ * through `/chat/completions` with an `image_url` content part instead of the
+ * `/images/generations` path used for generation.
+ *
+ * - `pass` — the image matches the brief; no regeneration needed.
+ * - `fail` — the reviewer flagged concrete issues; the caller may regenerate
+ *   with the supplied `suggestion` as additional prompt guidance.
+ */
+export type ImageReviewVerdict = 'pass' | 'fail';
+
+export interface ImageReviewRequest {
+  /** Raw image bytes to be reviewed. */
+  imageBytes: Uint8Array;
+  /** MIME type of {@link ImageReviewRequest.imageBytes}. */
+  mimeType: ImageMimeType;
+  /**
+   * Brief the image is expected to satisfy — typically the canonical content
+   * the visual was generated from, plus the agreed visual concept. Bounded to
+   * 4,000 UTF-8 bytes by the client.
+   */
+  brief: string;
+}
+
+export interface ImageReviewResult {
+  score: number;
+  /** Concrete, actionable issues when `score < 85`. Empty for passing scores. */
+  issues: string[];
+  /**
+   * Optional suggestion the caller can append to the next generation prompt.
+   * Empty for passing scores.
+   */
+  suggestion: string;
+  /** Model id that produced the review (always `LLM_IMAGE_MODEL`). */
+  model: string;
+}
+
+export interface ImageReviewClient {
+  review(request: ImageReviewRequest, signal?: AbortSignal): Promise<ImageReviewResult>;
+}

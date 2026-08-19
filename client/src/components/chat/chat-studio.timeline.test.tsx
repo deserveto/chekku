@@ -688,9 +688,67 @@ describe('ChatStudio chronological tool timeline', () => {
 
     await submitMessage('Snapshot');
 
-    const pre = toolCards()[0]?.querySelector('pre:last-of-type');
-    expect(pre).toBeDefined();
-    expect(pre!.textContent!.length).toBeLessThan(10_000);
-    expect(pre!.textContent).toContain('output truncated');
+    const pres = toolCards()[0]?.querySelectorAll('pre');
+    expect(pres?.length).toBeGreaterThan(0);
+    const pre = pres![pres!.length - 1]!;
+    expect(pre.textContent!.length).toBeLessThan(10_000);
+    expect(pre.textContent).toContain('output truncated');
+  });
+
+  it('renders an inline image preview for tool results carrying an image URL', async () => {
+    observeRunEvents.mockImplementation(
+      eventsOf([
+        {
+          type: 'tool-call',
+          payload: { toolCallId: 'call-1', toolName: 'generate_image' },
+        },
+        {
+          type: 'tool-result',
+          payload: {
+            toolCallId: 'call-1',
+            result: {
+              imageUrl:
+                '/api/storage/chat-previews/prev_20260815121042_1d47453e.png',
+            },
+          },
+        },
+        { type: 'complete', payload: {} },
+      ]),
+    );
+
+    await submitMessage('Make a visual');
+
+    const card = toolCards()[0]!;
+    const img = card.querySelector('img.chat-tool-image');
+    expect(img).not.toBeNull();
+    expect(img!.getAttribute('src')).toBe(
+      '/api/storage/chat-previews/prev_20260815121042_1d47453e.png',
+    );
+    expect(card.hasAttribute('open')).toBe(true);
+  });
+
+  it('drops non-http(s) image URLs from tool results', async () => {
+    observeRunEvents.mockImplementation(
+      eventsOf([
+        {
+          type: 'tool-call',
+          payload: { toolCallId: 'call-1', toolName: 'generate_image' },
+        },
+        {
+          type: 'tool-result',
+          payload: {
+            toolCallId: 'call-1',
+            result: { imageUrl: 'javascript:alert(1)' },
+          },
+        },
+        { type: 'complete', payload: {} },
+      ]),
+    );
+
+    await submitMessage('Make a visual');
+
+    const card = toolCards()[0]!;
+    expect(card.querySelector('img')).toBeNull();
+    expect(card.hasAttribute('open')).toBe(false);
   });
 });
