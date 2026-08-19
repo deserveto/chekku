@@ -46,33 +46,64 @@ import {
   type AgentRunSummary,
 } from '@/lib/agent-runs';
 import { loadModelRegistry } from '@/lib/model-registry';
+import { isSafeImageSrc } from '@/lib/safe-image-src';
 import {
   ensureStoredAgentUsesServerGateway,
   listAllAgents,
 } from '@/lib/stored-agents';
 import { extractImageUrl } from '@/lib/tool-result';
-import { isSafeImageSrc } from '@/lib/safe-image-src';
 import {
   createOwnedThreadId,
   isOwnedThreadId,
 } from '@/lib/thread-id';
 import {
+  appendTextDelta,
+  groupAssistantParts,
+  textFromAssistantParts,
+  upsertToolPart,
+} from '@/lib/assistant-parts';
+import {
   MAIN_AGENT_ID,
   QA_WEB_AGENT_ID,
   QA_ANDROID_AGENT_ID,
+  type AssistantPart,
   type ChatMessage,
   type ChekkuAgentSummary,
-  type ToolEvent,
+  type ToolAssistantPart,
+  type ToolEventStatus,
 } from '@/lib/types';
 
-function safeDisplay(value: unknown): string {  if (value === undefined) return '';
-  if (typeof value === 'string') return value;
+const TOOL_DISPLAY_LIMIT = 8_192;
 
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
+function safeDisplay(value: unknown): string {
+  let text: string;
+  if (value === undefined) return '';
+  if (typeof value === 'string') {
+    text = value;
+  } else {
+    try {
+      text = JSON.stringify(value, null, 2);
+    } catch {
+      text = String(value);
+    }
   }
+
+  if (text.length > TOOL_DISPLAY_LIMIT) {
+    return `${text.slice(0, TOOL_DISPLAY_LIMIT)}\n… output truncated`;
+  }
+  return text;
+}
+
+function appendErrorDetail(message: ChatMessage, detail: string): ChatMessage {
+  return {
+    ...message,
+    content: message.content ? `${message.content}\n\n${detail}` : detail,
+    parts: appendTextDelta(
+      message.parts ?? [],
+      message.content ? `\n\n${detail}` : detail,
+    ),
+    error: true,
+  };
 }
 
 function messageFromMemory(
@@ -80,10 +111,77 @@ function messageFromMemory(
     id: string;
     role: 'user' | 'assistant';
     content: string;
+    parts?: AssistantPart[];
     createdAt: number;
   },
 ): ChatMessage {
   return { ...value };
+}
+
+function TypingIndicator() {
+  return (
+    <div className="chat-message-content markdown">
+      <span className="chat-typing">
+        <i />
+        <i />
+        <i />
+      </span>
+    </div>
+  );
+}
+
+function ToolCallCard({ tool }: { tool: ToolAssistantPart }) {
+  const extracted =
+    tool.result !== undefined ? extractImageUrl(tool.result) : null;
+  // Same scheme allowlist as the markdown renderer — tool results are
+  // model-influenced, so a non-http(s)/same-origin/data URL is dropped.
+  const imageUrl =
+    extracted && isSafeImageSrc(extracted) ? extracted : null;
+
+  return (
+    <details
+      className={`chat-tool-card ${tool.status}`}
+      // Auto-expand cards that carry an image preview so the generated
+      // visual is visible without an extra click; leave text/JSON results
+      // collapsed.
+      open={Boolean(imageUrl) || undefined}
+    >
+      <summary>
+        <span />
+        <strong>{tool.toolName.replaceAll('_', ' ')}</strong>
+        <small>{tool.status}</small>
+        <i>⌄</i>
+      </summary>
+
+      {imageUrl && (
+        <div className="chat-tool-image-wrap">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            alt={`${tool.toolName} result`}
+            className="chat-tool-image"
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            src={imageUrl}
+          />
+        </div>
+      )}
+
+      {tool.args !== undefined && (
+        <div className="chat-tool-section">
+          <span className="chat-tool-label">input</span>
+          <pre>{safeDisplay(tool.args)}</pre>
+        </div>
+      )}
+      {tool.result !== undefined && (
+        <div className="chat-tool-section">
+          <span className="chat-tool-label">
+            {tool.status === 'error' ? 'error' : 'result'}
+          </span>
+          <pre>{safeDisplay(tool.result)}</pre>
+        </div>
+      )}
+    </details>
+  );
 }
 
 export function ChatStudio({
@@ -112,7 +210,6 @@ export function ChatStudio({
   const [agents, setAgents] = useState<ChekkuAgentSummary[]>([]);
   const [threads, setThreads] = useState<StudioThread[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [tools, setTools] = useState<ToolEvent[]>([]);
   const [input, setInput] = useState('');
   const [commandOpen, setCommandOpen] = useState(false);
   const [commandIndex, setCommandIndex] = useState(0);
@@ -120,6 +217,11 @@ export function ChatStudio({
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [activeRun, setActiveRun] = useState<AgentRunSummary | null>(null);
+  // id of the assistant placeholder the active subscription streams into;
+  // gates per-message UI (typing indicator) to the streaming turn only.
+  const [activeAssistantId, setActiveAssistantId] = useState<string | null>(
+    null,
+  );
   const [subscriptionState, setSubscriptionState] = useState<
     'idle' | 'connecting' | 'connected'
   >('idle');
@@ -154,22 +256,6 @@ export function ChatStudio({
     }
   }, [agentId, resourceId]);
 
-  const upsertTool = (event: ToolEvent) => {
-    setTools((current) => {
-      const exists = current.some(
-        (item) => item.toolCallId === event.toolCallId,
-      );
-
-      return exists
-        ? current.map((item) =>
-            item.toolCallId === event.toolCallId
-              ? { ...item, ...event }
-              : item,
-          )
-        : [...current, event];
-    });
-  };
-
   const applyRunEvent = useCallback((event: AgentRunEvent, assistantId: string) => {
     setSubscriptionState('connected');
 
@@ -193,7 +279,11 @@ export function ChatStudio({
             ];
         return base.map((message) =>
           message.id === assistantId
-            ? { ...message, content: message.content + text }
+            ? {
+                ...message,
+                content: message.content + text,
+                parts: appendTextDelta(message.parts ?? [], text),
+              }
             : message,
         );
       });
@@ -208,19 +298,51 @@ export function ChatStudio({
       const toolCallId = String(
         event.payload.toolCallId || crypto.randomUUID(),
       );
-      upsertTool({
-        id: toolCallId,
-        messageId: assistantId,
-        toolCallId,
-        toolName: String(event.payload.toolName || 'tool'),
-        status:
-          event.type === 'tool-result'
-            ? 'complete'
-            : event.type === 'tool-error'
-              ? 'error'
-              : 'running',
-        args: event.payload.args,
-        result: event.payload.result ?? event.payload.error,
+      const status: ToolEventStatus =
+        event.type === 'tool-result'
+          ? 'complete'
+          : event.type === 'tool-error'
+            ? 'error'
+            : 'running';
+      const toolName =
+        event.payload.toolName !== undefined
+          ? String(event.payload.toolName)
+          : undefined;
+      const args = event.payload.args;
+      const result = event.payload.result ?? event.payload.error;
+      const runId =
+        event.payload.runId !== undefined
+          ? String(event.payload.runId)
+          : undefined;
+
+      setMessages((current) => {
+        const exists = current.some((message) => message.id === assistantId);
+        const base = exists
+          ? current
+          : [
+              ...current,
+              {
+                id: assistantId,
+                role: 'assistant' as const,
+                content: '',
+                createdAt: Date.now(),
+              },
+            ];
+        return base.map((message) =>
+          message.id === assistantId
+            ? {
+                ...message,
+                parts: upsertToolPart(message.parts ?? [], {
+                  toolCallId,
+                  status,
+                  toolName,
+                  args,
+                  result,
+                  runId,
+                }),
+              }
+            : message,
+        );
       });
       return;
     }
@@ -234,7 +356,7 @@ export function ChatStudio({
       setMessages((current) =>
         current.map((message) =>
           message.id === assistantId
-            ? { ...message, content: detail, error: true }
+            ? appendErrorDetail(message, detail)
             : message,
         ),
       );
@@ -258,7 +380,12 @@ export function ChatStudio({
     setMessages((current) =>
       current.map((message) =>
         message.id === assistantId && !message.content
-          ? { ...message, error: terminal === 'error', content: fallback }
+          ? {
+              ...message,
+              error: terminal === 'error',
+              content: fallback,
+              parts: appendTextDelta(message.parts ?? [], fallback),
+            }
           : message,
       ),
     );
@@ -271,6 +398,7 @@ export function ChatStudio({
       const controller = new AbortController();
       subscriptionRef.current = controller;
       lastTerminalRef.current = null;
+      setActiveAssistantId(assistantId);
       setSubscriptionState('connecting');
 
       void observeRunEvents(runId, {
@@ -282,6 +410,7 @@ export function ChatStudio({
         subscriptionRef.current = null;
         setSubscriptionState('idle');
         setActiveRun(null);
+        setActiveAssistantId(null);
         finalizeTerminalMessage(assistantId);
         void refreshThreads();
         textareaRef.current?.focus();
@@ -366,20 +495,16 @@ export function ChatStudio({
         await refreshThreads();
 
         try {
-          const stored = await listThreadMessages(
+          const storedMessages = await listThreadMessages(
             agentId,
             threadId,
             resourceId,
           );
           if (!cancelled) {
-            setMessages(stored.messages.map(messageFromMemory));
-            setTools(stored.toolEvents);
+            setMessages(storedMessages.map(messageFromMemory));
           }
         } catch {
-          if (!cancelled) {
-            setMessages([]);
-            setTools([]);
-          }
+          if (!cancelled) setMessages([]);
         }
 
         // Reconnect to a run that is still executing for this thread
@@ -418,15 +543,15 @@ export function ChatStudio({
       // thread: a stale activeRun would keep the composer disabled and
       // point thread B's Stop button at thread A's run.
       setActiveRun(null);
+      setActiveAssistantId(null);
       setSubscriptionState('idle');
-      setTools([]);
       lastTerminalRef.current = null;
     };
   }, [agentId, attachToRun, refreshThreads, resourceId, threadId]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, tools]);
+  }, [messages]);
 
   useEffect(() => {
     let cancelled = false;
@@ -528,7 +653,6 @@ export function ChatStudio({
       setError(undefined);
       if (target.id === threadId) {
         setMessages([]);
-        setTools([]);
         setInput('');
         setCommandOpen(false);
         replaceWithNew(agentId);
@@ -618,11 +742,7 @@ export function ChatStudio({
       setMessages((current) =>
         current.map((message) =>
           message.id === assistantId
-            ? {
-                ...message,
-                error: true,
-                content: `Could not complete request. ${detail}`,
-              }
+            ? appendErrorDetail(message, `Could not complete request. ${detail}`)
             : message,
         ),
       );
@@ -884,9 +1004,13 @@ export function ChatStudio({
           ) : (
             <div className="chat-message-list">
               {messages.map((message) => {
-                const relatedTools = tools.filter(
-                  (tool) => tool.messageId === message.id,
-                );
+                const partGroups =
+                  message.role === 'assistant' && message.parts?.length
+                    ? groupAssistantParts(message.parts)
+                    : null;
+                const copyText = message.parts?.length
+                  ? textFromAssistantParts(message.parts)
+                  : message.content;
 
                 return (
                   <article
@@ -916,89 +1040,47 @@ export function ChatStudio({
                       </time>
                     </div>
 
-                    {relatedTools.length > 0 && (
-                      <div className="chat-tool-timeline">
-                        {relatedTools.map((tool) => {
-                          const extracted =
-                            tool.result !== undefined
-                              ? extractImageUrl(tool.result)
-                              : null;
-                          // Same scheme allowlist as the markdown renderer —
-                          // tool results are model-influenced, so a
-                          // non-http(s)/same-origin/data URL is dropped.
-                          const imageUrl =
-                            extracted && isSafeImageSrc(extracted) ? extracted : null;
-                          return (
-                            <details
-                              className={`chat-tool-card ${tool.status}`}
-                              key={tool.id}
-                              // Auto-expand cards that carry an image preview so
-                              // the generated visual is visible without an extra
-                              // click; leave text/JSON results collapsed.
-                              open={Boolean(imageUrl) || undefined}
-                            >
-                              <summary>
-                                <span />
-                                <strong>
-                                  {tool.toolName.replaceAll('_', ' ')}
-                                </strong>
-                                <small>{tool.status}</small>
-                                <i>⌄</i>
-                              </summary>
-
-                              {imageUrl && (
-                                <div className="chat-tool-image-wrap">
-                                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                                  <img
-                                    alt={`${tool.toolName} result`}
-                                    className="chat-tool-image"
-                                    loading="lazy"
-                                    referrerPolicy="no-referrer"
-                                    src={imageUrl}
-                                  />
-                                </div>
-                              )}
-
-                              {tool.args !== undefined && (
-                                <div className="chat-tool-section">
-                                  <span className="chat-tool-label">input</span>
-                                  <pre>{safeDisplay(tool.args)}</pre>
-                                </div>
-                              )}
-                              {tool.result !== undefined && (
-                                <div className="chat-tool-section">
-                                  <span className="chat-tool-label">
-                                    {tool.status === 'error' ? 'error' : 'result'}
-                                  </span>
-                                  <pre>{safeDisplay(tool.result)}</pre>
-                                </div>
-                              )}
-                            </details>
-                          );
-                        })}
+                    {partGroups ? (
+                      partGroups.map((group) =>
+                        group.kind === 'tools' ? (
+                          <div
+                            className="chat-tool-timeline"
+                            key={`tools-${group.parts[0]?.id}`}
+                          >
+                            {group.parts.map((tool) => (
+                              <ToolCallCard key={tool.id} tool={tool} />
+                            ))}
+                          </div>
+                        ) : (
+                          <div
+                            className="chat-message-content markdown"
+                            key={group.part.id}
+                          >
+                            <MarkdownMessage content={group.part.content} />
+                          </div>
+                        ),
+                      )
+                    ) : message.content ? (
+                      <div className="chat-message-content markdown">
+                        <MarkdownMessage content={message.content} />
                       </div>
+                    ) : (
+                      <TypingIndicator />
                     )}
 
-                    <div className="chat-message-content markdown">
-                      {message.content ? (
-                        <MarkdownMessage content={message.content} />
-                      ) : relatedTools.length === 0 ? (
-                        <span className="chat-typing">
-                          <i />
-                          <i />
-                          <i />
-                        </span>
-                      ) : null}
-                    </div>
+                    {partGroups &&
+                      !message.content &&
+                      runActive &&
+                      message.id === activeAssistantId && (
+                        <TypingIndicator />
+                      )}
 
-                    {message.role === 'assistant' && message.content && (
+                    {message.role === 'assistant' && copyText && (
                       <div className="chat-message-actions">
                         <button
                           type="button"
                           onClick={() =>
-                            void navigator.clipboard.writeText(
-                              message.content,
-                            )
+                            void navigator.clipboard.writeText(copyText)
                           }
                         >
                           Copy

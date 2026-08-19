@@ -1,6 +1,11 @@
 import { mastraClient } from './mastra-client';
+import {
+  mergeAdjacentAssistantTurns,
+  restoreAssistantParts,
+  type FlatToolResult,
+} from './assistant-parts';
+import type { AssistantPart } from './types';
 import { isOwnedThreadId } from './thread-id';
-import type { ToolEvent, ToolEventStatus } from './types';
 
 export interface StudioThread {
   id: string;
@@ -14,12 +19,13 @@ export interface StudioMemoryMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  /**
+   * Chronological assistant-turn parts rebuilt from Mastra Memory's stored
+   * `tool-invocation` parts, so restored threads keep their tool call
+   * timeline. Absent for user messages and turns without tool activity.
+   */
+  parts?: AssistantPart[];
   createdAt: number;
-}
-
-export interface StudioThreadMessages {
-  messages: StudioMemoryMessage[];
-  toolEvents: ToolEvent[];
 }
 
 function toTimestamp(value: unknown, fallback = Date.now()): number {
@@ -88,27 +94,34 @@ function normalizeThread(
   };
 }
 
-function normalizeMessage(value: unknown): StudioMemoryMessage | undefined {
+function normalizeMessage(
+  value: unknown,
+  flatToolResults?: ReadonlyMap<string, FlatToolResult>,
+): StudioMemoryMessage | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const row = value as Record<string, unknown>;
   const role = row.role;
 
   if (role !== 'user' && role !== 'assistant') return undefined;
 
-  const content = textFromContent(row.content);
-  // Keep assistant messages that carry tool-call parts even when they have no
-  // text body — their tool cards need a parent message to render under. Drop
-  // only truly empty assistant messages.
-  const hasToolParts = messageHasToolParts(row.content);
-  if (!content && role === 'assistant' && !hasToolParts) return undefined;
+  const id =
+    typeof row.id === 'string' && row.id
+      ? row.id
+      : crypto.randomUUID();
+
+  const restored =
+    role === 'assistant'
+      ? restoreAssistantParts(row.content, id, flatToolResults)
+      : undefined;
+  const content = restored ? restored.text : textFromContent(row.content);
+  const parts = restored?.parts.length ? restored.parts : undefined;
+  if (!content && !parts && role === 'assistant') return undefined;
 
   return {
-    id:
-      typeof row.id === 'string' && row.id
-        ? row.id
-        : crypto.randomUUID(),
+    id,
     role,
     content,
+    ...(parts ? { parts } : {}),
     createdAt: toTimestamp(row.createdAt),
   };
 }
@@ -127,154 +140,51 @@ function partsFromContent(content: unknown): unknown[] {
   return [];
 }
 
-function messageHasToolParts(content: unknown): boolean {
-  return partsFromContent(content).some((part) => {
-    if (!part || typeof part !== 'object') return false;
-    const type = (part as Record<string, unknown>).type;
-    return (
-      type === 'tool-call' ||
-      type === 'tool-result' ||
-      type === 'tool-invocation'
-    );
-  });
-}
-
 /**
- * Unwrap a persisted tool-result `output` (AI SDK v5
- * `LanguageModelV2ToolResultOutput`) to its inner value and detect error
- * variants so restored cards can render with the right status.
+ * Harvest legacy V1 `tool-result` outcomes from every raw memory row (they
+ * persist under separate `role: 'tool'` rows, keyed by the calling assistant
+ * row's `tool-call` part) so the assistant turn's card can be finalized with
+ * its outcome and status.
  */
-function unwrapToolOutput(
-  output: unknown,
-): { value: unknown; error: boolean } {
-  if (output && typeof output === 'object') {
-    const rec = output as Record<string, unknown>;
-    const type = rec.type;
-    if (typeof type === 'string' && 'value' in rec) {
-      return {
-        value: rec.value,
-        error: type === 'error-text' || type === 'error-json',
-      };
-    }
-  }
-  return { value: output, error: false };
-}
-
-/**
- * Harvest tool parts from every raw memory row (any role) and merge them by
- * `toolCallId` into `ToolEvent` records. Handles both persisted shapes: V2
- * `tool-invocation` parts (data nested under `part.toolInvocation`) and the
- * legacy V1 `tool-call`/`tool-result` flat parts. Each event is attached to
- * the assistant message that emitted the tool call so it renders under the
- * right chat bubble after a reload.
- */
-function extractToolEvents(rows: unknown[]): ToolEvent[] {
-  const byCallId = new Map<string, ToolEvent>();
-  const order: string[] = [];
-
-  const touch = (toolCallId: string, init: ToolEvent): ToolEvent => {
-    const existing = byCallId.get(toolCallId);
-    if (existing) return existing;
-    byCallId.set(toolCallId, init);
-    order.push(toolCallId);
-    return init;
-  };
+function collectFlatToolResults(
+  rows: unknown[],
+): Map<string, FlatToolResult> {
+  const results = new Map<string, FlatToolResult>();
 
   for (const row of rows) {
     if (!row || typeof row !== 'object') continue;
     const rec = row as Record<string, unknown>;
-    const messageId = typeof rec.id === 'string' ? rec.id : '';
-    const role = rec.role;
-    const parts = partsFromContent(rec.content);
 
-    for (const part of parts) {
+    for (const part of partsFromContent(rec.content)) {
       if (!part || typeof part !== 'object') continue;
       const p = part as Record<string, unknown>;
-
-      // Mastra V2: a single `tool-invocation` part carries the call and its
-      // outcome nested under `toolInvocation`, with `state` marking progress.
-      if (p.type === 'tool-invocation' && p.toolInvocation) {
-        const invocation = p.toolInvocation as Record<string, unknown>;
-        const toolCallId =
-          typeof invocation.toolCallId === 'string'
-            ? invocation.toolCallId
-            : '';
-        if (!toolCallId) continue;
-        const toolName =
-          typeof invocation.toolName === 'string' && invocation.toolName
-            ? invocation.toolName
-            : 'tool';
-        const state = invocation.state;
-        let status: ToolEventStatus = 'running';
-        let result: unknown;
-        if (state === 'result') {
-          status = 'complete';
-          result = invocation.result;
-        } else if (state === 'output-error') {
-          status = 'error';
-          result = invocation.errorText ?? invocation.result;
-        }
-        touch(toolCallId, {
-          id: toolCallId,
-          messageId: role === 'assistant' ? messageId : '',
-          toolCallId,
-          toolName,
-          status,
-          args: invocation.args,
-          result,
-        });
-        continue;
-      }
-
-      // Legacy V1 fallback: flat `tool-call` / `tool-result` parts.
-      const type = p.type;
+      if (p.type !== 'tool-result') continue;
       const toolCallId =
         typeof p.toolCallId === 'string' ? p.toolCallId : '';
       if (!toolCallId) continue;
-      const toolName =
-        typeof p.toolName === 'string' && p.toolName ? p.toolName : 'tool';
 
-      if (type === 'tool-call') {
-        const event = touch(toolCallId, {
-          id: toolCallId,
-          messageId: role === 'assistant' ? messageId : '',
-          toolCallId,
-          toolName,
-          status: 'running',
-          args: p.input ?? p.args,
-        });
-        if (!event.messageId && role === 'assistant') {
-          event.messageId = messageId;
-        }
-        if (event.args === undefined) {
-          event.args = p.input ?? p.args;
-        }
-        if (event.toolName === 'tool' && toolName !== 'tool') {
-          event.toolName = toolName;
-        }
-      } else if (type === 'tool-result') {
-        const { value, error } = unwrapToolOutput(p.output ?? p.result);
-        const status: ToolEventStatus = error ? 'error' : 'complete';
-        const event = touch(toolCallId, {
-          id: toolCallId,
-          messageId: role === 'assistant' ? messageId : '',
-          toolCallId,
-          toolName,
-          status,
-          result: value,
-        });
-        event.result = value;
-        event.status = status;
-        if (event.toolName === 'tool' && toolName !== 'tool') {
-          event.toolName = toolName;
+      const output = p.output ?? p.result;
+      let status: FlatToolResult['status'] = 'complete';
+      let value: unknown = output;
+      if (output && typeof output === 'object') {
+        const out = output as Record<string, unknown>;
+        if (typeof out.type === 'string' && 'value' in out) {
+          value = out.value;
+          status =
+            out.type === 'error-text' || out.type === 'error-json'
+              ? 'error'
+              : 'complete';
         }
       }
+
+      results.set(toolCallId, {
+        status,
+        ...(value !== undefined ? { result: value } : {}),
+      });
     }
   }
 
-  return order
-    .map((id) => byCallId.get(id) as ToolEvent)
-    .filter((event) => Boolean(event.messageId));
+  return results;
 }
 
 function assertThreadOwnership(
@@ -325,7 +235,7 @@ export async function listThreadMessages(
   agentId: string,
   threadId: string,
   resourceId: string,
-): Promise<StudioThreadMessages> {
+): Promise<StudioMemoryMessage[]> {
   assertThreadOwnership(agentId, threadId, resourceId);
   const thread = mastraClient.getMemoryThread({ threadId, agentId });
   const response = await thread
@@ -346,16 +256,17 @@ export async function listThreadMessages(
       ? ((raw as Record<string, unknown>).messages ?? [])
       : [];
 
-  const rowArray = Array.isArray(rows) ? rows : [];
+  if (!Array.isArray(rows)) return [];
 
-  const messages = rowArray
-    .map(normalizeMessage)
-    .filter((row): row is StudioMemoryMessage => Boolean(row))
-    .sort((a, b) => a.createdAt - b.createdAt);
+  const rowArray = rows;
+  const flatToolResults = collectFlatToolResults(rowArray);
 
-  const toolEvents = extractToolEvents(rowArray);
-
-  return { messages, toolEvents };
+  return mergeAdjacentAssistantTurns(
+    rowArray
+      .map((row) => normalizeMessage(row, flatToolResults))
+      .filter((row): row is StudioMemoryMessage => Boolean(row))
+      .sort((a, b) => a.createdAt - b.createdAt),
+  );
 }
 
 export async function renameThread(
