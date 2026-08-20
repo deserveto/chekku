@@ -226,6 +226,24 @@ describe('requested UI structure', () => {
     expect(css).toMatch(/\.studio-confirmation-copy[\s\S]*overflow-wrap:\s*anywhere/);
   });
 
+  it('keeps the slides counter out of the fixed back button corner', () => {
+    // Regression: the page-level back button is a fixed top-left overlay, and
+    // the counter previously sat at the toolbar's flex-start — the same corner.
+    // The counter must be absolutely centered within the toolbar instead.
+    const counter = css.match(/\.competitive-slides-counter\s*\{([^}]*)\}/)?.[1];
+    const toolbar = css.match(/\.competitive-slides-toolbar\s*\{([^}]*)\}/)?.[1];
+    expect(toolbar).toContain('position: relative');
+    expect(counter).toContain('position: absolute');
+    expect(counter).toContain('left: 50%');
+    expect(counter).toContain('translateX(-50%)');
+    // On narrow screens the centered overlay cannot fit between the back
+    // button and the toolbar buttons, so the back button re-enters the flow
+    // and the counter returns to the flex row — no overlap by construction.
+    const narrow = css.match(/@media \(max-width: 480px\)\s*\{([\s\S]*?)\n\}/)?.[1];
+    expect(narrow).toMatch(/\.competitive-slides-page-back\s*\{[^}]*position:\s*static/s);
+    expect(narrow).toMatch(/\.competitive-slides-counter\s*\{[^}]*position:\s*static/s);
+  });
+
   it('separates agent preparation from guarded deletion state', () => {
     expect(agentCatalogSource).toContain('const deleteInFlightRef = useRef(false)');
     expect(agentCatalogSource).toContain('const [deletingAgentId, setDeletingAgentId]');

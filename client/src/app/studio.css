@@ -2926,6 +2926,7 @@ body.studio-sidebar-resizing * {
 }
 
 .competitive-slides-toolbar {
+  position: relative;
   flex-shrink: 0;
   display: flex;
   justify-content: flex-end;
@@ -2934,10 +2935,32 @@ body.studio-sidebar-resizing * {
   padding: 8px 16px;
 }
 
+/* Absolutely centered so it never collides with the fixed page-level back
+   button (.competitive-slides-page-back, top-left overlay) and stays centered
+   regardless of toolbar button widths. On narrow screens there is no room for
+   a centered overlay between the back button and the toolbar buttons, so the
+   back button re-enters the document flow above the toolbar and the counter
+   returns to the flex row — no overlap by construction. */
 .competitive-slides-counter {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
   font-variant-numeric: tabular-nums;
   color: var(--studio-muted, #666);
-  margin-right: auto;
+}
+
+@media (max-width: 480px) {
+  .competitive-slides-page-back {
+    position: static;
+    display: inline-block;
+    padding: 12px 0 0 12px;
+  }
+
+  .competitive-slides-counter {
+    position: static;
+    transform: none;
+    margin-right: auto;
+  }
 }
 
 .competitive-slides-loading {
