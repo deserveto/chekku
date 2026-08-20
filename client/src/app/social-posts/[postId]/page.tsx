@@ -14,6 +14,26 @@ import {
 
 export const dynamic = 'force-dynamic';
 
+/** How long after caption approval a background visual is still plausibly running. */
+export const VISUAL_PENDING_WINDOW_MS = 10 * 60_000;
+
+/**
+ * A visual is only plausibly "generating" while the caption approval that
+ * triggered it is recent. Legacy APPROVED posts (approved under the old
+ * direct DRAFT→APPROVED flow, so no `captionApprovedAt`) and posts whose
+ * generation window has long passed show a neutral hint instead of an
+ * endless pending spinner. Pure predicate with an injectable clock.
+ */
+export function isVisualGenerationPlausible(
+  captionApprovedAt: string | undefined,
+  nowMs: () => number = Date.now,
+  windowMs: number = VISUAL_PENDING_WINDOW_MS,
+): boolean {
+  if (!captionApprovedAt) return false;
+  const approvedAtMs = Date.parse(captionApprovedAt);
+  return Number.isFinite(approvedAtMs) && nowMs() - approvedAtMs <= windowMs;
+}
+
 export default async function SocialPostDetailPage({
   params,
 }: {
@@ -72,6 +92,10 @@ export default async function SocialPostDetailPage({
   const hasVisual = (post.metadata.visualAssets?.length ?? 0) > 0;
   const status = post.metadata.status;
 
+  // A visual is only plausibly "generating" while the caption approval that
+  // triggered it is recent — see `isVisualGenerationPlausible` above.
+  const visualGenerationPlausible = isVisualGenerationPlausible(post.metadata.captionApprovedAt);
+
   return (
     <div className="studio-shell">
       <StudioNav resourceId={resourceId} />
@@ -87,15 +111,27 @@ export default async function SocialPostDetailPage({
             </p>
           </div>
           <div className="studio-report-header-actions">
-            {status === 'DRAFT' ? (
+            {status === 'DRAFT' && hasCanonical ? (
               <ApproveButton
                 postId={post.postId}
                 nextStatus="CANONICAL_APPROVED"
                 label="Approve Canonical"
               />
             ) : null}
+            {status === 'DRAFT' && !hasCanonical ? (
+              // Legacy caption-only draft (pre-canonical contract): the
+              // caption stage can never run for it (the repurpose workflow
+              // rejects it with `canonical-missing`), so offer no approve
+              // action — only an explanatory notice.
+              <div className="studio-approve">
+                <span className="studio-alert">Legacy draft without a canonical content unit — it cannot enter the two-stage approval flow.</span>
+              </div>
+            ) : null}
             {status === 'CANONICAL_APPROVED' && !hasCaption ? (
-              <GenerationPending label="Generating caption…" />
+              <GenerationPending
+                label="Generating caption…"
+                timeoutMessage="Caption generation is taking longer than expected. It may have failed — reload to check the latest status, or approve the canonical content again to retry."
+              />
             ) : null}
             {status === 'CANONICAL_APPROVED' && hasCaption ? (
               <ApproveButton
@@ -105,7 +141,16 @@ export default async function SocialPostDetailPage({
               />
             ) : null}
             {status === 'APPROVED' && !hasVisual ? (
-              <GenerationPending label="Generating image…" />
+              visualGenerationPlausible ? (
+                <GenerationPending
+                  label="Generating image…"
+                  timeoutMessage="Image generation is taking longer than expected. It may have failed — reload to check the latest status. If the visual stays missing, request it again through the supervisor chat."
+                />
+              ) : (
+                <div className="studio-approve">
+                  <span className="studio-alert">No visual yet — request generation through the supervisor chat.</span>
+                </div>
+              )
             ) : null}
             <Link className="studio-button" href="/social-posts">Back to social posts</Link>
           </div>

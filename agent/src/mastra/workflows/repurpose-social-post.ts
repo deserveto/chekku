@@ -124,6 +124,36 @@ export async function runRepurposeSocialPost(
     return { ok: false, postId, error: 'canonical-missing' };
   }
 
+  // Heal an orphaned caption object from a partially failed prior run: the
+  // create-conditional body write succeeded but the metadata transition
+  // failed, leaving the post DRAFT with `caption.md` already present.
+  // Without this check every retry would fail the conditional create
+  // forever (no sanctioned path replaces or deletes the caption object).
+  // The orphan was fully generated and validated by the prior run, so
+  // attach it instead of re-paying the caption LLM call.
+  const captionObjectKey = `social-posts/${postId}/caption.md`;
+  let orphanedCaption: string | undefined;
+  try {
+    orphanedCaption = await store.getText(captionObjectKey);
+  } catch (error) {
+    if (!(error instanceof ObjectStorageError) || error.code !== 'not-found') {
+      console.error('[repurpose-social-post] could not check for an orphaned caption:', error);
+      return { ok: false, postId, error: 'caption-persist-failed' };
+    }
+  }
+  if (orphanedCaption !== undefined) {
+    try {
+      const metadata = await attachCaptionToPost(store, postId, {
+        ...(deps.now ? { now: deps.now } : {}),
+      });
+      console.log('[repurpose-social-post] attached orphaned caption object and transitioned to CANONICAL_APPROVED');
+      return { ok: true, postId, captionObjectKey: metadata.captionObjectKey };
+    } catch (error) {
+      console.error('[repurpose-social-post] could not attach orphaned caption:', error);
+      return { ok: false, postId, error: 'caption-persist-failed' };
+    }
+  }
+
   const { weekStart, topic } = resolveTopicForRepurpose(post.briefMarkdown, {
     topic: post.metadata.topic,
     createdAt: post.metadata.createdAt,
@@ -146,7 +176,6 @@ export async function runRepurposeSocialPost(
   try {
     // Body first (create-conditional MCP write), metadata transition last —
     // mirrors the brief → post → metadata creation order.
-    const captionObjectKey = `social-posts/${postId}/caption.md`;
     await createText(captionObjectKey, captionMarkdown);
     const metadata = await attachCaptionToPost(store, postId, {
       ...(deps.now ? { now: deps.now } : {}),

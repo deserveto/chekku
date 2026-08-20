@@ -319,22 +319,28 @@ function parseSocialPostMetadata(value: unknown): SocialPostMetadata | undefined
  * list entries.
  *
  * `post.md` content contract (per PROMPT.md action item #3 — Canonical
- * Content Unit, locked D2=c layered + D4=a markdown serialized): the file
- * stores BOTH the canonical content unit and the repurposed platform caption,
+ * Content Unit, locked D2=c layered + D4=a markdown serialized): since the
+ * two-stage approval split, the file stores the canonical content unit only,
  * wrapped via HTML comment delimiters from
  * `agent/src/mastra/social-content/canonical-unit.ts` → `wrapPostMarkdown`:
  *
  *     <!-- canonical-unit -->
  *     <canonical unit markdown — 8 Blocks platform-agnostic intermediate>
  *     <!-- /canonical-unit -->
- *     <!-- repurposed-caption -->
- *     <final platform-specific caption>
- *     <!-- /repurposed-caption -->
+ *
+ * The final platform-specific caption is NOT written here anymore: it lands
+ * in `social-posts/<postId>/caption.md` when the caption stage
+ * (`repurpose-social-post`) runs, and `attachCaptionToPost` records it in
+ * metadata. Pre-split posts may still carry a legacy
+ * `<!-- repurposed-caption -->` block inside `post.md`; readers prefer the
+ * dedicated caption object when metadata references it.
  *
  * The metadata schema itself does not change — the canonical unit is just
  * markdown text. Legacy posts written before the canonical contract fall back
- * gracefully: `unwrapPostMarkdown` returns the whole file as
- * `canonicalMarkdown` when no delimiters are present.
+ * gracefully: `unwrapPostMarkdown` returns the whole file as the
+ * `repurposedCaption` (with `canonicalMarkdown` undefined), because a
+ * delimiter-free `post.md` predates the canonical contract and is a plain
+ * caption.
  */
 export function buildSocialPostMetadata(input: SocialPostMetadataInput): BuiltSocialPost {
   if (typeof input.topic !== 'string' || input.topic.trim().length === 0) {
@@ -422,10 +428,19 @@ export async function getSocialPost(store: ObjectStorage, postId: string): Promi
   // Caption stage output lives in a dedicated object once the post reached
   // CANONICAL_APPROVED. Metadata references it (written last by
   // `attachCaptionToPost`), so a present `captionObjectKey` implies the
-  // caption object exists; a missing object surfaces as a storage error.
-  const captionMarkdown = parsed.captionObjectKey
-    ? await store.getText(parsed.captionObjectKey)
-    : undefined;
+  // caption object exists. A missing object (orphaned metadata reference,
+  // damaged storage) must not fail the whole post read: the post body,
+  // brief, and metadata stay readable and the caption is simply absent.
+  let captionMarkdown: string | undefined;
+  if (parsed.captionObjectKey) {
+    try {
+      captionMarkdown = await store.getText(parsed.captionObjectKey);
+    } catch (error) {
+      if (!(error instanceof ObjectStorageError) || error.code !== 'not-found') {
+        throw error;
+      }
+    }
+  }
 
   return {
     postId,

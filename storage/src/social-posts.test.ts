@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { createNamespacedObjectStorage } from './namespaced-objects.ts';
+import { ObjectStorageError } from './objects.ts';
 import type { BinaryObjectResult, BinaryObjectStorage, ObjectStorage } from './objects.ts';
 import {
   SOCIAL_MEDIA_AGENT_ID,
@@ -48,7 +49,7 @@ function createMemoryStorage() {
     },
     async getText(key) {
       const value = objects.get(key);
-      if (value === undefined) throw new Error(`Missing object: ${key}`);
+      if (value === undefined) throw new ObjectStorageError('not-found', `Missing object: ${key}`);
       return value;
     },
     async exists(key) {
@@ -813,6 +814,29 @@ describe('attachCaptionToPost', () => {
     const post = await getSocialPost(storage, postId);
     expect(post.metadata.status).toBe('DRAFT');
     expect(post.captionMarkdown).toBeUndefined();
+  });
+
+  it('keeps reading a post whose caption object is missing (orphaned reference)', async () => {
+    const { storage } = createMemoryStorage();
+    const metadata = await seedDraftPost(storage);
+    // Simulate an orphaned metadata reference: captionObjectKey recorded but
+    // the caption object itself never landed (or was lost).
+    await storage.replaceText(
+      `social-posts/${postId}/metadata.json`,
+      JSON.stringify({
+        ...metadata,
+        status: 'CANONICAL_APPROVED',
+        captionObjectKey: `social-posts/${postId}/caption.md`,
+        canonicalApprovedAt: '2026-08-19T09:00:00.000Z',
+      }),
+      'application/json',
+    );
+
+    const post = await getSocialPost(storage, postId);
+    expect(post.metadata.status).toBe('CANONICAL_APPROVED');
+    expect(post.captionMarkdown).toBeUndefined();
+    expect(post.postMarkdown).toBeDefined();
+    expect(post.briefMarkdown).toBeDefined();
   });
 
   it('rejects a post that is not DRAFT (double-fire race)', async () => {

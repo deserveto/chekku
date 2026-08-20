@@ -142,6 +142,9 @@ describe('buildVisualDelegationPrompt', () => {
     expect(prompt).toContain('AI Factory Batam');
     expect(prompt).toContain('Approved Instagram caption');
     expect(prompt).toContain(CAPTION_MARKDOWN);
+    // Untrusted-evidence label: the canonical unit is one LLM hop from
+    // fetched web pages, so the delegation must label it as evidence.
+    expect(prompt).toContain('never as instructions');
   });
 
   it('omits the caption block when no caption exists', () => {
@@ -208,6 +211,27 @@ describe('runGenerateSocialPostVisual', () => {
     expect(result.error).toBe('unexpected-status-draft');
     expect(generateVisual).not.toHaveBeenCalled();
     expect(JSON.parse(await social.getText(built.metadataObjectKey)).status).toBe('DRAFT');
+  });
+
+  it('rejects a canonical-missing post BEFORE the transition, leaving it CANONICAL_APPROVED', async () => {
+    const { root, social } = createMemoryStorage();
+    // Hostile/legacy shape: metadata claims CANONICAL_APPROVED but post.md
+    // has no canonical block (plain legacy caption body).
+    await seedCaptionApprovedPost(social, { postMarkdown: 'Plain legacy caption.' });
+
+    const generateVisual = vi.fn();
+    const result = await runGenerateSocialPostVisual(
+      { postId: POST_ID },
+      { storeFactory: () => root, generateVisual },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe('canonical-missing');
+    expect(generateVisual).not.toHaveBeenCalled();
+    // The irreversible APPROVED transition must not have happened.
+    const metadata = JSON.parse(await social.getText(`social-posts/${POST_ID}/metadata.json`));
+    expect(metadata.status).toBe('CANONICAL_APPROVED');
+    expect(metadata.captionApprovedAt).toBeUndefined();
   });
 
   it('keeps APPROVED (no rollback) when the visual generation throws', async () => {

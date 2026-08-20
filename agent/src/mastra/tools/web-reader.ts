@@ -47,9 +47,12 @@ export function createReadWebPageTool(
     } },
     execute: async (input, context) => {
       const result = await client.read(input.url, context.abortSignal);
+      // Size + truncation only: the Web Reader log invariant forbids requested
+      // URLs in logs. Callers that need URL correlation log it themselves at
+      // their own layer (e.g. trending-research enrichment logs).
       const markdownBytes = Buffer.byteLength(result.markdown, 'utf8');
       console.log(
-        `[read_web_page] url=${input.url} markdownBytes=${markdownBytes} truncated=${result.truncated}`,
+        `[read_web_page] markdownBytes=${markdownBytes} truncated=${result.truncated}`,
       );
       return result;
     },

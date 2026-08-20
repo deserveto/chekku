@@ -454,8 +454,18 @@ export function buildBrief(topic: Topic, weekStart: string): string {
 export function parseBrief(briefMarkdown: string): { weekStart: string; topic: Topic } | undefined {
   const values = new Map<string, string>();
   for (const line of briefMarkdown.split('\n')) {
+    // `buildBrief` embeds a slice of untrusted fetched page markdown after
+    // this label. Everything from that line on is evidence, never structure:
+    // stop parsing before an embedded `Source:` / `Topic:` shaped line inside
+    // the page content can shadow the genuine structural labels above it.
+    if (line.startsWith('Reference markdown')) break;
     const match = /^([A-Za-z ]+):\s(.*)$/.exec(line);
-    if (match) values.set(match[1]!.trim(), match[2]!.trim());
+    if (match) {
+      // Structural labels are first-occurrence-wins: only `buildBrief` writes
+      // them, exactly once, before any embedded content.
+      const key = match[1]!.trim();
+      if (!values.has(key)) values.set(key, match[2]!.trim());
+    }
   }
 
   const weekStart = values.get('Week of');
