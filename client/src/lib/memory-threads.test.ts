@@ -776,4 +776,287 @@ describe('agent-scoped memory threads', () => {
       (messages[0]?.parts?.[0] as { result?: unknown }).result,
     ).toBeUndefined();
   });
+  it('restores image attachments from persisted format-2 parts alongside flattened text', async () => {
+    threadListMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'msg-attachment-1',
+          role: 'user',
+          createdAt: '2026-08-19T10:00:00.000Z',
+          content: {
+            format: 2,
+            parts: [
+              { type: 'text', text: 'Summarize this photo.' },
+              {
+                type: 'file',
+                mimeType: 'image/png',
+                filename: 'photo.png',
+                data: 'data:image/png;base64,QUJD',
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    const messages = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    expect(messages).toEqual([
+      {
+        id: 'msg-attachment-1',
+        role: 'user',
+        content: 'Summarize this photo.',
+        createdAt: Date.parse('2026-08-19T10:00:00.000Z'),
+        attachments: [
+          {
+            mimeType: 'image/png',
+            dataUrl: 'data:image/png;base64,QUJD',
+            filename: 'photo.png',
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('keeps an image-only user message even when no text part survives', async () => {
+    threadListMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'msg-attachment-2',
+          role: 'user',
+          createdAt: '2026-08-19T10:01:00.000Z',
+          content: {
+            format: 2,
+            parts: [
+              { type: 'file', mimeType: 'image/jpeg', data: 'QUJD' },
+            ],
+          },
+        },
+      ],
+    });
+
+    const messages = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.content).toBe('');
+    expect(messages[0]?.attachments).toEqual([
+      { mimeType: 'image/jpeg', dataUrl: 'data:image/jpeg;base64,QUJD' },
+    ]);
+  });
+
+  it('ignores non-image file parts when restoring attachments', async () => {
+    threadListMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'msg-attachment-3',
+          role: 'user',
+          createdAt: '2026-08-19T10:02:00.000Z',
+          content: {
+            format: 2,
+            parts: [
+              { type: 'text', text: 'Here you go.' },
+              {
+                type: 'file',
+                mimeType: 'application/pdf',
+                data: 'data:application/pdf;base64,QUJD',
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    const messages = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.attachments).toBeUndefined();
+  });
+
+  it('restores the display prompt, not the wrapped attachment blob', async () => {
+    const { buildUserMessageContent } = await import('./chat-attachments');
+    const parts = buildUserMessageContent('Summarize this', [
+      {
+        id: 't1',
+        kind: 'text',
+        filename: 'data.csv',
+        byteSize: 10,
+        text: 'a,b\n1,2',
+        truncated: false,
+      },
+      {
+        id: 'i1',
+        kind: 'image',
+        filename: 'photo.jpg',
+        mimeType: 'image/jpeg',
+        base64: 'QUJD',
+      },
+    ]);
+    threadListMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'msg-wrapped-1',
+          role: 'user',
+          createdAt: '2026-08-19T10:03:00.000Z',
+          content: {
+            format: 2,
+            parts: parts.map((part) =>
+              part.type === 'image'
+                ? { type: 'file', mimeType: part.mimeType, filename: part.filename, data: `data:${part.mimeType};base64,${part.image}` }
+                : part,
+            ),
+          },
+        },
+      ],
+    });
+
+    const messages = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.content).toBe('Summarize this');
+    expect(messages[0]?.content).not.toContain('[Attached file:');
+    expect(messages[0]?.attachments).toEqual([
+      {
+        mimeType: 'image/jpeg',
+        dataUrl: 'data:image/jpeg;base64,QUJD',
+        filename: 'photo.jpg',
+      },
+    ]);
+  });
+
+  it('caps restored attachments at 24 per message', async () => {
+    threadListMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'msg-many-pages',
+          role: 'user',
+          createdAt: '2026-08-19T10:04:00.000Z',
+          content: {
+            format: 2,
+            parts: [
+              { type: 'text', text: 'look' },
+              ...Array.from({ length: 30 }, (_, index) => ({
+                type: 'file',
+                mimeType: 'image/jpeg',
+                data: 'QUJD',
+                filename: `doc.pdf (page ${index + 1} of 30)`,
+              })),
+            ],
+          },
+        },
+      ],
+    });
+
+    const messages = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    expect(messages[0]?.attachments).toHaveLength(24);
+  });
+
+  it('skips oversized attachment payloads instead of materializing them', async () => {
+    threadListMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'msg-huge',
+          role: 'user',
+          createdAt: '2026-08-19T10:05:00.000Z',
+          content: {
+            format: 2,
+            parts: [
+              { type: 'text', text: 'two images' },
+              { type: 'file', mimeType: 'image/png', data: 'x'.repeat(8 * 1024 * 1024 + 1) },
+              { type: 'file', mimeType: 'image/png', data: 'QUJD' },
+            ],
+          },
+        },
+      ],
+    });
+
+    const messages = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    expect(messages[0]?.attachments).toEqual([
+      { mimeType: 'image/png', dataUrl: 'data:image/png;base64,QUJD' },
+    ]);
+  });
+
+  it('stops restoring attachments once the per-thread budget is exhausted', async () => {
+    const bigPayload = 'x'.repeat(6 * 1024 * 1024);
+    threadListMessages.mockResolvedValueOnce({
+      messages: [0, 1, 2, 3, 4].map((index) => ({
+        id: `msg-budget-${index}`,
+        role: 'user' as const,
+        createdAt: `2026-08-19T10:0${index}:00.000Z`,
+        content: {
+          format: 2,
+          parts: [
+            { type: 'text', text: `msg ${index}` },
+            { type: 'file', mimeType: 'image/png', data: bigPayload },
+          ],
+        },
+      })),
+    });
+
+    const messages = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    // 24 MiB budget / 6 MiB payloads = 4 attachments survive; the fifth
+    // message keeps its text but loses the image.
+    const withAttachments = messages.filter((m) => m.attachments?.length);
+    expect(withAttachments).toHaveLength(4);
+    const last = messages[4];
+    expect(last?.content).toBe('msg 4');
+    expect(last?.attachments).toBeUndefined();
+  });
+
+  it('clamps restored legacy blob text to the display cap', async () => {
+    threadListMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'msg-legacy-blob',
+          role: 'user',
+          createdAt: '2026-08-19T10:06:00.000Z',
+          content: {
+            format: 2,
+            parts: [{ type: 'text', text: 'x'.repeat(200 * 1024) }],
+          },
+        },
+      ],
+    });
+
+    const messages = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    expect(messages[0]?.content.length).toBeLessThanOrEqual(
+      128 * 1024 + '…[message truncated]'.length,
+    );
+    expect(messages[0]?.content.endsWith('…[message truncated]')).toBe(true);
+  });
 });

@@ -61,6 +61,17 @@ export type ToolAssistantPart = {
   runId?: string;
 };
 
+export type ChatAttachmentView = {
+  id: string;
+  kind: 'image' | 'file' | 'pdf';
+  filename: string;
+  mimeType?: string;
+  /** Data URL for rendering (image bytes or PDF cover page). */
+  dataUrl?: string;
+  /** Number of rendered pages for PDF attachments. */
+  pageCount?: number;
+};
+
 /**
  * Ordered building block of one assistant turn. Streaming text deltas and
  * tool events are appended in arrival order so the timeline can render each
@@ -81,4 +92,5 @@ export type ChatMessage = {
   parts?: AssistantPart[];
   error?: boolean;
   createdAt: number;
+  attachments?: ChatAttachmentView[];
 };

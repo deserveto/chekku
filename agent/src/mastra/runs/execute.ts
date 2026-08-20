@@ -17,9 +17,18 @@ type StreamChunk = {
   payload?: unknown;
 };
 
+export type RunUserContent = Array<
+  | { type: 'text'; text: string }
+  | { type: 'image'; image: string; mimeType: string; filename?: string }
+>;
+
+export type RunStreamInput =
+  | string
+  | Array<{ role: 'user'; content: RunUserContent }>;
+
 export interface RunnableAgent {
   stream(
-    prompt: string,
+    prompt: RunStreamInput,
     options: {
       memory: { thread: string; resource: string };
       runId: string;
@@ -122,6 +131,21 @@ export function chunkToRunEvent(
         payload: { error: sanitizeErrorText(payload.error) },
       };
     }
+    case 'tripwire': {
+      const payload = chunkPayload(chunk);
+      const reason =
+        typeof payload.reason === 'string' && payload.reason.trim()
+          ? payload.reason
+          : 'The request exceeded a processing limit.';
+      return {
+        type: 'error',
+        payload: {
+          error: sanitizeErrorText(
+            `Request stopped by a safety limit. ${reason}`,
+          ),
+        },
+      };
+    }
     default:
       return null;
   }
@@ -168,6 +192,8 @@ export interface RunExecutionParams {
   threadId: string;
   resourceId: string;
   prompt: string;
+  /** Optional multimodal message content; kept transient and never copied into the run registry. */
+  content?: RunUserContent;
   /** Signal owned by the route handler; `registry.createRun` received its abort callback. */
   abortSignal: AbortSignal;
 }
@@ -186,7 +212,10 @@ export async function runExecution(
   let sawError = false;
 
   try {
-    const output = await agent.stream(params.prompt, {
+    const streamInput: RunStreamInput = params.content
+      ? [{ role: 'user', content: params.content }]
+      : params.prompt;
+    const output = await agent.stream(streamInput, {
       memory: { thread: params.threadId, resource: params.resourceId },
       runId: params.runId,
       abortSignal: params.abortSignal,

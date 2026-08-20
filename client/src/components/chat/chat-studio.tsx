@@ -1,6 +1,8 @@
 'use client';
 
 import {
+  ClipboardEvent,
+  DragEvent,
   FormEvent,
   KeyboardEvent,
   useCallback,
@@ -27,11 +29,25 @@ import {
   listAgentSkills,
   type AgentSkillSummary,
 } from '@/lib/agent-skills';
+import {
+  ATTACHMENT_ACCEPT_ATTR,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  buildUserMessageContent,
+  classifyAttachment,
+  exceedsTotalBase64Limit,
+  prepareImageAttachment,
+  preparePdfAttachment,
+  prepareTextAttachment,
+  toAttachmentView,
+  type PreparedAttachment,
+} from '@/lib/chat-attachments';
+import { browserImageDeps, browserPdfDeps } from '@/lib/chat-attachments-browser';
 import { buildChatHref } from '@/lib/chat-route';
 import {
   listAgentThreads,
   listThreadMessages,
   removeThread,
+  type StudioMemoryMessage,
   type StudioThread,
 } from '@/lib/memory-threads';
 import {
@@ -66,7 +82,6 @@ import {
   MAIN_AGENT_ID,
   QA_WEB_AGENT_ID,
   QA_ANDROID_AGENT_ID,
-  type AssistantPart,
   type ChatMessage,
   type ChekkuAgentSummary,
   type ToolAssistantPart,
@@ -106,17 +121,29 @@ function appendErrorDetail(message: ChatMessage, detail: string): ChatMessage {
   };
 }
 
-function messageFromMemory(
-  value: {
-    id: string;
-    role: 'user' | 'assistant';
-    content: string;
-    parts?: AssistantPart[];
-    createdAt: number;
-  },
-): ChatMessage {
-  return { ...value };
+function messageFromMemory(value: StudioMemoryMessage): ChatMessage {
+  const { attachments: restored, ...base } = value;
+  const attachments = restored?.map((attachment, index) => ({
+    id: `${value.id}-att-${index}`,
+    kind: 'image' as const,
+    filename: attachment.filename ?? `attachment-${index + 1}`,
+    mimeType: attachment.mimeType,
+    dataUrl: attachment.dataUrl,
+  }));
+  return {
+    ...base,
+    ...(attachments && attachments.length > 0 ? { attachments } : {}),
+  };
 }
+
+type PendingUpload = {
+  id: string;
+  filename: string;
+  kind: 'text' | 'image' | 'pdf';
+  status: 'preparing' | 'ready' | 'error';
+  error?: string;
+  prepared?: PreparedAttachment;
+};
 
 function TypingIndicator() {
   return (
@@ -206,11 +233,15 @@ export function ChatStudio({
   const subscriptionRef = useRef<AbortController | null>(null);
   const lastTerminalRef = useRef<string | null>(null);
   const sidebarRunsRef = useRef<Record<string, boolean>>({});
+  const dragDepthRef = useRef(0);
 
   const [agents, setAgents] = useState<ChekkuAgentSummary[]>([]);
   const [threads, setThreads] = useState<StudioThread[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
+  const [uploads, setUploads] = useState<PendingUpload[]>([]);
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [commandOpen, setCommandOpen] = useState(false);
   const [commandIndex, setCommandIndex] = useState(0);
   const [skills, setSkills] = useState<AgentSkillSummary[]>([]);
@@ -654,6 +685,7 @@ export function ChatStudio({
       if (target.id === threadId) {
         setMessages([]);
         setInput('');
+        setUploads([]);
         setCommandOpen(false);
         replaceWithNew(agentId);
       }
@@ -670,11 +702,112 @@ export function ChatStudio({
     }
   };
 
+  const readyUploads = useMemo(
+    () =>
+      uploads.flatMap((upload) =>
+        upload.status === 'ready' && upload.prepared
+          ? [upload.prepared]
+          : [],
+      ),
+    [uploads],
+  );
+  const preparingUploads = uploads.some(
+    (upload) => upload.status === 'preparing',
+  );
+
+  const prepareUpload = async (file: File) => {
+    const id = crypto.randomUUID();
+    const kind = classifyAttachment(file);
+
+    if (kind === 'unsupported') {
+      setUploads((current) => [
+        ...current,
+        {
+          id,
+          filename: file.name,
+          kind: 'text',
+          status: 'error',
+          error: 'This file type is not supported.',
+        },
+      ]);
+      return;
+    }
+
+    setUploads((current) => [
+      ...current,
+      { id, filename: file.name, kind, status: 'preparing' },
+    ]);
+
+    try {
+      const prepared =
+        kind === 'text'
+          ? await prepareTextAttachment(file)
+          : kind === 'image'
+            ? await prepareImageAttachment(file, browserImageDeps)
+            : await preparePdfAttachment(
+                file,
+                browserImageDeps,
+                await browserPdfDeps(),
+              );
+      setUploads((current) =>
+        current.map((upload) =>
+          upload.id === id
+            ? { ...upload, status: 'ready', prepared }
+            : upload,
+        ),
+      );
+    } catch (reason) {
+      setUploads((current) =>
+        current.map((upload) =>
+          upload.id === id
+            ? {
+                ...upload,
+                status: 'error',
+                error:
+                  reason instanceof Error && reason.message
+                    ? reason.message
+                    : 'This file could not be processed.',
+              }
+            : upload,
+        ),
+      );
+    }
+  };
+
+  const addFiles = (files: File[]) => {
+    if (runActive || !modelReady) return;
+
+    // Error chips stay visible until dismissed but never consume an
+    // attachment slot, so rejected files cannot block further adds.
+    const activeCount = uploads.filter(
+      (upload) => upload.status !== 'error',
+    ).length;
+    const room = MAX_ATTACHMENTS_PER_MESSAGE - activeCount;
+    if (room <= 0) {
+      setError(
+        `Up to ${MAX_ATTACHMENTS_PER_MESSAGE} attachments are allowed per message.`,
+      );
+      return;
+    }
+
+    const accepted = files.slice(0, room);
+    if (files.length > accepted.length) {
+      setError(
+        `Up to ${MAX_ATTACHMENTS_PER_MESSAGE} attachments are allowed per message.`,
+      );
+    }
+    for (const file of accepted) void prepareUpload(file);
+  };
+
+  const removeUpload = (id: string) => {
+    setUploads((current) => current.filter((upload) => upload.id !== id));
+  };
   const sendMessage = async (raw: string) => {
     const prompt = raw.trim();
 
     if (
-      !prompt ||
+      (!prompt && readyUploads.length === 0) ||
+      preparingUploads ||
       runActive ||
       !threadOwned ||
       !modelReady
@@ -682,9 +815,21 @@ export function ChatStudio({
       return;
     }
 
+    if (exceedsTotalBase64Limit(readyUploads)) {
+      setError(
+        'These attachments exceed the 8 MB total limit for one message. Remove some files and try again.',
+      );
+      return;
+    }
+
+    const attachmentViews = readyUploads.map(toAttachmentView);
+    const runPrompt =
+      prompt || attachmentViews[0]?.filename || 'Attachment';
+    const runContent = buildUserMessageContent(prompt, readyUploads);
     const now = Date.now();
     const userMessageId = crypto.randomUUID();
     const assistantId = crypto.randomUUID();
+    const sentInput = input;
 
     setMessages((current) => [
       ...current,
@@ -693,6 +838,7 @@ export function ChatStudio({
         role: 'user',
         content: prompt,
         createdAt: now,
+        ...(attachmentViews.length > 0 ? { attachments: attachmentViews } : {}),
       },
       {
         id: assistantId,
@@ -702,6 +848,8 @@ export function ChatStudio({
       },
     ]);
     setInput('');
+    setUploads([]);
+    if (fileInputRef.current) fileInputRef.current.value = '';
     setError(undefined);
     setSubscriptionState('connecting');
 
@@ -709,7 +857,8 @@ export function ChatStudio({
       const run = await startRun({
         agentId,
         threadId,
-        prompt,
+        prompt: runPrompt,
+        content: runContent,
       });
 
       setActiveRun(run);
@@ -745,6 +894,19 @@ export function ChatStudio({
             ? appendErrorDetail(message, `Could not complete request. ${detail}`)
             : message,
         ),
+      );
+      // The send failed before any run existed: put the drafted input and
+      // the prepared attachments back so retrying does not force the user
+      // to re-pick and re-process every file.
+      setInput(sentInput);
+      setUploads(
+        readyUploads.map((prepared) => ({
+          id: prepared.id,
+          filename: prepared.filename,
+          kind: prepared.kind,
+          status: 'ready' as const,
+          prepared,
+        })),
       );
       setSubscriptionState('idle');
     }
@@ -810,6 +972,42 @@ export function ChatStudio({
       event.preventDefault();
       void sendMessage(input);
     }
+  };
+
+  const paste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(event.clipboardData?.files ?? []);
+    if (files.length > 0) {
+      event.preventDefault();
+      // Unsupported clipboard files flow through addFiles too, so paste
+      // surfaces the same error chips as drop and the file picker instead
+      // of silently dropping them.
+      addFiles(files);
+    }
+  };
+
+  const dragEnterForm = (event: DragEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    // Count dragenter/dragleave crossings so the highlight survives moving
+    // across child elements instead of flickering on every boundary.
+    dragDepthRef.current += 1;
+    setDragOver(true);
+  };
+
+  const dragOverForm = (event: DragEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setDragOver(true);
+  };
+
+  const dragLeaveForm = () => {
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setDragOver(false);
+  };
+
+  const dropForm = (event: DragEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    dragDepthRef.current = 0;
+    setDragOver(false);
+    addFiles(Array.from(event.dataTransfer?.files ?? []));
   };
 
   if (!threadOwned) {
@@ -1068,6 +1266,45 @@ export function ChatStudio({
                       <TypingIndicator />
                     )}
 
+                    {message.role === 'user' &&
+                      message.attachments &&
+                      message.attachments.length > 0 && (
+                        <div
+                          className="chat-message-attachments"
+                          role="list"
+                          aria-label="Attached files"
+                        >
+                          {message.attachments.map((attachment, index) =>
+                            attachment.dataUrl ? (
+                              // Data-URL thumbnails cannot use next/image without
+                              // per-origin configuration; a plain img is correct here.
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                key={attachment.id || `${message.id}-att-${index}`}
+                                className="chat-attachment-thumb"
+                                src={attachment.dataUrl}
+                                alt={
+                                  attachment.filename ||
+                                  `Attached image ${index + 1}`
+                                }
+                                loading="lazy"
+                              />
+                            ) : (
+                              <span
+                                className="chat-attachment-file"
+                                key={attachment.id || `${message.id}-att-${index}`}
+                                role="listitem"
+                              >
+                                ≡ {attachment.filename}
+                                {attachment.pageCount
+                                  ? ` (${attachment.pageCount} pages)`
+                                  : ''}
+                              </span>
+                            ),
+                          )}
+                        </div>
+                      )}
+
                     {partGroups &&
                       !message.content &&
                       runActive &&
@@ -1108,8 +1345,57 @@ export function ChatStudio({
             </div>
           )}
 
-          <form className="chat-composer" onSubmit={submit}>
+          <form
+            className={`chat-composer${dragOver ? ' drag-over' : ''}`}
+            onSubmit={submit}
+            onDragOver={dragOverForm}
+            onDragEnter={dragEnterForm}
+            onDragLeave={dragLeaveForm}
+            onDrop={dropForm}
+          >
             <div className="chat-composer__input">
+              {uploads.length > 0 && (
+                <div
+                  className="chat-upload-row"
+                  role="list"
+                  aria-label="Pending attachments"
+                >
+                  {uploads.map((upload) => (
+                    <span
+                      className={`chat-upload-chip ${upload.status}`}
+                      key={upload.id}
+                      role="listitem"
+                    >
+                      <span aria-hidden="true">
+                        {upload.kind === 'image'
+                          ? '▣'
+                          : upload.kind === 'pdf'
+                            ? '⎘'
+                            : '≡'}
+                      </span>
+                      <span className="chat-upload-name">
+                        {upload.filename}
+                        {upload.prepared?.kind === 'pdf'
+                          ? ` (${upload.prepared.pages.length} pages)`
+                          : ''}
+                      </span>
+                      {upload.status === 'preparing' && (
+                        <small>processing…</small>
+                      )}
+                      {upload.status === 'error' && upload.error && (
+                        <small>{upload.error}</small>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => removeUpload(upload.id)}
+                        aria-label={`Remove ${upload.filename}`}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
               {commandOpen && filteredSkills.length > 0 ? (
                 <CommandMenu
                   commands={filteredSkills}
@@ -1128,6 +1414,7 @@ export function ChatStudio({
                   if (isCommand) setCommandIndex(0);
                 }}
                 onKeyDown={keyDown}
+                onPaste={paste}
                 placeholder={
                   modelReady
                     ? `Message ${currentAgent?.name || agentId}…`
@@ -1140,6 +1427,27 @@ export function ChatStudio({
 
             <footer>
               <div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  hidden
+                  accept={ATTACHMENT_ACCEPT_ATTR}
+                  onChange={(event) => {
+                    addFiles(Array.from(event.target.files ?? []));
+                    event.target.value = '';
+                  }}
+                />
+                <button
+                  className="chat-attach-button"
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={!modelReady || runActive}
+                  aria-label="Attach files"
+                  title="Attach files"
+                >
+                  ＋ Attach
+                </button>
                 <span className="chat-memory-chip">◇ Memory</span>
                 {agentId === QA_WEB_AGENT_ID && (
                   <span className="chat-memory-chip">◎ Browser</span>
@@ -1168,7 +1476,11 @@ export function ChatStudio({
                   <button
                     className="chat-send-button"
                     type="submit"
-                    disabled={!input.trim() || !modelReady}
+                    disabled={
+                      (!input.trim() && readyUploads.length === 0) ||
+                      preparingUploads ||
+                      !modelReady
+                    }
                     aria-label="Send message"
                   >
                     ↑

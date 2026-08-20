@@ -68,6 +68,10 @@ export const mastra = new Mastra({
   server: {
     port: env.PORT,
     host: env.HOST,
+    // Chat uploads arrive as base64-inflated multimodal message parts; the
+    // client caps payloads at 8 MiB of base64, so the default 4.5 MiB body
+    // limit would reject multi-image/PDF-page messages before they reach Memory.
+    bodySizeLimit: 12 * 1024 * 1024,
     cors: { origin: env.WEB_URL, credentials: true },
     middleware: [requestIdInjector, requestLogger],
     apiRoutes: [

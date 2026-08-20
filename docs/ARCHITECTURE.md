@@ -132,7 +132,7 @@ Secrets are injected exclusively through Compose `environment:` interpolation; n
 
 Mastra provides native agent, Memory, skill, and editor APIs. Next.js separately provides `/reports/*`, `/api/storage/pm-reports/*`, and `/api/storage/competitive-analyses/*` through focused server-only services; those PM storage interfaces are not Mastra APIs. Chekku does not maintain a parallel custom conversation or agent database.
 
-The chat composer (`client/src/components/chat/chat-studio.tsx`) exposes the active agent's user-invocable skills through a client-side slash-command picker. Typing a leading `/` opens a keyboard-navigable listbox populated from the active agent's serialized record — `listAgentSkills` in `client/src/lib/agent-skills.ts` fetches the agent through the same-origin `/api/agent/*` proxy and reads the `.skills` array, keeping only entries whose `user-invocable` flag is not `false`. Selecting a skill inserts `/<skill-name> ` into the input and dispatches through the existing `sendMessage` → `startRun()` path. No backend skill-routing change is involved. Agents with no user-invocable skills show no rows and the picker stays closed.
+The chat composer (`client/src/components/chat/chat-studio.tsx`) exposes the active agent's user-invocable skills through a client-side slash-command picker. Typing a leading `/` opens a keyboard-navigable listbox populated from the active agent's serialized record — `listAgentSkills` in `client/src/lib/agent-skills.ts` fetches the agent through the same-origin `/api/agent/*` proxy and reads the `.skills` array, keeping only entries whose `user-invocable` flag is not `false`. Selecting a skill inserts `/<skill-name> ` into the input and dispatches through the existing `sendMessage` → `agent.stream()` path. No backend skill-routing change is involved. Agents with no user-invocable skills show no rows and the picker stays closed.
 
 `storedAgentTools` is the instance-level registry that makes calculator, current-time, and email tools available during stored-agent hydration. Weekly and competitive PM tools plus reusable `search_web` and `read_web_page` attach directly to `pmAgent`; PM storage tools are not members of `storedAgentTools`, `garageMcpServer`, `searxngMcpServer`, or `webReaderMcpServer`.
 
@@ -427,25 +427,37 @@ Every thread is owned by an agent and resource:
 
 The client validates this prefix before listing, reading, renaming, or deleting a thread. Changing agents creates or opens a thread owned by that agent; a conversation cannot silently switch its owner.
 
+## Chat file uploads
+
+The chat composer accepts text files, images, and PDFs. All processing is client-side (`client/src/lib/chat-attachments.ts` + `chat-attachments-browser.ts`):
+
+1. **Text formats** (txt, md, csv, tsv, json, log, xml, yml/yaml) are read as UTF-8, capped at 256 Ki UTF-16 chars each, and inlined into the user message as fenced blocks labeled untrusted data.
+2. **Images** (png/jpeg/webp) are passed through when small (≤1568 px long edge, ≤600 KB) or downscaled/re-encoded to JPEG in a canvas, then sent as native multimodal image parts (raw base64 + `mimeType`, optional display `filename`).
+3. **PDFs** are rendered to page images with `pdfjs-dist` in the browser (≤20 pages, ≤1580 px long edge per page) — the OpenAI-compatible gateway only accepts `image/*` file parts, so page images are the only PDF transport.
+
+The multimodal message (one text part with the prompt, an untrusted-data note, wrapped text blocks, and per-image markers inside `<!-- chekku-attachments-begin -->` … `<!-- chekku-attachments-end -->` sentinels, followed by image parts) is sent as transient `content` on `POST /api/runs`. The Next.js `/api/runs` proxy forwards `content` as an array-only passthrough; the agent server's `parseStartRunRequest` owns full validation (≤200 parts, ≤2.5 Mi chars per text part, ≤2 Mi chars per image part and ≤8 Mi chars of image base64 total, no `data:` URL values, filenames ≤256 chars) and rejects violations with a fixed 400. The run registry keeps only the bounded display `prompt`; the execution driver passes `content` directly to `agent.stream()`, and Mastra Memory persists it with the completed turn. The agent server's `bodySizeLimit` is 12 MiB and the production nginx template matches it with `client_max_body_size 12m`; worst-case legitimate messages (8 MiB of base64 plus wrapped text attachments plus the prompt) can approach that ceiling, so the two values must be raised together. The client caps totals at 8 MiB of base64 and 8 attachments per message, and sanitizes every stored filename (control characters collapsed, 120 code points max). Uploads are never written to Garage — they persist only as message parts in Postgres through Mastra Memory.
+
+Thread restore shows the display prompt again: `normalizeMessage` cuts the text part at the first attachment sentinel instead of dumping the wrapped blob, clamps legacy sentinel-free blobs to 128 Ki chars, and restores attachments from the persisted image parts (carrying their filenames) bounded to 24 per message, 8 Mi chars per attachment and per message, and 24 Mi chars per thread read — oversized payloads are skipped whole rather than truncated into broken images.
+
+On the agent side, both context-bounding layers are vision-aware: the char-budget guard counts user-message image file parts at a fixed vision-cost estimate (`VISION_PART_ESTIMATE_CHARS`) instead of base64 length and never slices binary payload fields during truncation — when only unsliceable binary remains over budget, it drops whole binary units (image file parts, media parts, binary items inside tool-result output) oldest-first so the budget is always enforced; and the token limiter (`VisionAwareTokenLimiterProcessor` from `createAgentContextLimiter()`) applies the same estimate because the stock Mastra limiter tokenizes the full base64 of non-text parts and would reject multi-page uploads with a tripwire before generation starts. `tripwire` stream chunks surface as visible assistant errors in the chat UI rather than a silently ended stream.
+
 ## Agent run lifecycle
 
-Agent execution is server-owned and independent of any browser connection. ChatStudio no longer holds the model stream: sending a message creates a **run** on the agent server, and the UI merely observes that run.
+Agent execution is server-owned and independent of any browser connection. ChatStudio does not hold the model stream: sending a message creates a **run** on the agent server, and the UI merely observes that run.
 
 ```text
 ChatStudio ──POST /api/runs──────────▶ Next.js identity seam ──▶ agent server run manager
-                (prompt, agentId, threadId)   (injects resourceId = session user)   │
-                                                                               creates run,
+                 (prompt, optional content)   (injects resourceId)           │
 ChatStudio ◀──SSE /api/runs/:runId/events── Next.js proxy ◀── run registry ◀── agent.stream()
 ```
 
-- **Ownership.** The run manager lives in the agent workspace (`agent/src/mastra/runs/`): an in-memory registry (`run-registry.ts`) plus an execution driver (`execute.ts`) that consumes `agent.stream()` with a server-owned `AbortController`. The run's lifetime is the agent server process, not any HTTP connection or React component. Navigating away, reloading, or closing the tab only drops the observation; the run continues and Mastra Memory persists the final messages.
-- **Concurrency.** At most one non-terminal run per `(agentId, threadId, resourceId)`, enforced synchronously at run creation; duplicates receive `409 Conflict` with the active run so the client attaches instead of duplicating.
-- **Reconnection.** `GET /api/runs/:runId/events?offset=N` replays buffered events from N and then streams live (SSE with heartbeats). The client (`client/src/lib/agent-runs.ts`) reconnects with `offset = lastSequence + 1` on drops, so events are delivered exactly once. On mount, ChatStudio asks `GET /api/runs/active` whether the thread has a running execution and, if so, subscribes with offset 0 to reconstruct partial output and tool progress — it never restarts the prompt. Mastra persists the user message only at turn end, so the attaching client synthesizes the in-flight user turn and an assistant placeholder from the run summary's `prompt`; replayed tool events render immediately instead of the empty welcome state.
-- **Cancellation.** `POST /api/runs/:runId/cancel` aborts exactly that run's signal; it is idempotent for terminal runs. Stop in the UI targets the active run id, not the thread.
-- **First-turn titles.** When a run starts, the server creates the Memory thread record (if absent) titled from the prompt (52-character truncation) before responding, so the thread appears in listings with a real name the moment the prompt is sent. The browser never owns renaming.
-- **Sidebar status.** ChatStudio polls `GET /api/runs/list` every 5 seconds and shows a pulsing indicator (reusing the `studio-pulse` animation) next to threads with active runs, refreshing the thread list when one completes.
-- **Identity.** The browser never supplies a `resourceId`: the Next.js `/api/runs/*` seam derives it from the Better Auth session, discards any client value, and validates thread ownership before forwarding. Run-scoped endpoints compare the derived resource against the run record and collapse mismatches to 404.
-- **Limits.** Event buffers are bounded (4 MiB / 10 000 events per run with oldest-eviction and an `evicted` flag); terminal runs stay replayable for 30 minutes, then only Mastra Memory messages remain. An agent server restart kills in-flight runs together with the registry — no stale state survives, but partial output of an interrupted run is not persisted (Mastra skips persistence on abort). Chekku runs a single agent-server instance; there is no cross-instance run coordination.
+- **Ownership.** The run manager lives in `agent/src/mastra/runs/`: an in-memory registry plus an execution driver that consumes `agent.stream()` with a server-owned `AbortController`. Navigating away, reloading, or closing the tab only drops observation; the run continues. An agent-server restart kills in-flight runs together with the registry — no stale state survives, and partial output of an interrupted run is not persisted (Mastra skips persistence on abort).
+- **Concurrency.** At most one non-terminal run per `(agentId, threadId, resourceId)`; duplicates receive `409 Conflict` with the active run so the client attaches instead of duplicating. Concurrent running runs are additionally capped at 4 per `resourceId` and 64 across the server (registry constants); a start above either cap receives `429` with a fixed bounded message.
+- **Reconnection.** `GET /api/runs/:runId/events?offset=N` replays buffered events and then streams live (SSE with heartbeats). The client reconnects with `offset = lastSequence + 1`, so events are delivered exactly once across drops; it never restarts the prompt. Mastra persists a turn's user message only at turn end, so a client attaching to an in-flight run synthesizes the user turn and an assistant placeholder from the run summary's `prompt` and replays tool/text events onto them.
+- **Cancellation.** `POST /api/runs/:runId/cancel` aborts exactly that run's signal and is idempotent for terminal runs. Stop in the UI targets the active run id, not the thread.
+- **First-turn titles.** The server creates a missing Memory thread record titled from the display prompt (52-character truncation) before the 202 start response is sent, so the thread appears in listings with a real name the moment the prompt is sent; the browser never owns renaming. For attachment-only turns the first (sanitized) filename becomes that prompt.
+- **Identity.** The Next.js `/api/runs/*` seam derives `resourceId` from the Better Auth session, discards client-supplied values, and validates thread ownership before forwarding. Unauthenticated calls to `/api/runs/*` return `403`; unknown or foreign run IDs collapse to `404`.
+- **Limits.** The `prompt` is capped at 65,536 UTF-8 bytes (400 on overflow). Event buffers are bounded to 4 MiB / 10,000 events per run with oldest-eviction and an `evicted` flag — extremely long runs may replay with a gap in the middle, and the run summary carries `evicted: true` when that happened. Terminal runs stay replayable for 30 minutes, then only Mastra Memory messages remain. A watchdog force-fails running runs older than 30 minutes (fixed message, aborts the execution signal, releases the thread's active-run lock); any run API touch performs the reap — there is no background timer.
 
 ## Client boundaries
 
@@ -458,7 +470,7 @@ The browser uses `@mastra/client-js` with the Next.js origin and `/api/agent` pr
 - supports GET, POST, PUT, PATCH, DELETE, and HEAD;
 - streams the upstream response back to the browser.
 
-The `/api/runs/*` proxy (`client/src/app/api/runs/[[...path]]/route.ts`) is the second browser-to-agent surface. It resolves the same identity seam, injects `resourceId = session.user.id` into every forwarded run request (discarding any client-supplied value), validates thread ownership for run starts and active-run lookups, validates path segments with the same `SAFE_SEGMENT` rule, and streams SSE bodies through unchanged.
+The `/api/runs/*` proxy (`client/src/app/api/runs/[[...path]]/route.ts`) is the separate chat-execution surface. It resolves the same identity seam, injects `resourceId = session.user.id`, validates thread ownership for run starts and active-run lookups, and streams SSE bodies through unchanged.
 
 The current identity implementation is intentionally replaceable. Future OIDC must preserve the same resource and thread-ownership checks.
 
@@ -493,7 +505,7 @@ Chat report links use URL-encoded relative `/reports/<reportId>` or `/reports/co
 - `/social-posts` lists scheduled Instagram drafts newest first.
 - `/social-posts/[postId]` renders caption, metadata, and brief.
 - `/api/agent/[...path]` proxies Mastra HTTP requests.
-- `POST /api/runs` starts a server-owned agent run for the signed-in user (resourceId derived from the session; thread ownership validated).
+- `POST /api/runs` starts a server-owned agent run for the signed-in user (resourceId derived from the session; thread ownership validated; multimodal `content` forwarded as an array-only passthrough).
 - `GET /api/runs/active?agentId&threadId` returns the thread's active run (204 when none).
 - `GET /api/runs/list[?agentId]` returns the user's active runs for sidebar status.
 - `GET /api/runs/[...path]` proxies run status, SSE event streams (`/runs/:runId/events?offset=N`), and cancellation (`/runs/:runId/cancel`) with the session-derived resourceId appended.

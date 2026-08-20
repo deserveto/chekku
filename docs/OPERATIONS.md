@@ -182,24 +182,42 @@ curl \
 
 Set `LLM_DEFAULT_MODEL` to an exact returned `id`, without adding Chekku's internal gateway prefix.
 
+## Chat file uploads
+
+The chat composer accepts text files, images, and PDFs. Processing is entirely in the browser; the agent server only receives the assembled multimodal message. Operational limits:
+
+- At most 8 attachments and 8 MiB of base64 per message (enforced client-side with fixed error messages).
+- Text files are capped at 256 Ki UTF-16 chars each (a UTF-16-unit count, not bytes — CJK text can reach ~1 MiB of UTF-8); larger files are truncated with a visible marker.
+- Images larger than 1568 px long edge or 600 KB are downscaled and re-encoded as JPEG before sending.
+- PDFs render to page images in the browser: at most 20 pages, each ≤1580 px long edge. A `pdfjs-dist` worker loads from the client bundle; if the bundler cannot emit it, pdf.js falls back to its main-thread worker.
+- Attachment filenames are sanitized (control characters collapsed, 120 code points max) before they reach the model prompt or a persisted thread title.
+
+The agent server enforces its own `content` bounds on every run start (the browser caps are conveniences, not the security boundary): at most 200 parts, text parts ≤2.5 Mi chars, image base64 ≤2 Mi chars per part and ≤8 Mi chars total, `data:` URL image values rejected, filenames ≤256 chars. Violations return the fixed 400 `content must be valid multimodal message parts`.
+
+The Mastra server sets `bodySizeLimit` to 12 MiB (`agent/src/mastra/index.ts`) so base64-inflated upload messages pass the default 4.5 MiB Hono body limit; worst-case legitimate messages (8 MiB of base64 plus wrapped text attachments plus the prompt) can approach it. The production nginx template (`ops/nginx/chekku.conf`) sets `client_max_body_size 12m` to match — raise both together.
+
+Thread reads are bounded too: restored attachments cap at 24 per message, 8 Mi chars per attachment and per message, and 24 Mi chars per thread read; oversized payloads are skipped whole, and restored user bubbles show the display prompt (attachment sentinels are stripped, legacy blobs clamp at 128 Ki chars).
+
+Uploads persist only as message parts in Mastra Memory (Postgres). There is no Garage involvement and no upload directory to back up or prune.
+
 ## Agent runs
 
-Chat execution is server-owned. Each prompt creates a run on the agent server that keeps executing after the browser navigates away, reloads, or closes; the chat UI reconnects by replaying run events and never restarts the prompt. One non-terminal run is allowed per agent/thread/resource — a second start receives `409` with the active run id.
+Chat execution is server-owned. Each prompt creates a run that keeps executing after the browser navigates away, reloads, or closes; the UI reconnects by replaying run events and never restarts the prompt. One non-terminal run is allowed per agent/thread/resource.
 
-Browser-facing endpoints (identity derived from the Better Auth session by the Next.js seam):
+Browser-facing endpoints derive identity from the Better Auth session:
 
-- `POST /api/runs` — start a run (`{ agentId, threadId, prompt }`); responds `202 { run }`, `409 { run }` when this thread already has an active run, or `429 { error }` when a concurrency cap is reached. The prompt is capped at 65,536 UTF-8 bytes (larger prompts get `400`). On a first turn the server creates the Memory thread record titled from the prompt (52-character truncation) before responding, so the thread shows up in the sidebar with a real name immediately, and the run summary in the response carries the `prompt`.
-- `GET /api/runs/active?agentId&threadId` — the thread's active run, or `204`.
-- `GET /api/runs/list[?agentId]` — active runs for sidebar status polling.
-- `GET /api/runs/<runId>/events?offset=N` — SSE replay-then-live event stream; closes on the terminal event.
-- `POST /api/runs/<runId>/cancel` — cancel exactly that run; idempotent.
+- `POST /api/runs` starts a run with `{ agentId, threadId, prompt, content? }`. `content` is the optional multimodal parts array (validated on the agent server) and is passed transiently to execution; run summaries store only `prompt`. The prompt is capped at 65,536 UTF-8 bytes (larger prompts get `400`). Responses are `202 { run }`, `409 { run }` for an existing thread run, or `429 { error }` at a concurrency cap.
+- `GET /api/runs/active?agentId&threadId` returns the thread's active run or `204`.
+- `GET /api/runs/list[?agentId]` lists active runs for sidebar status.
+- `GET /api/runs/<runId>/events?offset=N` provides replay-then-live SSE.
+- `POST /api/runs/<runId>/cancel` cancels exactly that run and is idempotent.
 
 Operational limits to know:
 
 - The run registry is in-memory and single-instance. Restarting the agent server (dev or the `agent` container) kills in-flight runs; clients then see no active run and render the persisted Mastra Memory messages. Partial output of an interrupted run is not persisted (Mastra skips persistence on abort).
 - Mastra persists a turn's user message only when the turn completes. While a run is in flight, the chat UI shows the user turn and live tool/text progress from the run record (`prompt` + event replay), not from Memory.
 - Terminal runs stay replayable for 30 minutes; afterwards only Memory messages remain and tool-timeline detail for that run is gone.
-- Run event buffers are capped (4 MiB / 10 000 events per run). Extremely long runs may replay with a gap in the middle; the run summary carries `evicted: true`.
+- Run event buffers are capped at 4 MiB / 10,000 events per run. Extremely long runs may replay with a gap in the middle; the run summary carries `evicted: true` when that happened.
 - Concurrent running runs are capped at 4 per user and 64 across the server (registry constants, no environment override). A start above either cap receives `429` with a fixed message and the registry stays intact; a duplicate start on a busy thread still receives `409` so the client can attach.
 - A running run older than 30 minutes is force-failed by the registry watchdog (fixed message `The run exceeded the maximum duration and was stopped.`), which aborts its execution signal and releases the thread's active-run lock even when the model gateway stream hangs. Any run API touch performs the reap; there is no background timer.
 - Foreign or malformed run IDs collapse to `404`; unauthenticated calls to `/api/runs/*` return `403`.

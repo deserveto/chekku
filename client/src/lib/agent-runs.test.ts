@@ -162,6 +162,28 @@ describe('startRun', () => {
     });
   });
 
+  it('posts optional multimodal content with the display prompt', async () => {
+    const content = [
+      { type: 'text' as const, text: '[Attached image 1: photo.png]' },
+      { type: 'image' as const, image: 'QUJD', mimeType: 'image/png' },
+    ];
+
+    await startRun({
+      agentId: 'main-agent',
+      threadId: run.threadId,
+      prompt: 'photo.png',
+      content,
+    });
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body)).toEqual({
+      agentId: 'main-agent',
+      threadId: run.threadId,
+      prompt: 'photo.png',
+      content,
+    });
+  });
+
   it('surfaces a conflict with the existing run for 409 responses', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ run, error: 'busy' }, 409));
 

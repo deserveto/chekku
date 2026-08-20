@@ -54,6 +54,11 @@ export class RunConflictError extends Error {
   }
 }
 
+export type AgentRunUserContent = Array<
+  | { type: 'text'; text: string }
+  | { type: 'image'; image: string; mimeType: string; filename?: string }
+>;
+
 const RUN_EVENT_TYPES = new Set<AgentRunEventType>([
   'text-delta',
   'tool-call',
@@ -84,6 +89,7 @@ export async function startRun(params: {
   agentId: string;
   threadId: string;
   prompt: string;
+  content?: AgentRunUserContent;
 }): Promise<AgentRunSummary> {
   const response = await fetch('/api/runs', {
     method: 'POST',
@@ -92,6 +98,7 @@ export async function startRun(params: {
       agentId: params.agentId,
       threadId: params.threadId,
       prompt: params.prompt,
+      ...(params.content ? { content: params.content } : {}),
     }),
   });
 

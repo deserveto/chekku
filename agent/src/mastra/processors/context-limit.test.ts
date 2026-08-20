@@ -6,6 +6,8 @@ import {
   AGENT_MEMORY_LAST_MESSAGES,
   CHAR_GUARD_CHARS_PER_TOKEN,
   CHAR_GUARD_OUTPUT_RESERVE_TOKENS,
+  VISION_PART_ESTIMATE_CHARS,
+  VISION_PART_ESTIMATE_TOKENS,
   createAgentContextLimiter,
   createAgentMemory,
   createCharBudgetGuard,
@@ -22,6 +24,15 @@ function sys(text: string): AnyMsg {
 }
 function user(text: string): AnyMsg {
   return { role: 'user', content: [{ type: 'text', text }] };
+}
+function userImage(base64: string, mediaType = 'image/png'): AnyMsg {
+  return {
+    role: 'user',
+    content: [
+      { type: 'text', text: 'analyze this' },
+      { type: 'file', data: base64, mediaType, filename: 'upload.png' },
+    ],
+  };
 }
 function assistantText(text: string): AnyMsg {
   return { role: 'assistant', content: [{ type: 'text', text }] };
@@ -93,6 +104,89 @@ describe('agent context limiting (model-adaptive)', () => {
     expect(Number.isFinite(AGENT_MEMORY_LAST_MESSAGES)).toBe(true);
     expect(AGENT_MEMORY_LAST_MESSAGES).toBeGreaterThan(0);
     expect(AGENT_MEMORY_LAST_MESSAGES).toBeLessThan(Number.MAX_SAFE_INTEGER);
+  });
+});
+
+describe('vision-aware token limiting', () => {
+  type CountableMessage = { role?: string; content?: unknown };
+
+  function counterOf(limiter: TokenLimiterProcessor): (message: CountableMessage) => Promise<number> {
+    const method = (limiter as unknown as {
+      countInputMessageTokens: (message: CountableMessage) => Promise<number>;
+    }).countInputMessageTokens;
+    return (message) => method.call(limiter, message);
+  }
+
+  function dbUserMessage(parts: unknown[]): CountableMessage & { id: string; createdAt?: number } {
+    return { id: 'msg-1', role: 'user', createdAt: 1, content: { format: 2, parts } };
+  }
+
+  it('counts image file parts at the fixed vision estimate instead of base64 length', async () => {
+    const limiter = createAgentContextLimiter();
+    const base64 = 'a'.repeat(132_000);
+    const estimate = await counterOf(limiter)(
+      dbUserMessage([
+        { type: 'text', text: 'What is this document about? Summarize each page' },
+        ...Array.from({ length: 8 }, () => ({
+          type: 'file',
+          mimeType: 'image/jpeg',
+          data: `data:image/jpeg;base64,${base64}`,
+        })),
+      ]),
+    );
+
+    // The stock estimator would count ~206k tokens for this payload and trip
+    // the limiter; the vision-aware counter must land inside the model budget.
+    expect(estimate).toBeLessThan(getModelMessageBudget('qwen3.6-35b-a3b-fast'));
+    expect(estimate).toBeGreaterThanOrEqual(8 * VISION_PART_ESTIMATE_TOKENS);
+  });
+
+  it('matches the stock limiter for messages without image parts', async () => {
+    const visionAware = createAgentContextLimiter();
+    const stock = new TokenLimiterProcessor({ limit: 10_000 });
+    const message = dbUserMessage([
+      { type: 'text', text: 'Summarize this document.' },
+      { type: 'file', mimeType: 'application/pdf', data: 'x'.repeat(2_000) },
+    ]);
+
+    await expect(counterOf(visionAware)(message)).resolves.toBe(
+      await counterOf(stock)(message),
+    );
+  });
+
+  it('does not trip the input-step tripwire for a multi-page upload', async () => {
+    const limiter = createAgentContextLimiter();
+    const base64 = 'a'.repeat(132_000);
+    const messages = [
+      dbUserMessage([{ type: 'text', text: 'earlier turn' }]),
+      dbUserMessage([
+        { type: 'text', text: 'What is this document about? Summarize each page' },
+        ...Array.from({ length: 8 }, () => ({
+          type: 'file',
+          mimeType: 'image/png',
+          data: `data:image/png;base64,${base64}`,
+        })),
+      ]),
+    ];
+    const removed: string[] = [];
+    const messageList = {
+      get: { all: { db: () => messages } },
+      getAllSystemMessages: () => [],
+      removeByIds: (ids: string[]) => removed.push(...ids),
+    };
+
+    await expect(
+      limiter.processInputStep({
+        messageList,
+      } as unknown as Parameters<TokenLimiterProcessor['processInputStep']>[0]),
+    ).resolves.toBeUndefined();
+    expect(removed).toEqual([]);
+  });
+
+  it('derives the token estimate from the char-guard constants', () => {
+    expect(VISION_PART_ESTIMATE_TOKENS).toBe(
+      Math.round(VISION_PART_ESTIMATE_CHARS / CHAR_GUARD_CHARS_PER_TOKEN),
+    );
   });
 });
 
@@ -248,14 +342,133 @@ describe('char-budget guard (estimator-independent backstop)', () => {
     expect(toolCallPart?.toolCallId).toBe(longId);
     expect(textPart?.text?.length).toBeLessThan(hugeText.length);
   });
+
+  it('counts user-message image file parts at the fixed vision estimate, not base64 length', () => {
+    const base64 = 'a'.repeat(600_000); // would exhaust the whole budget if counted raw
+    const prompt: CharBudgetPrompt = [sys('s'), userImage(base64, 'image/jpeg')];
+    const total = prompt.reduce((n, m) => n + messageChars(m), 0);
+    expect(total).toBe('s'.length + 'analyze this'.length + VISION_PART_ESTIMATE_CHARS);
+  });
+
+  it('still counts non-image file parts at raw data length', () => {
+    const data = 'a'.repeat(2_000);
+    const prompt: CharBudgetPrompt = [userImage(data, 'application/pdf')];
+    const total = prompt.reduce((n, m) => n + messageChars(m), 0);
+    expect(total).toBe('analyze this'.length + data.length);
+  });
+
+  it('fits a 20-page PDF-style message without pruning', () => {
+    const budget = getCharBudget('qwen3.6-35b-a3b-fast');
+    const prompt: CharBudgetPrompt = [
+      sys('system'),
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'Summarize the attached report.' },
+          ...Array.from({ length: 20 }, (_, i) => ({
+            type: 'file',
+            data: 'p'.repeat(300_000),
+            mediaType: 'image/jpeg',
+            filename: `report-p${i + 1}.jpg`,
+          })),
+        ],
+      },
+    ];
+    const result = prunePromptToCharBudget(prompt, budget);
+    expect(result).toBe(prompt);
+  });
+
+  it('drops binary parts whole instead of slicing them when they block the budget', () => {
+    const imageData = 'i'.repeat(4_100); // longer than the estimate so it would top the sort
+    const hugeText = 'h'.repeat(500);
+    const prompt: CharBudgetPrompt = [
+      sys('s'),
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: hugeText },
+          { type: 'file', data: imageData, mediaType: 'image/png', filename: 'shot.png' },
+        ],
+      },
+    ];
+    const result = prunePromptToCharBudget(prompt, 100);
+
+    const parts = (result[1] ?? result[0]).content as Array<{ type: string; text?: string; data?: string }>;
+    const filePart = parts.find((p) => p.type === 'file');
+    // The 4,000-char vision estimate can never fit a 100-char budget, so the
+    // part is dropped WHOLE — its payload is never sliced into garbage.
+    expect(filePart).toBeUndefined();
+    const textPart = parts.find((p) => p.type === 'text');
+    expect(textPart?.text?.length).toBeLessThan(hugeText.length);
+    const totalChars = result.reduce((n, m) => n + messageChars(m), 0);
+    expect(totalChars).toBeLessThanOrEqual(100);
+  });
+
+  it('enforces the budget when binary payloads dominate the surviving newest turn', () => {
+    const budget = 10_000;
+    const prompt: CharBudgetPrompt = [
+      sys('s'),
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'look at these' },
+          ...Array.from({ length: 10 }, () => ({
+            type: 'file',
+            data: 'x'.repeat(10),
+            mediaType: 'image/png',
+            filename: 'p.png',
+          })),
+        ],
+      },
+    ];
+    // 10 image parts at the fixed 4,000-char vision estimate far exceed the
+    // budget, and the single group cannot be dropped (it is the newest).
+    const result = prunePromptToCharBudget(prompt, budget);
+
+    const total = result.reduce((n, m) => n + messageChars(m), 0);
+    expect(total).toBeLessThanOrEqual(budget);
+    const content = result[result.length - 1].content as Array<{ type: string; data?: string }>;
+    const fileParts = content.filter((p) => p.type === 'file');
+    // Surviving parts are intact (never sliced); the rest were dropped whole.
+    expect(fileParts.length).toBe(2);
+    for (const part of fileParts) {
+      expect(part.data).toBe('x'.repeat(10));
+    }
+  });
+
+  it('drops binary items nested in tool-result output without orphaning the tool call', () => {
+    const budget = 5_000;
+    const prompt: CharBudgetPrompt = [
+      sys('s'),
+      assistantToolCall('c1', 'screenshot', {}),
+      toolMedia('c1', 'screenshot', 'm'.repeat(50_000)),
+    ];
+    const result = prunePromptToCharBudget(prompt, budget);
+
+    const total = result.reduce((n, m) => n + messageChars(m), 0);
+    expect(total).toBeLessThanOrEqual(budget);
+
+    const toolMessage = result.find((m) => m.role === 'tool');
+    expect(toolMessage).toBeDefined();
+    const toolResult = (toolMessage?.content as Array<{ type: string; toolCallId?: string; output?: { type: string; value?: unknown } }>)[0];
+    expect(toolResult?.toolCallId).toBe('c1');
+    // The tool-result itself survives (its tool-call pairing stays intact);
+    // only the oversized binary item inside its output was dropped.
+    expect(toolResult?.output?.type).toBe('content');
+    const assistantMessage = result.find((m) => m.role === 'assistant');
+    const toolCall = (assistantMessage?.content as Array<{ type: string; toolCallId?: string }>)[0];
+    expect(toolCall?.toolCallId).toBe('c1');
+  });
 });
 
 function messageChars(m: AnyMsg): number {
   if (typeof m.content === 'string') return m.content.length;
   if (Array.isArray(m.content)) {
     return m.content.reduce((n, p) => {
-      const part = p as { type: string; text?: string; toolName?: string; input?: unknown; output?: { type: string; value?: unknown }; data?: unknown };
+      const part = p as { type: string; text?: string; toolName?: string; input?: unknown; output?: { type: string; value?: unknown }; data?: unknown; mediaType?: unknown };
       if ((part.type === 'text' || part.type === 'reasoning') && typeof part.text === 'string') return n + part.text.length;
+      if (part.type === 'file' && typeof part.mediaType === 'string' && part.mediaType.startsWith('image/')) return n + VISION_PART_ESTIMATE_CHARS;
+      if (part.type === 'file') return n + (typeof part.data === 'string' ? part.data.length : part.data instanceof Uint8Array ? part.data.byteLength : 0);
       if (part.type === 'media' && typeof part.data === 'string') return n + part.data.length;
       if (part.type === 'tool-call') return n + (part.toolName ? String(part.toolName).length : 0) + (part.input == null ? 0 : JSON.stringify(part.input).length);
       if (part.type === 'tool-result' && part.output) {

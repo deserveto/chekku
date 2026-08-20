@@ -46,7 +46,10 @@ async function handler(
       return jsonError('Request body must be a JSON object', 400);
     }
 
-    const { agentId, threadId, prompt } = payload as Record<string, unknown>;
+    const { agentId, threadId, prompt, content } = payload as Record<
+      string,
+      unknown
+    >;
     if (typeof agentId !== 'string' || !AGENT_ID.test(agentId)) {
       return jsonError('agentId must use lowercase kebab-case', 400);
     }
@@ -56,9 +59,21 @@ async function handler(
     if (!isOwnedThreadId(threadId, agentId, userId)) {
       return jsonError('Thread does not belong to this user and agent', 400);
     }
+    // Multimodal `content` rides through only as an array; the agent server's
+    // parseStartRunRequest owns the full part/bound validation and rejects
+    // anything malformed with a fixed 400 before persistence.
+    if (content !== undefined && !Array.isArray(content)) {
+      return jsonError('content must be valid multimodal message parts', 400);
+    }
 
     // resourceId is server-derived: any client-sent value is discarded.
-    body = JSON.stringify({ agentId, threadId, prompt, resourceId: userId });
+    body = JSON.stringify({
+      agentId,
+      threadId,
+      prompt,
+      resourceId: userId,
+      ...(Array.isArray(content) && content.length > 0 ? { content } : {}),
+    });
     upstreamSearch = new URLSearchParams();
   } else if (path[0] === 'active' && request.method === 'GET') {
     const agentId = incomingSearch.get('agentId') ?? '';

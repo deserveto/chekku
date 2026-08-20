@@ -36,7 +36,7 @@ function makeMemory(existing: boolean) {
 
 function makeAgent(chunks: Chunk[], memory?: MemoryAccess) {
   const calls: {
-    prompt?: string;
+    prompt?: Parameters<RunnableAgent['stream']>[0];
     runId?: string;
     threadId?: string;
     resourceId?: string;
@@ -144,6 +144,57 @@ describe('chunkToRunEvent', () => {
     expect(chunkToRunEvent({ type: 'reasoning', payload: {} })).toBeNull();
     expect(chunkToRunEvent({ payload: { text: 'no type' } })).toBeNull();
     expect(chunkToRunEvent({ type: 'text-delta', payload: {} })).toBeNull();
+  });
+
+  it('maps tripwire chunks to a visible assistant error with the reason', () => {
+    expect(
+      chunkToRunEvent({
+        type: 'tripwire',
+        payload: {
+          reason:
+            'TokenLimiterProcessor: No messages fit within the remaining token budget.',
+        },
+      }),
+    ).toEqual({
+      type: 'error',
+      payload: {
+        error:
+          'Request stopped by a safety limit. TokenLimiterProcessor: No messages fit within the remaining token budget.',
+      },
+    });
+  });
+
+  it('falls back to a fixed tripwire reason when the payload has none', () => {
+    expect(
+      chunkToRunEvent({ type: 'tripwire', payload: {} }),
+    ).toEqual({
+      type: 'error',
+      payload: { error: 'Request stopped by a safety limit. The request exceeded a processing limit.' },
+    });
+    expect(
+      chunkToRunEvent({ type: 'tripwire', payload: { reason: '   ' } }),
+    ).toEqual({
+      type: 'error',
+      payload: { error: 'Request stopped by a safety limit. The request exceeded a processing limit.' },
+    });
+  });
+
+  it('keeps the tripwire prefix and bounds oversized reasons', () => {
+    const mapped = chunkToRunEvent({
+      type: 'tripwire',
+      payload: { reason: 'r'.repeat(1_000) },
+    });
+    expect(mapped).toEqual({
+      type: 'error',
+      payload: { error: expect.any(String) },
+    });
+    const text = (
+      mapped as unknown as { payload: { error: string } }
+    ).payload.error;
+    expect(text.startsWith('Request stopped by a safety limit. ')).toBe(true);
+    expect(text.length).toBeLessThanOrEqual(
+      'Request stopped by a safety limit. '.length + 500,
+    );
   });
 });
 
@@ -293,6 +344,33 @@ describe('runExecution', () => {
     expect(registry.getRun(run.id)?.status).toBe('completed');
     // Titles are owned by ensureFirstTurnThread at run start, not execution.
     expect(memoryCalls.titles).toEqual([]);
+  });
+
+  it('passes transient multimodal content to the agent stream', async () => {
+    const registry = new RunRegistry();
+    const { agent, calls } = makeAgent([]);
+    const run = registry.createRun({
+      id: createRunId(),
+      ...TUPLE,
+      prompt: 'photo.png',
+      requestAbort: () => undefined,
+    });
+    const content = [
+      { type: 'text' as const, text: '[Attached image: photo.png]' },
+      { type: 'image' as const, image: 'QUJD', mimeType: 'image/png' },
+    ];
+
+    await runExecution(registry, agent, {
+      runId: run.id,
+      ...TUPLE,
+      prompt: 'photo.png',
+      content,
+      abortSignal: new AbortController().signal,
+    });
+
+    expect(calls.prompt).toEqual([
+      { role: 'user', content },
+    ]);
   });
 
   it('fails the run when the stream reports an error chunk', async () => {
