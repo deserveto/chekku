@@ -515,21 +515,14 @@ describe('runWeeklySocialDrafts', () => {
    */
   function buildFakes() {
     const generateCanonicalCalls: Array<{ prompt: string }> = [];
-    const repurposeCalls: Array<{ prompt: string }> = [];
     const createTextCalls: Array<{ key: string; text: string }> = [];
     let canonicalCounter = 0;
-    let repurposeCounter = 0;
     const generateCanonical = vi.fn(async (prompt: string) => {
       generateCanonicalCalls.push({ prompt });
       canonicalCounter += 1;
       // A complete, parseable canonical unit so the validation gate
-      // (`parseCanonicalUnit`) and the repurpose + storage steps can proceed.
+      // (`parseCanonicalUnit`) and the storage step can proceed.
       return makeCanonicalUnit(`Topic ${canonicalCounter}`);
-    });
-    const repurpose = vi.fn(async (prompt: string) => {
-      repurposeCalls.push({ prompt });
-      repurposeCounter += 1;
-      return `caption-${repurposeCounter}`;
     });
     const createText = vi.fn(async (key: string, text: string): Promise<void> => {
       createTextCalls.push({ key, text });
@@ -537,11 +530,9 @@ describe('runWeeklySocialDrafts', () => {
     const sendEmail = vi.fn(async (_input: SendEmailInput) => ({ success: true, provider: 'resend' as const }));
     return {
       generateCanonical,
-      repurpose,
       createText: createText as CreateTextFn,
       sendEmail,
       generateCanonicalCalls,
-      repurposeCalls,
       createTextCalls,
       createTextMock: createText,
     };
@@ -571,15 +562,10 @@ describe('runWeeklySocialDrafts', () => {
     expect(result.posts[0]!.postUrl).toMatch(/^http:\/\/localhost:3000\/social-posts\/smp_/);
     expect(result.posts[1]!.postUrl).toMatch(/^http:\/\/localhost:3000\/social-posts\/smp_/);
 
-    // Canonical step (Step 1) runs once per topic via supervisor; repurpose
-    // (Step 2) runs once per topic via Content Writer. 2 topics × 2 steps = 4 LLM calls.
+    // Canonical step runs once per topic via supervisor. The caption stage
+    // is DEFERRED (Pembahasan 2): no repurpose call happens at draft time.
     expect(fakes.generateCanonical).toHaveBeenCalledTimes(2);
-    expect(fakes.repurpose).toHaveBeenCalledTimes(2);
-    // The mode (canonical vs repurpose-instagram) is now carried in
-    // requestContext on the default seams, not passed through the seam as an
-    // `instructions` arg — so only the prompt is recorded here.
     expect(fakes.generateCanonicalCalls[0]!.prompt).toContain('Hari Guru Nasional');
-    expect(fakes.repurposeCalls[0]!.prompt).toContain('Canonical Content Unit');
 
     // Three MCP create_text_object writes per post in canonical order.
     expect(fakes.createText).toHaveBeenCalledTimes(6);
@@ -591,12 +577,11 @@ describe('runWeeklySocialDrafts', () => {
       `social-posts/${firstPostId}/metadata.json`,
     ]);
     expect(firstTriplet[0]!.text).toContain('Week of: 2026-11-23');
-    // post.md now contains BOTH the canonical unit and the repurposed caption,
-    // wrapped via HTML comment delimiters.
+    // post.md contains the canonical unit ONLY (canonical-only draft, per
+    // Pembahasan 2) — no repurposed-caption block is written at draft time.
     expect(firstTriplet[1]!.text).toContain('<!-- canonical-unit -->');
     expect(firstTriplet[1]!.text).toContain('Topic 1');
-    expect(firstTriplet[1]!.text).toContain('<!-- repurposed-caption -->');
-    expect(firstTriplet[1]!.text).toContain('caption-1');
+    expect(firstTriplet[1]!.text).not.toContain('<!-- repurposed-caption -->');
     expect(JSON.parse(firstTriplet[2]!.text)).toMatchObject({
       postId: firstPostId,
       platform: 'instagram',
@@ -711,7 +696,6 @@ describe('runWeeklySocialDrafts', () => {
     expect(result.posts[2]!.specialDay).toBe('Hari Kemerdekaan Republik Indonesia');
     expect(result.researchNote).toBeUndefined();
     expect(fakes.generateCanonical).toHaveBeenCalledTimes(3);
-    expect(fakes.repurpose).toHaveBeenCalledTimes(3);
     expect(fakes.createText).toHaveBeenCalledTimes(9); // 3 writes per post
     expect(fakes.sendEmail.mock.calls[0]![0]).toMatchObject({
       subject: expect.stringContaining('3 Instagram drafts'),
@@ -817,7 +801,6 @@ describe('runWeeklySocialDrafts', () => {
       selectTopics: () => TOPICS,
       webUrl: 'http://localhost:3000',
       generateCanonical: fakes.generateCanonical,
-      repurpose: fakes.repurpose,
       createText: fakes.createText,
       sendEmail: fakes.sendEmail,
     })).rejects.toThrow('Garage MCP: create_text_object failed');
@@ -853,8 +836,6 @@ describe('runWeeklySocialDrafts', () => {
     expect(result.researchNote).toContain('empty or malformed');
     // 1 post × 3 objects — the malformed topic was skipped before any write.
     expect(fakes.createText).toHaveBeenCalledTimes(3);
-    // Repurpose only ran for the valid topic.
-    expect(fakes.repurpose).toHaveBeenCalledTimes(1);
   });
 });
 

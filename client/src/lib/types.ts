@@ -13,6 +13,12 @@ export const RESERVED_AGENT_IDS = new Set<string>([
   'visual-content-agent',
 ]);
 
+export const HIDDEN_AGENT_IDS = new Set<string>([
+  'social-media-content-writer',
+  'social-media-strategist-agent',
+  'visual-content-agent',
+]);
+
 export type AgentSource = 'code' | 'stored';
 
 export interface ChekkuAgentSummary {

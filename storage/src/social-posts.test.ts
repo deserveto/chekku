@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import { createNamespacedObjectStorage } from './namespaced-objects.ts';
+import { ObjectStorageError } from './objects.ts';
 import type { BinaryObjectResult, BinaryObjectStorage, ObjectStorage } from './objects.ts';
 import {
   SOCIAL_MEDIA_AGENT_ID,
+  attachCaptionToPost,
   attachVisualAsset,
   buildSocialPostMetadata,
   buildVisualAsset,
@@ -47,7 +49,7 @@ function createMemoryStorage() {
     },
     async getText(key) {
       const value = objects.get(key);
-      if (value === undefined) throw new Error(`Missing object: ${key}`);
+      if (value === undefined) throw new ObjectStorageError('not-found', `Missing object: ${key}`);
       return value;
     },
     async exists(key) {
@@ -294,6 +296,9 @@ describe('social post storage', () => {
   it('projects untrusted metadata to approved fields for lists and reads', async () => {
     const { objects, storage } = createMemoryStorage();
     const postId = 'smp_20260715112644_00000010';
+    // A DRAFT post carries no caption fields — strip the caption key the
+    // deterministic layout now also returns.
+    const { captionObjectKey: _captionKey, ...fixedKeys } = keysFor(postId);
     const approved = {
       postId,
       createdAt: '2026-07-15T11:26:44.000Z',
@@ -301,7 +306,7 @@ describe('social post storage', () => {
       topic: 'Topic',
       status: 'DRAFT' as const,
       specialDay: 'Hari Guru',
-      ...keysFor(postId),
+      ...fixedKeys,
     };
     const hostile = {
       ...approved,
@@ -757,10 +762,109 @@ describe('attachVisualAsset and readVisualAssetBytes', () => {
   });
 });
 
+describe('attachCaptionToPost', () => {
+  const postId = 'smp_20260715112647_0000000e';
+
+  async function seedDraftPost(storage: ObjectStorage) {
+    const built = buildSocialPostMetadata({
+      postMarkdown,
+      briefMarkdown,
+      topic: 'Hari Guru',
+      status: 'DRAFT',
+      postId,
+    });
+    await storage.createText(built.briefObjectKey, briefMarkdown, 'text/markdown');
+    await storage.createText(built.postObjectKey, postMarkdown, 'text/markdown');
+    await storage.createText(built.metadataObjectKey, built.metadataJson, 'application/json');
+    return built.metadata;
+  }
+
+  it('transitions DRAFT to CANONICAL_APPROVED and records the caption key + timestamp', async () => {
+    const { storage, writes } = createMemoryStorage();
+    await seedDraftPost(storage);
+    await storage.createText(`social-posts/${postId}/caption.md`, 'Caption baru.', 'text/markdown');
+
+    const updated = await attachCaptionToPost(storage, postId, {
+      now: () => new Date('2026-08-19T09:00:00.000Z'),
+    });
+
+    expect(updated.status).toBe('CANONICAL_APPROVED');
+    expect(updated.captionObjectKey).toBe(`social-posts/${postId}/caption.md`);
+    expect(updated.canonicalApprovedAt).toBe('2026-08-19T09:00:00.000Z');
+    const lastWrite = writes[writes.length - 1]!;
+    expect(lastWrite.method).toBe('replace');
+    expect(lastWrite.key).toBe(`social-posts/${postId}/metadata.json`);
+  });
+
+  it('makes getSocialPost return the stored caption markdown', async () => {
+    const { storage } = createMemoryStorage();
+    await seedDraftPost(storage);
+    await storage.createText(`social-posts/${postId}/caption.md`, 'Caption baru.', 'text/markdown');
+    await attachCaptionToPost(storage, postId);
+
+    const post = await getSocialPost(storage, postId);
+    expect(post.metadata.status).toBe('CANONICAL_APPROVED');
+    expect(post.captionMarkdown).toBe('Caption baru.');
+  });
+
+  it('omits captionMarkdown for posts without a caption stage', async () => {
+    const { storage } = createMemoryStorage();
+    await seedDraftPost(storage);
+
+    const post = await getSocialPost(storage, postId);
+    expect(post.metadata.status).toBe('DRAFT');
+    expect(post.captionMarkdown).toBeUndefined();
+  });
+
+  it('keeps reading a post whose caption object is missing (orphaned reference)', async () => {
+    const { storage } = createMemoryStorage();
+    const metadata = await seedDraftPost(storage);
+    // Simulate an orphaned metadata reference: captionObjectKey recorded but
+    // the caption object itself never landed (or was lost).
+    await storage.replaceText(
+      `social-posts/${postId}/metadata.json`,
+      JSON.stringify({
+        ...metadata,
+        status: 'CANONICAL_APPROVED',
+        captionObjectKey: `social-posts/${postId}/caption.md`,
+        canonicalApprovedAt: '2026-08-19T09:00:00.000Z',
+      }),
+      'application/json',
+    );
+
+    const post = await getSocialPost(storage, postId);
+    expect(post.metadata.status).toBe('CANONICAL_APPROVED');
+    expect(post.captionMarkdown).toBeUndefined();
+    expect(post.postMarkdown).toBeDefined();
+    expect(post.briefMarkdown).toBeDefined();
+  });
+
+  it('rejects a post that is not DRAFT (double-fire race)', async () => {
+    const { storage } = createMemoryStorage();
+    await seedDraftPost(storage);
+    await storage.createText(`social-posts/${postId}/caption.md`, 'Caption.', 'text/markdown');
+    await attachCaptionToPost(storage, postId);
+
+    await expect(attachCaptionToPost(storage, postId)).rejects.toThrow(
+      'Cannot attach a caption to social post',
+    );
+  });
+
+  it('rejects an invalid post id', async () => {
+    const { storage } = createMemoryStorage();
+    await expect(attachCaptionToPost(storage, 'smp_legacy')).rejects.toThrow(
+      'Invalid social post id',
+    );
+  });
+});
+
 describe('updateSocialPostStatus', () => {
   const postId = 'smp_20260715112648_0000000f';
 
-  async function seedPostWithStatus(storage: ObjectStorage, status: 'DRAFT' | 'APPROVED' | 'PUBLISHED') {
+  async function seedPostWithStatus(
+    storage: ObjectStorage,
+    status: 'DRAFT' | 'CANONICAL_APPROVED' | 'APPROVED' | 'PUBLISHED',
+  ) {
     const built = buildSocialPostMetadata({
       postMarkdown,
       briefMarkdown,
@@ -771,17 +875,29 @@ describe('updateSocialPostStatus', () => {
     await storage.createText(built.briefObjectKey, briefMarkdown, 'text/markdown');
     await storage.createText(built.postObjectKey, postMarkdown, 'text/markdown');
     await storage.createText(built.metadataObjectKey, built.metadataJson, 'application/json');
+    if (status === 'CANONICAL_APPROVED' || status === 'APPROVED' || status === 'PUBLISHED') {
+      const current = JSON.parse(built.metadataJson) as SocialPostMetadata;
+      const withCaption: SocialPostMetadata = {
+        ...current,
+        status,
+        captionObjectKey: `social-posts/${postId}/caption.md`,
+        ...(status !== 'CANONICAL_APPROVED' ? { canonicalApprovedAt: '2026-08-19T09:00:00.000Z' } : {}),
+      };
+      await storage.createText(`social-posts/${postId}/caption.md`, 'Caption.', 'text/markdown');
+      await storage.replaceText(built.metadataObjectKey, JSON.stringify(withCaption, null, 2), 'application/json');
+    }
     return built.metadata;
   }
 
-  it('transitions DRAFT to APPROVED and writes metadata back', async () => {
+  it('transitions CANONICAL_APPROVED to APPROVED, stamps captionApprovedAt, and writes metadata back', async () => {
     const { storage, writes } = createMemoryStorage();
-    await seedPostWithStatus(storage, 'DRAFT');
+    await seedPostWithStatus(storage, 'CANONICAL_APPROVED');
 
     const updated = await updateSocialPostStatus(storage, postId, 'APPROVED');
 
     expect(updated.status).toBe('APPROVED');
-    expect(updated.postId).toBe(postId);
+    expect(updated.captionApprovedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(updated.captionObjectKey).toBe(`social-posts/${postId}/caption.md`);
     const lastWrite = writes[writes.length - 1]!;
     expect(lastWrite.method).toBe('replace');
     expect(lastWrite.key).toBe(`social-posts/${postId}/metadata.json`);
@@ -789,7 +905,7 @@ describe('updateSocialPostStatus', () => {
 
   it('persists the new status so a fresh read sees APPROVED', async () => {
     const { storage } = createMemoryStorage();
-    await seedPostWithStatus(storage, 'DRAFT');
+    await seedPostWithStatus(storage, 'CANONICAL_APPROVED');
     await updateSocialPostStatus(storage, postId, 'APPROVED');
 
     const post = await getSocialPost(storage, postId);
@@ -798,7 +914,7 @@ describe('updateSocialPostStatus', () => {
 
   it('preserves visual assets and other fields through the transition', async () => {
     const { storage } = createMemoryStorage();
-    await seedPostWithStatus(storage, 'DRAFT');
+    await seedPostWithStatus(storage, 'CANONICAL_APPROVED');
     const built = buildVisualAsset({
       postId,
       mimeType: 'image/png',
@@ -816,6 +932,15 @@ describe('updateSocialPostStatus', () => {
     expect(updated.topic).toBe('Hari Guru');
   });
 
+  it('rejects the direct DRAFT → APPROVED jump (2-stage approval)', async () => {
+    const { storage } = createMemoryStorage();
+    await seedPostWithStatus(storage, 'DRAFT');
+
+    await expect(updateSocialPostStatus(storage, postId, 'APPROVED')).rejects.toThrow(
+      'Cannot transition social post',
+    );
+  });
+
   it('rejects transitioning an already-APPROVED post', async () => {
     const { storage } = createMemoryStorage();
     await seedPostWithStatus(storage, 'APPROVED');
@@ -827,7 +952,7 @@ describe('updateSocialPostStatus', () => {
 
   it('rejects transitioning to PUBLISHED', async () => {
     const { storage } = createMemoryStorage();
-    await seedPostWithStatus(storage, 'DRAFT');
+    await seedPostWithStatus(storage, 'CANONICAL_APPROVED');
 
     await expect(updateSocialPostStatus(storage, postId, 'PUBLISHED')).rejects.toThrow(
       'Cannot transition social post',

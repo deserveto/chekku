@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import ApproveButton from './ApproveButton';
+import GenerationPending from './GenerationPending';
 import { MarkdownMessage } from '@/components/markdown-message';
 import { StudioNav } from '@/components/studio/studio-nav';
 import { splitPostMarkdown } from '@/lib/post-markdown';
@@ -12,6 +13,26 @@ import {
 } from '@/server/social-posts';
 
 export const dynamic = 'force-dynamic';
+
+/** How long after caption approval a background visual is still plausibly running. */
+export const VISUAL_PENDING_WINDOW_MS = 10 * 60_000;
+
+/**
+ * A visual is only plausibly "generating" while the caption approval that
+ * triggered it is recent. Legacy APPROVED posts (approved under the old
+ * direct DRAFT→APPROVED flow, so no `captionApprovedAt`) and posts whose
+ * generation window has long passed show a neutral hint instead of an
+ * endless pending spinner. Pure predicate with an injectable clock.
+ */
+export function isVisualGenerationPlausible(
+  captionApprovedAt: string | undefined,
+  nowMs: () => number = Date.now,
+  windowMs: number = VISUAL_PENDING_WINDOW_MS,
+): boolean {
+  if (!captionApprovedAt) return false;
+  const approvedAtMs = Date.parse(captionApprovedAt);
+  return Number.isFinite(approvedAtMs) && nowMs() - approvedAtMs <= windowMs;
+}
 
 export default async function SocialPostDetailPage({
   params,
@@ -59,11 +80,21 @@ export default async function SocialPostDetailPage({
     );
   }
 
-  const { canonicalMarkdown, captionMarkdown } = splitPostMarkdown(post.postMarkdown);
+  const { canonicalMarkdown, captionMarkdown: embeddedCaption } = splitPostMarkdown(post.postMarkdown);
   const hasCanonical = Boolean(canonicalMarkdown);
+  // Caption stage output lives in caption.md once the post reached
+  // CANONICAL_APPROVED; legacy posts embed the caption inside post.md.
+  const captionMarkdown = post.captionMarkdown ?? embeddedCaption;
+  const hasCaption = Boolean(captionMarkdown && captionMarkdown.trim().length > 0);
   const activeVisual = post.metadata.activeVisualAssetId
     ? post.metadata.visualAssets?.find((asset) => asset.assetId === post.metadata.activeVisualAssetId)
     : undefined;
+  const hasVisual = (post.metadata.visualAssets?.length ?? 0) > 0;
+  const status = post.metadata.status;
+
+  // A visual is only plausibly "generating" while the caption approval that
+  // triggered it is recent — see `isVisualGenerationPlausible` above.
+  const visualGenerationPlausible = isVisualGenerationPlausible(post.metadata.captionApprovedAt);
 
   return (
     <div className="studio-shell">
@@ -75,13 +106,51 @@ export default async function SocialPostDetailPage({
             <h1>{post.postId}</h1>
             <p>
               {hasCanonical
-                ? 'Drafted canonical content unit and the repurposed caption derived from it, followed by storage metadata and the brief that generated it.'
+                ? 'Canonical content unit, the Instagram caption derived from it after approval, storage metadata, and the brief that generated it.'
                 : 'Drafted caption first, followed by storage metadata and the brief that generated it.'}
             </p>
           </div>
           <div className="studio-report-header-actions">
-            {post.metadata.status === 'DRAFT' ? (
-              <ApproveButton postId={post.postId} />
+            {status === 'DRAFT' && hasCanonical ? (
+              <ApproveButton
+                postId={post.postId}
+                nextStatus="CANONICAL_APPROVED"
+                label="Approve Canonical"
+              />
+            ) : null}
+            {status === 'DRAFT' && !hasCanonical ? (
+              // Legacy caption-only draft (pre-canonical contract): the
+              // caption stage can never run for it (the repurpose workflow
+              // rejects it with `canonical-missing`), so offer no approve
+              // action — only an explanatory notice.
+              <div className="studio-approve">
+                <span className="studio-alert">Legacy draft without a canonical content unit — it cannot enter the two-stage approval flow.</span>
+              </div>
+            ) : null}
+            {status === 'CANONICAL_APPROVED' && !hasCaption ? (
+              <GenerationPending
+                label="Generating caption…"
+                timeoutMessage="Caption generation is taking longer than expected. It may have failed — reload to check the latest status, or approve the canonical content again to retry."
+              />
+            ) : null}
+            {status === 'CANONICAL_APPROVED' && hasCaption ? (
+              <ApproveButton
+                postId={post.postId}
+                nextStatus="APPROVED"
+                label="Approve Caption"
+              />
+            ) : null}
+            {status === 'APPROVED' && !hasVisual ? (
+              visualGenerationPlausible ? (
+                <GenerationPending
+                  label="Generating image…"
+                  timeoutMessage="Image generation is taking longer than expected. It may have failed — reload to check the latest status. If the visual stays missing, request it again through the supervisor chat."
+                />
+              ) : (
+                <div className="studio-approve">
+                  <span className="studio-alert">No visual yet — request generation through the supervisor chat.</span>
+                </div>
+              )
             ) : null}
             <Link className="studio-button" href="/social-posts">Back to social posts</Link>
           </div>
@@ -98,9 +167,17 @@ export default async function SocialPostDetailPage({
           )}
 
           <section className="studio-panel studio-report-panel">
-            <h2 className="studio-eyebrow">{hasCanonical ? 'Repurposed Caption' : 'Caption'}</h2>
+            <h2 className="studio-eyebrow">{hasCanonical ? 'Instagram Caption' : 'Caption'}</h2>
             <div className="studio-report-markdown markdown">
-              <MarkdownMessage content={captionMarkdown} />
+              {hasCaption ? (
+                <MarkdownMessage content={captionMarkdown} />
+              ) : status === 'DRAFT' ? (
+                <p className="studio-muted">
+                  The caption is generated after the canonical content is approved.
+                </p>
+              ) : (
+                <p className="studio-muted">Generating caption…</p>
+              )}
             </div>
           </section>
 

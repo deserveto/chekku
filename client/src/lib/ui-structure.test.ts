@@ -198,6 +198,17 @@ describe('requested UI structure', () => {
     expect(types).toMatch(/RESERVED_AGENT_IDS[\s\S]*PM_AGENT_ID/);
   });
 
+  it('hides the supervisor sub-agents from the UI catalog via the shared hidden set', () => {
+    const hiddenBlock = types.match(/HIDDEN_AGENT_IDS = new Set<string>\((\[[^\]]*\])\)/)?.[1] ?? '';
+    expect(hiddenBlock).not.toBe('');
+    for (const id of ['social-media-content-writer', 'social-media-strategist-agent', 'visual-content-agent']) {
+      expect(hiddenBlock).toContain(`'${id}'`);
+    }
+    // The supervisor itself stays visible as the social-media entry point.
+    expect(hiddenBlock).not.toContain("'social-media-supervisor-agent'");
+    expect(storedAgents).toMatch(/HIDDEN_AGENT_IDS[\s\S]*has\(agent\.id\)/);
+  });
+
   it('clamps every agent-card description to three lines', () => {
     // Long routing descriptions (e.g. the Strategist's) must not stretch the
     // card; the CSS clamps to 3 lines while keeping the full text in the DOM.

@@ -28,7 +28,7 @@ Chekku is a focused interface for managing Mastra agents, running agent-specific
 - **PM Agent** — weekly-report risk reviews and competitive analyses, saved to Garage and browsable under `/reports`.
 - **Web tools** — fixed `search_web` (SearXNG) and `read_web_page` (self-hosted Jina Reader OSS) capabilities.
 - **Social media agents** — a role-switchable content writer reachable over Telegram and a research-backed strategist.
-- **Visual content agent** — on-demand image generation for approved social posts.
+- **Visual content agent** — image generation for approved social posts (on-demand via supervisor chat, or auto-triggered when the caption is approved in `/social-posts`).
 - **Scheduled social drafts** — a weekly Monday 09:00 Asia/Jakarta workflow.
 - **Shareable slide decks** — token-gated public URLs for competitive-analysis decks.
 - **Centralized Postgres** — agent definitions, versions, memory, and threads.

@@ -173,4 +173,51 @@ describe('stored-agent MCP selections', () => {
       expect.objectContaining({ id: 'qa-web-agent', source: 'stored' }),
     ]));
   });
+
+  it('hides the supervisor sub-agents from the catalog while keeping the supervisor', async () => {
+    listAgentsMock.mockResolvedValue({
+      'main-agent': {
+        id: 'main-agent',
+        name: 'Chekku Assistant',
+        description: 'General-purpose studio entry agent.',
+        source: 'code',
+        modelList: [],
+      },
+      'social-media-supervisor-agent': {
+        id: 'social-media-supervisor-agent',
+        name: 'Social Media Supervisor',
+        description: 'Routes social-media requests.',
+        source: 'code',
+        modelList: [],
+      },
+      'social-media-content-writer': {
+        id: 'social-media-content-writer',
+        name: 'Social Media Content Writer',
+        description: 'Drafts captions.',
+        source: 'code',
+        modelList: [],
+      },
+      'social-media-strategist-agent': {
+        id: 'social-media-strategist-agent',
+        name: 'Social Media Strategist',
+        description: 'Researches news.',
+        source: 'code',
+        modelList: [],
+      },
+      'visual-content-agent': {
+        id: 'visual-content-agent',
+        name: 'Visual Content Agent',
+        description: 'Renders visuals.',
+        source: 'code',
+        modelList: [],
+      },
+    });
+
+    const ids = (await listAllAgents()).map((agent) => agent.id);
+    expect(ids).toContain('main-agent');
+    expect(ids).toContain('social-media-supervisor-agent');
+    expect(ids).not.toContain('social-media-content-writer');
+    expect(ids).not.toContain('social-media-strategist-agent');
+    expect(ids).not.toContain('visual-content-agent');
+  });
 });

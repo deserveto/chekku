@@ -45,7 +45,17 @@ export function createReadWebPageTool(
       idempotentHint: true,
       openWorldHint: true,
     } },
-    execute: async (input, context) => client.read(input.url, context.abortSignal),
+    execute: async (input, context) => {
+      const result = await client.read(input.url, context.abortSignal);
+      // Size + truncation only: the Web Reader log invariant forbids requested
+      // URLs in logs. Callers that need URL correlation log it themselves at
+      // their own layer (e.g. trending-research enrichment logs).
+      const markdownBytes = Buffer.byteLength(result.markdown, 'utf8');
+      console.log(
+        `[read_web_page] markdownBytes=${markdownBytes} truncated=${result.truncated}`,
+      );
+      return result;
+    },
   });
   tool.requireApproval = undefined;
   return tool as typeof tool & {

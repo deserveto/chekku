@@ -34,11 +34,6 @@ vi.mock('@/server/social-posts', () => {
   return {
     getSocialPostForUser: mocks.getPost,
     listSocialPostsForUser: mocks.listPosts,
-    approveSocialPostForUser: vi.fn(async (postId: string) => ({
-      ...metadata,
-      postId,
-      status: 'APPROVED' as const,
-    })),
     SocialPostServiceError,
   };
 });
@@ -47,7 +42,7 @@ vi.mock('@/lib/post-markdown', async () => import('../../lib/post-markdown'));
 
 import { SocialPostServiceError } from '@/server/social-posts';
 
-import SocialPostDetailPage from './[postId]/page';
+import SocialPostDetailPage, { isVisualGenerationPlausible } from './[postId]/page';
 import SocialPostsPage from './page';
 
 const postId = 'smp_20260714120000_deadbeef';
@@ -106,6 +101,23 @@ describe('social posts list page', () => {
 
     expect(markup).toContain(`<td>${expected}</td>`);
     expect(markup).not.toContain('Invalid Date');
+  });
+});
+
+describe('isVisualGenerationPlausible', () => {
+  const now = new Date('2026-08-19T10:00:00.000Z').getTime();
+
+  it('treats a fresh caption approval as a plausibly running generation', () => {
+    expect(isVisualGenerationPlausible('2026-08-19T09:55:00.000Z', () => now)).toBe(true);
+  });
+
+  it('rejects approvals older than the window', () => {
+    expect(isVisualGenerationPlausible('2026-08-19T09:45:00.000Z', () => now)).toBe(false);
+  });
+
+  it('rejects legacy posts without captionApprovedAt and unparseable stamps', () => {
+    expect(isVisualGenerationPlausible(undefined, () => now)).toBe(false);
+    expect(isVisualGenerationPlausible('not a date', () => now)).toBe(false);
   });
 });
 
@@ -174,15 +186,139 @@ describe('social post detail page', () => {
     expect(markup).not.toContain('studio-visual-image');
   });
 
-  it('shows an Approve button for DRAFT posts', async () => {
+  it('shows the Approve Canonical button for a canonical-only DRAFT post', async () => {
+    mocks.getPost.mockResolvedValue({
+      ...post,
+      postMarkdown: '<!-- canonical-unit -->\n[TOPIC]\nHari Guru\n\n[THESIS]\nGuru penting.\n<!-- /canonical-unit -->',
+    });
+
     const markup = renderToStaticMarkup(await SocialPostDetailPage({
       params: Promise.resolve({ postId }),
     }));
 
-    expect(markup).toContain('>Approve<');
+    expect(markup).toContain('>Approve Canonical<');
+    expect(markup).not.toContain('>Approve Caption<');
+    // Canonical-only draft: the caption section explains the deferred stage.
+    expect(markup).toContain('The caption is generated after the canonical content is approved.');
   });
 
-  it('hides the Approve button for APPROVED posts', async () => {
+  it('shows a legacy notice instead of an approve button for a caption-only DRAFT post', async () => {
+    mocks.getPost.mockResolvedValue({
+      ...post,
+      // Pre-canonical-contract shape: plain caption body, no delimiters.
+      postMarkdown: 'Plain legacy caption.',
+    });
+
+    const markup = renderToStaticMarkup(await SocialPostDetailPage({
+      params: Promise.resolve({ postId }),
+    }));
+
+    expect(markup).toContain('Legacy draft without a canonical content unit');
+    expect(markup).not.toContain('>Approve Canonical<');
+    expect(markup).not.toContain('>Approve Caption<');
+  });
+
+  it('shows the caption pending indicator for a CANONICAL_APPROVED post without a caption', async () => {
+    mocks.getPost.mockResolvedValue({
+      ...post,
+      postMarkdown: '<!-- canonical-unit -->\n[TOPIC]\nHari Guru\n\n[THESIS]\nGuru penting.\n<!-- /canonical-unit -->',
+      metadata: { ...metadata, status: 'CANONICAL_APPROVED' as const },
+    });
+
+    const markup = renderToStaticMarkup(await SocialPostDetailPage({
+      params: Promise.resolve({ postId }),
+    }));
+
+    expect(markup).toContain('Generating caption…');
+    expect(markup).not.toContain('>Approve Caption<');
+    expect(markup).not.toContain('>Approve Canonical<');
+  });
+
+  it('shows the Approve Caption button once the caption exists', async () => {
+    mocks.getPost.mockResolvedValue({
+      ...post,
+      postMarkdown: '<!-- canonical-unit -->\n[TOPIC]\nHari Guru\n\n[THESIS]\nGuru penting.\n<!-- /canonical-unit -->',
+      captionMarkdown: 'Selamat Hari Guru Nasional.',
+      metadata: {
+        ...metadata,
+        status: 'CANONICAL_APPROVED' as const,
+        captionObjectKey: `social-posts/${postId}/caption.md`,
+      },
+    });
+
+    const markup = renderToStaticMarkup(await SocialPostDetailPage({
+      params: Promise.resolve({ postId }),
+    }));
+
+    expect(markup).toContain('>Approve Caption<');
+    expect(markup).toContain('Selamat Hari Guru Nasional.');
+    expect(markup).not.toContain('>Approve Canonical<');
+  });
+
+  it('shows the image pending indicator for a recently approved post without visuals', async () => {
+    mocks.getPost.mockResolvedValue({
+      ...post,
+      captionMarkdown: 'Selamat Hari Guru Nasional.',
+      metadata: {
+        ...metadata,
+        status: 'APPROVED' as const,
+        captionObjectKey: `social-posts/${postId}/caption.md`,
+        captionApprovedAt: new Date().toISOString(),
+      },
+    });
+
+    const markup = renderToStaticMarkup(await SocialPostDetailPage({
+      params: Promise.resolve({ postId }),
+    }));
+
+    expect(markup).toContain('Generating image…');
+    expect(markup).not.toContain('>Approve Caption<');
+    expect(markup).not.toContain('>Approve Canonical<');
+  });
+
+  it('shows a neutral hint instead of a pending spinner for legacy APPROVED posts without a recent caption approval', async () => {
+    mocks.getPost.mockResolvedValue({
+      ...post,
+      captionMarkdown: 'Selamat Hari Guru Nasional.',
+      metadata: {
+        ...metadata,
+        status: 'APPROVED' as const,
+        captionObjectKey: `social-posts/${postId}/caption.md`,
+        // Legacy shape: approved under the old direct DRAFT→APPROVED flow,
+        // so no captionApprovedAt was ever stamped.
+      },
+    });
+
+    const markup = renderToStaticMarkup(await SocialPostDetailPage({
+      params: Promise.resolve({ postId }),
+    }));
+
+    expect(markup).toContain('No visual yet — request generation through the supervisor chat.');
+    expect(markup).not.toContain('Generating image…');
+    expect(markup).not.toContain('>Approve Caption<');
+  });
+
+  it('falls back to the neutral hint once the generation window has passed', async () => {
+    mocks.getPost.mockResolvedValue({
+      ...post,
+      captionMarkdown: 'Selamat Hari Guru Nasional.',
+      metadata: {
+        ...metadata,
+        status: 'APPROVED' as const,
+        captionObjectKey: `social-posts/${postId}/caption.md`,
+        captionApprovedAt: '2026-07-14T12:00:00.000Z',
+      },
+    });
+
+    const markup = renderToStaticMarkup(await SocialPostDetailPage({
+      params: Promise.resolve({ postId }),
+    }));
+
+    expect(markup).toContain('No visual yet — request generation through the supervisor chat.');
+    expect(markup).not.toContain('Generating image…');
+  });
+
+  it('hides every approve control for APPROVED posts', async () => {
     mocks.getPost.mockResolvedValue({
       ...post,
       metadata: { ...metadata, status: 'APPROVED' as const },
@@ -193,6 +329,8 @@ describe('social post detail page', () => {
     }));
 
     expect(markup).not.toContain('>Approve<');
+    expect(markup).not.toContain('>Approve Caption<');
+    expect(markup).not.toContain('>Approve Canonical<');
   });
 
   it('renders the active visual asset image between caption and metadata', async () => {
