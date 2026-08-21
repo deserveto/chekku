@@ -14,6 +14,7 @@ export type AgentRunEventType =
   | 'tool-call'
   | 'tool-result'
   | 'tool-error'
+  | 'task-list'
   | 'finish'
   | 'error'
   | 'cancelled';
@@ -35,6 +36,8 @@ export interface AgentRunSummary {
   completedAt?: string;
   error?: string;
   evicted?: boolean;
+  /** Latest task-list snapshot counts; absent when the run has no task list. */
+  taskProgress?: { completed: number; total: number };
 }
 
 export interface AgentRunEvent {
@@ -64,6 +67,7 @@ const RUN_EVENT_TYPES = new Set<AgentRunEventType>([
   'tool-call',
   'tool-result',
   'tool-error',
+  'task-list',
   'finish',
   'error',
   'cancelled',

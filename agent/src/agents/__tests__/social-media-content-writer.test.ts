@@ -40,6 +40,11 @@ describe('social-media-content-writer (Telegram-backed content writer)', () => {
     expect(Object.keys(tools).sort()).toEqual([
       'getCurrentTimeTool',
       'sendEmailTool',
+      // Task tracking tools arrive through `signals: createTaskSignals()`.
+      'task_check',
+      'task_complete',
+      'task_update',
+      'task_write',
     ]);
   });
 });

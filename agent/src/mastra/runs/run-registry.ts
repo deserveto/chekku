@@ -15,6 +15,7 @@ export type AgentRunEventType =
   | 'tool-call'
   | 'tool-result'
   | 'tool-error'
+  | 'task-list'
   | 'finish'
   | 'error'
   | 'cancelled';
@@ -43,6 +44,12 @@ export interface AgentRunSummary {
   completedAt?: string;
   error?: string;
   evicted?: boolean;
+  /**
+   * Latest task-list snapshot counts for the run (sidebar progress).
+   * Derived from `task-list` events as they are appended; absent when the
+   * run has produced no task list.
+   */
+  taskProgress?: { completed: number; total: number };
 }
 
 export const RUN_ID_PATTERN = /^run_[0-9]{14}_[0-9a-f]{8}$/;
@@ -122,6 +129,25 @@ function approximateEventBytes(event: AgentRunEvent): number {
     // Non-serializable payloads still count against the floor size.
   }
   return payloadSize + 128;
+}
+
+/** Best-effort completed/total counts from a `task-list` event payload. */
+function summarizeTaskProgress(
+  payload: Record<string, unknown>,
+): { completed: number; total: number } | undefined {
+  const tasks = payload.tasks;
+  if (!Array.isArray(tasks) || tasks.length === 0) return undefined;
+  let completed = 0;
+  for (const task of tasks) {
+    if (
+      task &&
+      typeof task === 'object' &&
+      (task as Record<string, unknown>).status === 'completed'
+    ) {
+      completed += 1;
+    }
+  }
+  return { completed, total: tasks.length };
 }
 
 export function createRunId(
@@ -286,6 +312,10 @@ export class RunRegistry {
     record.events.push(event);
     record.bufferBytes += approximateEventBytes(event);
     record.summary.updatedAt = event.createdAt;
+    if (type === 'task-list') {
+      const progress = summarizeTaskProgress(event.payload);
+      if (progress) record.summary.taskProgress = progress;
+    }
 
     while (
       record.events.length > 1 &&

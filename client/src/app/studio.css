@@ -1595,6 +1595,204 @@ body.studio-sidebar-resizing * {
   overflow: hidden;
 }
 
+/* Task dock: a real layout column, not an overlay — the conversation keeps
+   its full scrollbar, composer, and tool cards beside it. */
+.chat-studio-shell.has-task-dock {
+  grid-template-columns: auto minmax(0, 1fr) 300px;
+}
+
+.studio-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.chat-task-dock {
+  min-height: 0;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--studio-line);
+  background: var(--studio-deep);
+}
+
+.chat-task-dock-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 16px 14px 12px;
+  border-bottom: 1px solid var(--studio-line);
+}
+
+.chat-task-dock-header h2 {
+  margin: 0;
+  color: var(--studio-muted);
+  font: 9px var(--font-dm-mono);
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.chat-task-dock-count {
+  color: var(--studio-ink);
+}
+
+.chat-task-dock-header button {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--studio-line);
+  border-radius: 3px;
+  color: var(--studio-muted);
+  background: transparent;
+  font: 11px var(--font-dm-mono);
+  cursor: pointer;
+}
+
+.chat-task-dock-header button:hover {
+  border-color: var(--studio-line-strong);
+  color: var(--studio-ink);
+}
+
+.chat-task-dock-header button:focus-visible,
+.chat-task-pill:focus-visible {
+  outline: 1px solid var(--studio-line-strong);
+  outline-offset: 2px;
+}
+
+.chat-task-dock-updated {
+  margin: 0;
+  padding: 8px 14px 0;
+  color: var(--studio-muted);
+  font: 8px var(--font-dm-mono);
+}
+
+.chat-task-dock-list {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  margin: 0;
+  padding: 12px 10px 16px;
+  overflow-y: auto;
+  list-style: none;
+  scrollbar-width: thin;
+  scrollbar-color: var(--studio-line) transparent;
+}
+
+.chat-task-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 6px;
+  border-radius: 3px;
+}
+
+.chat-task-item:hover {
+  background: var(--studio-panel-soft);
+}
+
+.chat-task-mark {
+  width: 14px;
+  flex: none;
+  color: var(--studio-muted);
+  font: 10px var(--font-dm-mono);
+  line-height: 16px;
+  text-align: center;
+}
+
+.chat-task-item.completed .chat-task-mark {
+  color: var(--studio-success);
+}
+
+.chat-task-item.in_progress .chat-task-mark {
+  color: var(--studio-warning);
+}
+
+.chat-task-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.chat-task-content {
+  color: var(--studio-ink);
+  font-size: 10px;
+  line-height: 16px;
+  overflow-wrap: anywhere;
+}
+
+.chat-task-item.completed .chat-task-content {
+  color: var(--studio-muted);
+}
+
+.chat-task-item.in_progress .chat-task-content {
+  color: var(--studio-warning);
+}
+
+.chat-task-active {
+  color: var(--studio-muted);
+  font-size: 9px;
+  line-height: 14px;
+  overflow-wrap: anywhere;
+}
+
+/* Collapsed state: compact progress button in the chat topbar. */
+.chat-task-pill {
+  height: 31px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  border: 1px solid var(--studio-line);
+  border-radius: 3px;
+  color: var(--studio-muted);
+  background: transparent;
+  font: 8px var(--font-dm-mono);
+  cursor: pointer;
+}
+
+.chat-task-pill:hover {
+  border-color: var(--studio-line-strong);
+  color: var(--studio-ink);
+}
+
+/* Mini progress bar inside the collapsed pill. */
+.chat-task-pill-bar {
+  width: 34px;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--studio-line);
+}
+
+.chat-task-pill-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--studio-success);
+  transition: width 0.3s;
+}
+
+/* Drawer scrim: visible only where the dock overlays the conversation. */
+.chat-task-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 39;
+  display: none;
+  border: 0;
+  padding: 0;
+  background: rgb(15 12 10 / 45%);
+  cursor: pointer;
+}
+
 .chat-thread-rail {
   height: 100dvh;
   display: flex;
@@ -2921,6 +3119,30 @@ body.studio-sidebar-resizing * {
     grid-row: auto;
   }
 
+  /* Narrow screens keep the two-column chat; the task dock becomes a
+     right-side drawer opened from the topbar pill so the conversation
+     never squeezes into an unusable third column. */
+  .chat-studio-shell.has-task-dock {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .chat-task-scrim {
+    display: block;
+  }
+
+  .chat-task-dock {
+    position: fixed;
+    top: 69px;
+    right: 0;
+    bottom: 0;
+    z-index: 40;
+    width: min(320px, 86vw);
+    height: auto;
+    border-left: 1px solid var(--studio-line-strong);
+    background: var(--studio-deep);
+    box-shadow: -18px 0 40px rgb(15 12 10 / 55%);
+  }
+
 }
 
 @media (max-width: 760px) {
@@ -3128,6 +3350,12 @@ body.studio-sidebar-resizing * {
 
   .chat-browser-badge {
     display: none;
+  }
+
+  /* The task pill is the mobile entry point to the drawer — it stays
+     visible even where decorative badges are hidden. */
+  .chat-task-dock {
+    top: 137px;
   }
 
   .chat-conversation {

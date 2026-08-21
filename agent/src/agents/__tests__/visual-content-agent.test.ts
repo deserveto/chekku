@@ -58,7 +58,10 @@ describe('visual-content-agent (memory, context protection, tools)', () => {
     const ids = processors
       .map((p) => (p as { id?: unknown })?.id)
       .filter((id): id is string => typeof id === 'string');
-    expect(ids).toEqual(['token-limiter', 'gateway-system-message-compatibility', 'char-budget-guard']);
+    // Mastra prepends the TaskStateProcessor from the task signal provider;
+    // the agent-configured order keeps the char-budget guard last, with the
+    // task nudge before it.
+    expect(ids).toEqual(['task-state', 'token-limiter', 'gateway-system-message-compatibility', 'task-nudge', 'char-budget-guard']);
   });
 
   it('binds generate_image, review_image, plus the dev-only preview_image', async () => {
@@ -66,8 +69,17 @@ describe('visual-content-agent (memory, context protection, tools)', () => {
     // Vitest runs with NODE_ENV='test' (non-production), so the dev-only
     // post-less `previewImageTool` is registered alongside `generateImageTool`
     // and its companion `reviewImageTool`. In production only
-    // `generateImageTool` and `reviewImageTool` are registered.
-    expect(Object.keys(tools).sort()).toEqual(['generateImageTool', 'previewImageTool', 'reviewImageTool']);
+    // `generateImageTool` and `reviewImageTool` are registered. Task tools
+    // arrive through `signals: createTaskSignals()`.
+    expect(Object.keys(tools).sort()).toEqual([
+      'generateImageTool',
+      'previewImageTool',
+      'reviewImageTool',
+      'task_check',
+      'task_complete',
+      'task_update',
+      'task_write',
+    ]);
   });
 });
 
