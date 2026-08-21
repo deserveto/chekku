@@ -13,6 +13,18 @@ if (!globalThis.TextDecoder) globalThis.TextDecoder = TextDecoder;
 // shell override.
 process.env.WEB_URL ??= 'http://localhost:3000';
 
+// The agent composition root resolves each code-defined agent's model lazily
+// through `getServerModel()`, which throws unless LLM_BASE_URL, LLM_API_KEY,
+// and LLM_DEFAULT_MODEL are all set. On a developer machine agent/.env supplies
+// real values, but CI checks out no dotenv — composition-root tests that touch
+// model resolution (e.g. getToolsForExecution in task-signals-wiring.test.ts)
+// then fail with "No model configured". Pinning inert defaults here keeps the
+// suite deterministic everywhere; an explicit shell override still wins, and
+// dotenv never overwrites these process.env values afterwards.
+process.env.LLM_BASE_URL ??= 'http://localhost:4000/v1';
+process.env.LLM_API_KEY ??= 'test-key';
+process.env.LLM_DEFAULT_MODEL ??= 'test-model';
+
 // The agent composition root (`agent/src/mastra/index.ts`) constructs the Mastra
 // storage backend at module load. LibSQL (the previous backend) created a local
 // file silently; PostgresStore opens a network connection on init(), which fails
