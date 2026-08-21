@@ -64,6 +64,15 @@ import {
 import { loadModelRegistry } from '@/lib/model-registry';
 import { isSafeImageSrc } from '@/lib/safe-image-src';
 import {
+  applyTaskSnapshot,
+  isTaskToolName,
+  parseTaskListPayload,
+  tasksFromRestoredParts,
+  withoutTaskToolParts,
+  type ThreadTaskState,
+} from '@/lib/task-list';
+import { TaskDock } from '@/components/chat/task-dock';
+import {
   ensureStoredAgentUsesServerGateway,
   listAllAgents,
 } from '@/lib/stored-agents';
@@ -89,6 +98,17 @@ import {
 } from '@/lib/types';
 
 const TOOL_DISPLAY_LIMIT = 8_192;
+
+/** localStorage key for the collapsed-dock UI preference (never task data). */
+const TASK_DOCK_COLLAPSED_KEY = 'chekku-task-dock-collapsed';
+
+function readTaskDockCollapsedPreference(): boolean {
+  try {
+    return window.localStorage.getItem(TASK_DOCK_COLLAPSED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
 
 function safeDisplay(value: unknown): string {
   let text: string;
@@ -232,8 +252,11 @@ export function ChatStudio({
   // subscription controller only tracks this component's observation of it.
   const subscriptionRef = useRef<AbortController | null>(null);
   const lastTerminalRef = useRef<string | null>(null);
-  const sidebarRunsRef = useRef<Record<string, boolean>>({});
+  const sidebarRunsRef = useRef<Record<string, AgentRunSummary | null>>({});
   const dragDepthRef = useRef(0);
+  // Whether any task snapshot was seen for the viewed thread; gates the
+  // dock's auto-open so only the FIRST snapshot expands it.
+  const hasTaskSnapshotRef = useRef(false);
 
   const [agents, setAgents] = useState<ChekkuAgentSummary[]>([]);
   const [threads, setThreads] = useState<StudioThread[]>([]);
@@ -256,11 +279,21 @@ export function ChatStudio({
   const [subscriptionState, setSubscriptionState] = useState<
     'idle' | 'connecting' | 'connected'
   >('idle');
-  const [sidebarRuns, setSidebarRuns] = useState<Record<string, boolean>>({});
+  // Running-run summaries per thread (sidebar indicators + task progress).
+  // A present entry means "running"; the summary carries taskProgress when
+  // the run has produced a task list.
+  const [sidebarRuns, setSidebarRuns] = useState<
+    Record<string, AgentRunSummary | null>
+  >({});
   const [error, setError] = useState<string>();
   const [modelReady, setModelReady] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<StudioThread>();
   const [deletingThreadId, setDeletingThreadId] = useState<string>();
+  // Latest authoritative task snapshot for the viewed thread; null while the
+  // thread has no task list. Canonical state stays server-side (Mastra task
+  // store + run events); this only mirrors the newest snapshot.
+  const [threadTasks, setThreadTasks] = useState<ThreadTaskState | null>(null);
+  const [taskDockOpen, setTaskDockOpen] = useState(false);
 
   const agentId = initialAgentId;
   const threadId = initialThreadId;
@@ -289,6 +322,28 @@ export function ChatStudio({
 
   const applyRunEvent = useCallback((event: AgentRunEvent, assistantId: string) => {
     setSubscriptionState('connected');
+
+    if (event.type === 'task-list') {
+      // Snapshots are authoritative and replace the previous list, so
+      // replayed and live snapshots resolve to the latest state without
+      // duplicating rows. Malformed snapshots are ignored.
+      const tasks = parseTaskListPayload(event.payload);
+      if (tasks) {
+        const hadNoSnapshot = !hasTaskSnapshotRef.current;
+        hasTaskSnapshotRef.current = true;
+        setThreadTasks((current) =>
+          applyTaskSnapshot(current, tasks, event.createdAt),
+        );
+        // First snapshot expands the dock on wide screens unless the user
+        // collapsed it before; their preference wins over auto-open.
+        if (hadNoSnapshot && !readTaskDockCollapsedPreference()) {
+          setTaskDockOpen(
+            typeof window === 'undefined' || window.innerWidth > 1080,
+          );
+        }
+      }
+      return;
+    }
 
     if (
       event.type === 'text-delta' &&
@@ -326,6 +381,12 @@ export function ChatStudio({
       event.type === 'tool-result' ||
       event.type === 'tool-error'
     ) {
+      // The server already reroutes task tools into `task-list` snapshots;
+      // skipping them here keeps a stray legacy event from rendering a
+      // task_write JSON card in the timeline.
+      if (isTaskToolName(event.payload.toolName as string | undefined)) {
+        return;
+      }
       const toolCallId = String(
         event.payload.toolCallId || crypto.randomUUID(),
       );
@@ -533,9 +594,33 @@ export function ChatStudio({
           );
           if (!cancelled) {
             setMessages(storedMessages.map(messageFromMemory));
+            // Rebuild historical task state from the persisted task tool
+            // results (Mastra Memory is the source of truth once the run
+            // registry no longer holds the thread's run). Last valid
+            // snapshot wins, matching the live event stream's semantics.
+            let restoredTasks = null as ThreadTaskState['tasks'] | null;
+            for (const message of storedMessages) {
+              const snapshot = tasksFromRestoredParts(message.parts);
+              if (snapshot) restoredTasks = snapshot;
+            }
+            setThreadTasks(
+              restoredTasks ? { tasks: restoredTasks } : null,
+            );
+            hasTaskSnapshotRef.current = restoredTasks !== null;
+            // A restored list re-opens the dock on wide screens unless the
+            // user explicitly collapsed it before.
+            setTaskDockOpen(
+              restoredTasks !== null &&
+                !readTaskDockCollapsedPreference() &&
+                window.innerWidth > 1080,
+            );
           }
         } catch {
-          if (!cancelled) setMessages([]);
+          if (!cancelled) {
+            setMessages([]);
+            setThreadTasks(null);
+            hasTaskSnapshotRef.current = false;
+          }
         }
 
         // Reconnect to a run that is still executing for this thread
@@ -572,11 +657,16 @@ export function ChatStudio({
       // The component instance survives thread switches (no remount key),
       // so the previous thread's run state must not leak into the next
       // thread: a stale activeRun would keep the composer disabled and
-      // point thread B's Stop button at thread A's run.
+      // point thread B's Stop button at thread A's run. Task state is
+      // scoped the same way — thread B starts from its own Memory-derived
+      // snapshot, never thread A's dock contents.
       setActiveRun(null);
       setActiveAssistantId(null);
       setSubscriptionState('idle');
       lastTerminalRef.current = null;
+      setThreadTasks(null);
+      setTaskDockOpen(false);
+      hasTaskSnapshotRef.current = false;
     };
   }, [agentId, attachToRun, refreshThreads, resourceId, threadId]);
 
@@ -605,11 +695,11 @@ export function ChatStudio({
       try {
         const runs = await listActiveRuns(agentId);
         if (stopped) return;
-        const next: Record<string, boolean> = {};
-        for (const run of runs) next[run.threadId] = true;
+        const next: Record<string, AgentRunSummary | null> = {};
+        for (const run of runs) next[run.threadId] = run;
         const previous = sidebarRunsRef.current;
         const completedElsewhere = Object.keys(previous).some(
-          (id) => next[id] !== true,
+          (id) => !next[id],
         );
         sidebarRunsRef.current = next;
         setSidebarRuns(next);
@@ -1010,6 +1100,22 @@ export function ChatStudio({
     addFiles(Array.from(event.dataTransfer?.files ?? []));
   };
 
+  const toggleTaskDock = useCallback(() => {
+    setTaskDockOpen((open) => {
+      const next = !open;
+      try {
+        if (next) {
+          window.localStorage.removeItem(TASK_DOCK_COLLAPSED_KEY);
+        } else {
+          window.localStorage.setItem(TASK_DOCK_COLLAPSED_KEY, '1');
+        }
+      } catch {
+        // Preference persistence is best-effort; the dock still toggles.
+      }
+      return next;
+    });
+  }, []);
+
   if (!threadOwned) {
     return (
       <div className="studio-fatal">
@@ -1031,7 +1137,11 @@ export function ChatStudio({
   }
 
   return (
-    <div className="chat-studio-shell">
+    <div
+      className={`chat-studio-shell${
+        taskDockOpen && threadTasks ? ' has-task-dock' : ''
+      }`}
+    >
       <ResizableSidebar
         id="chat-thread-sidebar"
         className="chat-thread-rail"
@@ -1130,6 +1240,9 @@ export function ChatStudio({
                       <i />
                     </span>
                     Running
+                    {sidebarRuns[thread.id]?.taskProgress
+                      ? ` ${sidebarRuns[thread.id]!.taskProgress!.completed}/${sidebarRuns[thread.id]!.taskProgress!.total}`
+                      : ''}
                   </small>
                 ) : (
                   <small>
@@ -1179,6 +1292,14 @@ export function ChatStudio({
             {agentId === QA_ANDROID_AGENT_ID && (
               <span className="chat-browser-badge">▷ Android Agent</span>
             )}
+            {threadTasks && !taskDockOpen && (
+              <TaskDock
+                tasks={threadTasks.tasks}
+                updatedAt={threadTasks.updatedAt}
+                open={false}
+                onToggle={toggleTaskDock}
+              />
+            )}
           </div>
         </header>
 
@@ -1204,11 +1325,25 @@ export function ChatStudio({
               {messages.map((message) => {
                 const partGroups =
                   message.role === 'assistant' && message.parts?.length
-                    ? groupAssistantParts(message.parts)
+                    ? groupAssistantParts(
+                        withoutTaskToolParts(message.parts),
+                      )
                     : null;
                 const copyText = message.parts?.length
                   ? textFromAssistantParts(message.parts)
                   : message.content;
+
+                // A restored turn whose only parts were task tools renders
+                // as an empty bubble once they move to the Tasks dock.
+                if (
+                  message.role === 'assistant' &&
+                  message.id !== activeAssistantId &&
+                  !message.content &&
+                  !message.attachments?.length &&
+                  !(partGroups && partGroups.length > 0)
+                ) {
+                  return null;
+                }
 
                 return (
                   <article
@@ -1491,6 +1626,14 @@ export function ChatStudio({
           </form>
         </div>
       </main>
+      {taskDockOpen && threadTasks && (
+        <TaskDock
+          tasks={threadTasks.tasks}
+          updatedAt={threadTasks.updatedAt}
+          open
+          onToggle={toggleTaskDock}
+        />
+      )}
       <ConfirmationDialog
         open={Boolean(pendingDelete)}
         title={pendingDelete ? `Delete ${pendingDelete.title}?` : 'Delete thread?'}

@@ -398,6 +398,60 @@ describe('RunRegistry events', () => {
     expect(received).toEqual(['live']);
   });
 
+  it('tracks the latest task progress on the run summary', () => {
+    const { registry } = makeRegistry();
+    const run = registry.createRun({
+      id: createRunId(),
+      ...TUPLE,
+      requestAbort: () => undefined,
+    });
+
+    // No task list yet: no taskProgress on the summary.
+    expect(registry.getRun(run.id)?.taskProgress).toBeUndefined();
+
+    registry.appendEvent(run.id, 'task-list', {
+      tasks: [
+        { id: 't1', content: 'One', status: 'completed' },
+        { id: 't2', content: 'Two', status: 'in_progress' },
+        { id: 't3', content: 'Three', status: 'pending' },
+      ],
+    });
+    expect(registry.getRun(run.id)?.taskProgress).toEqual({
+      completed: 1,
+      total: 3,
+    });
+
+    // Latest snapshot wins.
+    registry.appendEvent(run.id, 'task-list', {
+      tasks: [
+        { id: 't1', content: 'One', status: 'completed' },
+        { id: 't2', content: 'Two', status: 'completed' },
+        { id: 't3', content: 'Three', status: 'in_progress' },
+      ],
+    });
+    expect(registry.getRun(run.id)?.taskProgress).toEqual({
+      completed: 2,
+      total: 3,
+    });
+
+    // Active-run listings carry the same progress for sidebar indicators.
+    const listed = registry.listActiveRuns(TUPLE.resourceId);
+    expect(listed[0]?.taskProgress).toEqual({ completed: 2, total: 3 });
+  });
+
+  it('ignores malformed task-list payloads for progress tracking', () => {
+    const { registry } = makeRegistry();
+    const run = registry.createRun({
+      id: createRunId(),
+      ...TUPLE,
+      requestAbort: () => undefined,
+    });
+
+    registry.appendEvent(run.id, 'task-list', { tasks: 'garbage' });
+    registry.appendEvent(run.id, 'task-list', { tasks: [] });
+    expect(registry.getRun(run.id)?.taskProgress).toBeUndefined();
+  });
+
   it('delivers the terminal event exactly once and stops live delivery', () => {
     const { registry } = makeRegistry();
     const run = registry.createRun({

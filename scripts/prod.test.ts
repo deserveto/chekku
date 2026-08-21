@@ -173,20 +173,27 @@ function run(
 ): SpawnSyncReturns<string> {
   const log = resolve(root, "mock-log");
   mkdirSync(log, { recursive: true });
+  const childEnv: Record<string, string> = {
+    ...process.env,
+    ...env,
+    MOCK_LOG: log,
+    // prod.sh parses dotenv files via `node -e ... require('dotenv')`; node
+    // resolves from the fixture cwd, which has no node_modules, so point it
+    // at the real repo node_modules (same pattern as scripts/dev.test.ts).
+    NODE_PATH: resolve(sourceRoot, "node_modules"),
+    PATH: `${resolve(root, "bin")}${delimiter}${process.env.PATH ?? ""}`,
+  };
+  // vitest.setup.js pins inert LLM_* defaults for the agent composition root;
+  // strip them here so the fixture's own dotenv files (and their deliberately
+  // empty secrets) are what prod.sh validates — not values inherited from the
+  // test runner process.
+  for (const key of ["LLM_BASE_URL", "LLM_API_KEY", "LLM_DEFAULT_MODEL"])
+    delete childEnv[key];
   return spawnSync(bash, args, {
     cwd: root,
     encoding: "utf8",
     timeout: 30_000,
-    env: {
-      ...process.env,
-      ...env,
-      MOCK_LOG: log,
-      // prod.sh parses dotenv files via `node -e ... require('dotenv')`; node
-      // resolves from the fixture cwd, which has no node_modules, so point it
-      // at the real repo node_modules (same pattern as scripts/dev.test.ts).
-      NODE_PATH: resolve(sourceRoot, "node_modules"),
-      PATH: `${resolve(root, "bin")}${delimiter}${process.env.PATH ?? ""}`,
-    },
+    env: childEnv,
   });
 }
 

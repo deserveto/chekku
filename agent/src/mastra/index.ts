@@ -3,6 +3,7 @@ import { Mastra } from '@mastra/core/mastra';
 import { MastraEditor } from '@mastra/editor';
 import { PostgresStore } from '@mastra/pg';
 import { PinoLogger } from '@mastra/loggers';
+import { InMemoryThreadStateStorage } from '@mastra/core/storage';
 import { env } from '../config/env.js';
 import { requestIdInjector, requestLogger } from '../config/middleware.js';
 import { mainAgent } from '../agents/main-agent.js';
@@ -39,6 +40,23 @@ const storage = new PostgresStore({
   id: 'chekku-storage',
   connectionString: env.DATABASE_URL,
 });
+
+// @mastra/pg 1.15.0 does not implement the `threadState` storage domain, so
+// the native task tools' `resolveTaskStore` (getStore('threadState')) would
+// return undefined and every task_write/update/complete/check call would
+// fail with the misleading "requires agent memory" error. Mastra's
+// composite store backfills this domain with an in-memory store by default;
+// mirror that here until @mastra/pg ships the domain (newer @mastra/pg
+// requires @mastra/core >= 1.53, so upgrading now would churn the whole
+// pinned Mastra stack). Task state is durable for the process lifetime;
+// across restarts the client rebuilds the latest snapshot from persisted
+// Memory task tool results.
+if (!storage.stores?.threadState) {
+  storage.stores = {
+    ...storage.stores,
+    threadState: new InMemoryThreadStateStorage(),
+  };
+}
 
 export const mastra = new Mastra({
   agents: {

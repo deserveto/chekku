@@ -118,6 +118,45 @@ describe('RunEventStreamParser', () => {
     );
     expect(events).toEqual([]);
   });
+
+  it('parses task-list snapshot events', () => {
+    const parser = new RunEventStreamParser();
+    const events = parser.push(
+      `data: ${JSON.stringify({
+        sequence: 3,
+        type: 'task-list',
+        payload: {
+          tasks: [
+            {
+              id: 'task_1',
+              content: 'Test login',
+              activeForm: 'Testing login flow',
+              status: 'in_progress',
+            },
+          ],
+        },
+        createdAt: '',
+      })}\n\n`,
+    );
+
+    expect(events).toEqual([
+      {
+        sequence: 3,
+        type: 'task-list',
+        payload: {
+          tasks: [
+            {
+              id: 'task_1',
+              content: 'Test login',
+              activeForm: 'Testing login flow',
+              status: 'in_progress',
+            },
+          ],
+        },
+        createdAt: '',
+      },
+    ]);
+  });
 });
 
 describe('isTerminalRunEvent', () => {

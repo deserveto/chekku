@@ -6,6 +6,8 @@ import type { Channel, Chat, Message, Thread } from 'chat';
 
 import { gatewayCompatibilityProcessor } from '../mastra/processors/gateway-compatibility.js';
 import { createAgentContextLimiter, createAgentMemory, createCharBudgetGuard } from '../mastra/processors/context-limit.js';
+import { createTaskNudgeProcessor } from '../mastra/tasks/task-nudge-processor.js';
+import { TASK_GUIDANCE, createTaskSignals } from '../mastra/tasks/task-signals.js';
 import {
   CANONICAL_UNIT_TEMPLATE,
   type CanonicalContentUnit,
@@ -485,9 +487,11 @@ function extractSocialDraftMode(requestContext: unknown): SocialDraftMode | unde
  */
 export function resolveContentWriterInstructions(requestContext: unknown): string {
   const mode = extractSocialDraftMode(requestContext);
-  if (mode === 'canonical') return buildCanonicalInstructions();
-  if (mode === 'repurpose-instagram') return buildRepurposeInstructions(getRole('instagram-writer'));
-  return buildInstructions(getActiveRole(extractResourceId(requestContext)));
+  if (mode === 'canonical') return `${buildCanonicalInstructions()}${TASK_GUIDANCE}`;
+  if (mode === 'repurpose-instagram') {
+    return `${buildRepurposeInstructions(getRole('instagram-writer'))}${TASK_GUIDANCE}`;
+  }
+  return `${buildInstructions(getActiveRole(extractResourceId(requestContext)))}${TASK_GUIDANCE}`;
 }
 
 /**
@@ -530,6 +534,7 @@ const socialMediaContentWriterConfig: AgentConfig<string, ToolsInput, undefined,
   model: () => getServerModel(),
   requestContextSchema: providerContextSchema,
   memory: createAgentMemory(),
+  signals: createTaskSignals(),
   tools: { getCurrentTimeTool, sendEmailTool },
   // Channels are only wired when Telegram is configured, so the agent (and the
   // server) boot fine without TELEGRAM_BOT_TOKEN. With no adapter there is no
@@ -546,7 +551,7 @@ const socialMediaContentWriterConfig: AgentConfig<string, ToolsInput, undefined,
         },
       }
     : {}),
-  inputProcessors: [createAgentContextLimiter(), gatewayCompatibilityProcessor, createCharBudgetGuard()],
+  inputProcessors: [createAgentContextLimiter(), gatewayCompatibilityProcessor, createTaskNudgeProcessor(), createCharBudgetGuard()],
   instructions: ({ requestContext }) => resolveContentWriterInstructions(requestContext),
 };
 

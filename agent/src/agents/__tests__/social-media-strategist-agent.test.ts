@@ -101,7 +101,10 @@ describe('social-media-strategist-agent (memory, context protection, tools)', ()
   it('binds the context limiter and char-budget guard input processors', async () => {
     const processors = await socialMediaStrategistAgent.listConfiguredInputProcessors();
     const ids = processors.map((p) => (p as { id?: unknown })?.id).filter((id): id is string => typeof id === 'string');
-    expect(ids).toEqual(['token-limiter', 'char-budget-guard']);
+    // Mastra prepends the TaskStateProcessor from the task signal provider;
+    // the agent-configured order keeps the char-budget guard last, with the
+    // task nudge before it.
+    expect(ids).toEqual(['task-state', 'token-limiter', 'task-nudge', 'char-budget-guard']);
   });
 
   it('exposes search_web and read_web_page', async () => {
@@ -110,9 +113,16 @@ describe('social-media-strategist-agent (memory, context protection, tools)', ()
     expect(keys).toEqual(expect.arrayContaining(['search_web', 'read_web_page']));
   });
 
-  it('binds exactly the two research tools and nothing else', async () => {
+  it('binds exactly the two research tools plus task tracking and nothing else', async () => {
     const tools = await socialMediaStrategistAgent.listTools();
-    expect(Object.keys(tools).sort()).toEqual(['read_web_page', 'search_web']);
+    expect(Object.keys(tools).sort()).toEqual([
+      'read_web_page',
+      'search_web',
+      'task_check',
+      'task_complete',
+      'task_update',
+      'task_write',
+    ]);
   });
 });
 

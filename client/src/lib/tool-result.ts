@@ -9,8 +9,18 @@
  */
 
 function imageUrlFromObject(rec: Record<string, unknown>): string | null {
-  const direct = rec.imageUrl ?? rec.url ?? rec.image;
+  // `url` is deliberately NOT treated as an image source: browser tools
+  // return the visited page URL there, which auto-expanded every QA tool
+  // card and rendered a broken <img>.
+  const direct = rec.imageUrl ?? rec.image;
   if (typeof direct === 'string' && direct.trim()) return direct;
+
+  // `browser_screenshot` returns the PNG payload under `base64` alongside
+  // the page URL; only the payload is an image (Playwright type is 'png').
+  const base64 = rec.base64;
+  if (typeof base64 === 'string' && base64.trim()) {
+    return `data:image/png;base64,${base64}`;
+  }
 
   const assets = rec.visualAssets;
   if (Array.isArray(assets)) {
@@ -28,12 +38,17 @@ function imageUrlFromObject(rec: Record<string, unknown>): string | null {
 /**
  * Resolve an inline-previewable image URL from a tool result, or `null` when
  * the result does not carry one. Recognized shapes:
- * - `{ imageUrl | url | image: string }` (the `generate_image`/`preview_image` tool output)
+ * - `{ imageUrl | image: string }` (the `generate_image`/`preview_image` tool output)
+ * - `{ base64: string }` (the QA browser `browser_screenshot` PNG payload,
+ *   wrapped as a `data:image/png;base64` URL)
  * - `{ visualAssets: [{ imageUrl: string }, ...] }` (social-post metadata)
- * - `{ subAgentToolResults: [{ result: { imageUrl | visualAssets } }, ...] }`
+ * - `{ subAgentToolResults: [{ result: { imageUrl | base64 | visualAssets } }, ...] }`
  *   (a supervisor delegation tool result that carries the sub-agent's inner
  *   tool output nested — peek into it so the image renders even when only the
  *   delegation tool card is surfaced in the chat).
+ *
+ * A top-level `url` string is intentionally ignored: browser tools report the
+ * visited page URL there, which is never the image itself.
  */
 export function extractImageUrl(result: unknown): string | null {
   if (!result || typeof result !== 'object') return null;

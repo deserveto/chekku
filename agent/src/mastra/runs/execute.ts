@@ -2,6 +2,8 @@ import {
   type AgentRunEventType,
   type RunRegistry,
 } from './run-registry.js';
+import { TASK_TOOL_NAMES } from '../tasks/task-signals.js';
+import { extractTaskSnapshot } from '../tasks/task-stream-adapter.js';
 
 /**
  * Server-side execution driver for one agent run.
@@ -67,6 +69,11 @@ function chunkPayload(chunk: StreamChunk): Record<string, unknown> {
     : {};
 }
 
+function isTaskToolChunk(chunk: StreamChunk): boolean {
+  const toolName = chunkPayload(chunk).toolName;
+  return typeof toolName === 'string' && TASK_TOOL_NAMES.has(toolName);
+}
+
 /** Maps a Mastra stream chunk to a registry event, or null to ignore it. */
 export function chunkToRunEvent(
   chunk: StreamChunk,
@@ -74,6 +81,19 @@ export function chunkToRunEvent(
   | { type: AgentRunEventType; payload: Record<string, unknown> }
   | null {
   if (typeof chunk.type !== 'string') return null;
+
+  // Task tools are the transport for the dedicated Tasks UI, not chat
+  // timeline activity: their calls/results are suppressed here and their
+  // successful results surface as one authoritative `task-list` snapshot.
+  if (
+    (chunk.type === 'tool-call' ||
+      chunk.type === 'tool-result' ||
+      chunk.type === 'tool-error') &&
+    isTaskToolChunk(chunk)
+  ) {
+    const tasks = extractTaskSnapshot(chunk);
+    return tasks ? { type: 'task-list', payload: { tasks } } : null;
+  }
 
   switch (chunk.type) {
     case 'text-delta': {
