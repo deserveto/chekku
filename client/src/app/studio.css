@@ -1673,7 +1673,15 @@ body.studio-sidebar-resizing * {
   font: 8px var(--font-dm-mono);
 }
 
+.chat-task-dock-notice {
+  margin: 0;
+  padding: 8px 14px 0;
+  color: var(--studio-warn, #b3762a);
+  font: 8px var(--font-dm-mono);
+}
+
 .chat-task-dock-list {
+  position: relative; /* offset parent for auto-scroll row math */
   flex: 1;
   min-height: 0;
   display: grid;
@@ -1781,7 +1789,10 @@ body.studio-sidebar-resizing * {
   transition: width 0.3s;
 }
 
-/* Drawer scrim: visible only where the dock overlays the conversation. */
+/* Drawer scrim: visible only where the dock overlays the conversation.
+   Drawer mode below the breakpoint now renders the dock inside a native
+   <dialog>, so the scrim itself is only kept for the legacy click-to-close
+   surface on desktop-sized viewports that still run the column layout. */
 .chat-task-scrim {
   position: fixed;
   inset: 0;
@@ -1791,6 +1802,41 @@ body.studio-sidebar-resizing * {
   padding: 0;
   background: rgb(15 12 10 / 45%);
   cursor: pointer;
+}
+
+/* Native dialog drawer: the browser top layer hosts it; the panel mimics
+   the old fixed-position drawer and the dialog backdrop is the scrim. */
+dialog.chat-task-dock-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: auto;
+  width: min(320px, 86vw);
+  height: auto;
+  top: 69px;
+  bottom: 0;
+  right: 0;
+  left: auto;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid var(--studio-line-strong);
+  border-radius: 0;
+  background: var(--studio-deep);
+  box-shadow: -18px 0 40px rgb(15 12 10 / 55%);
+  color: var(--studio-ink);
+  overflow: hidden;
+}
+
+dialog.chat-task-dock-dialog::backdrop {
+  /* Click-through handled by the dialog's own click handler; the backdrop
+     only dims. Height offset mirrors the old scrim's topbar gap. */
+  background: rgb(15 12 10 / 45%);
+}
+
+dialog.chat-task-dock-dialog[open] {
+  display: flex;
 }
 
 .chat-thread-rail {

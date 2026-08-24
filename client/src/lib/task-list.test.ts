@@ -48,13 +48,32 @@ describe('parseTaskListPayload', () => {
     expect(parseTaskListPayload('tasks')).toBeNull();
     expect(parseTaskListPayload({})).toBeNull();
     expect(parseTaskListPayload({ tasks: 'no' })).toBeNull();
-    expect(parseTaskListPayload({ tasks: [] })).toBeNull();
     expect(parseTaskListPayload({ tasks: [{ id: 'x' }] })).toBeNull();
     expect(
       parseTaskListPayload({
         tasks: [{ id: 'x', content: 'do', status: 'done' }],
       }),
     ).toBeNull();
+  });
+
+  it('accepts an empty array as a cleared list', () => {
+    // task_write({ tasks: [] }) clears the list; the empty snapshot must
+    // reach the dock instead of being dropped (which resurrected the
+    // deleted list after reload).
+    expect(parseTaskListPayload({ tasks: [] })).toEqual([]);
+  });
+
+  it('skips entries whose id exceeds the id cap', () => {
+    expect(
+      parseTaskListPayload({
+        tasks: [
+          { id: 'x'.repeat(129), content: 'huge id', status: 'pending' },
+          { id: 'ok', content: 'fine', status: 'pending' },
+        ],
+      }),
+    ).toEqual([
+      { id: 'ok', content: 'fine', activeForm: 'fine', status: 'pending' },
+    ]);
   });
 });
 
@@ -198,5 +217,27 @@ describe('tasksFromRestoredParts', () => {
       },
     ];
     expect(tasksFromRestoredParts(parts)).toBeNull();
+  });
+
+  it('restores a cleared list instead of the last non-empty snapshot', () => {
+    const parts: AssistantPart[] = [
+      {
+        type: 'tool',
+        id: 't1',
+        toolCallId: 'tc-1',
+        toolName: 'task_write',
+        status: 'complete',
+        result: { content: 'ok', tasks: SNAPSHOT, isError: false },
+      },
+      {
+        type: 'tool',
+        id: 't2',
+        toolCallId: 'tc-2',
+        toolName: 'task_write',
+        status: 'complete',
+        result: { content: 'cleared', tasks: [], isError: false },
+      },
+    ];
+    expect(tasksFromRestoredParts(parts)).toEqual([]);
   });
 });

@@ -227,7 +227,7 @@ describe('chunkToRunEvent task tools', () => {
     ).toEqual({ type: 'task-list', payload: { tasks: snapshot } });
   });
 
-  it('suppresses task tool calls and errors from the timeline', () => {
+  it('suppresses task tool calls; surfaces bounded task tool errors', () => {
     expect(
       chunkToRunEvent({
         type: 'tool-call',
@@ -239,13 +239,30 @@ describe('chunkToRunEvent task tools', () => {
       }),
     ).toBeNull();
 
+    // Task tool failures must not be invisible: the dock stays stale
+    // without them. Surface a bounded tool-error event (the client routes
+    // it to a dock notice, never a timeline card).
     expect(
       chunkToRunEvent({
         type: 'tool-error',
-        payload: { toolCallId: 'tc-1', toolName: 'task_update', error: 'x' },
+        payload: {
+          toolCallId: 'tc-1',
+          toolName: 'task_update',
+          error: `Task not found: ${'x'.repeat(2_000)}`,
+        },
       }),
-    ).toBeNull();
+    ).toEqual({
+      type: 'tool-error',
+      payload: {
+        toolCallId: 'tc-1',
+        toolName: 'task_update',
+        // Bounded to the same 500-char slice as every other run error.
+        error: `Task not found: ${'x'.repeat(484)}`,
+      },
+    });
 
+    // Semantic failures carried inside the result object (no memory,
+    // validation) surface the same bounded error instead of vanishing.
     expect(
       chunkToRunEvent({
         type: 'tool-result',
@@ -255,7 +272,14 @@ describe('chunkToRunEvent task tools', () => {
           result: { content: 'failed', tasks: [], isError: true },
         },
       }),
-    ).toBeNull();
+    ).toEqual({
+      type: 'tool-error',
+      payload: {
+        toolCallId: 'tc-1',
+        toolName: 'task_check',
+        error: 'failed',
+      },
+    });
   });
 
   it('keeps non-task tool events unchanged', () => {

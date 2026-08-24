@@ -431,6 +431,70 @@ describe('ChatStudio task dock', () => {
     expect(container.querySelector('.chat-task-pill')).toBeNull();
   });
 
+  it('hides the dock when the model clears the task list', async () => {
+    await enterComposerText('complex work');
+    await submitComposer();
+
+    const events = observeRunEvents.mock.calls[0]![1] as {
+      onEvent: (event: unknown) => void;
+    };
+    await act(async () => {
+      events.onEvent({
+        sequence: 0,
+        type: 'task-list',
+        payload: { tasks: tasks(['in_progress', 'pending']) },
+        createdAt: '',
+      });
+    });
+    expect(container.querySelector('.chat-task-dock')).not.toBeNull();
+
+    // task_write({ tasks: [] }) — the cleared snapshot must empty the dock.
+    await act(async () => {
+      events.onEvent({
+        sequence: 1,
+        type: 'task-list',
+        payload: { tasks: [] },
+        createdAt: '',
+      });
+    });
+    expect(container.querySelector('.chat-task-dock')).toBeNull();
+    expect(container.querySelector('.chat-task-pill')).toBeNull();
+  });
+
+  it('surfaces a bounded dock notice when a task tool fails', async () => {
+    await enterComposerText('complex work');
+    await submitComposer();
+
+    const events = observeRunEvents.mock.calls[0]![1] as {
+      onEvent: (event: unknown) => void;
+    };
+    await act(async () => {
+      events.onEvent({
+        sequence: 0,
+        type: 'task-list',
+        payload: { tasks: tasks(['in_progress']) },
+        createdAt: '',
+      });
+      events.onEvent({
+        sequence: 1,
+        type: 'tool-error',
+        payload: {
+          toolCallId: 'tc-task',
+          toolName: 'task_update',
+          error: `Task not found: ${'x'.repeat(2_000)}`,
+        },
+        createdAt: '',
+      });
+    });
+
+    const notice = container.querySelector('.chat-task-dock-notice');
+    expect(notice).not.toBeNull();
+    expect(notice!.textContent).toContain('Task not found');
+    expect(notice!.textContent!.length).toBeLessThan(600);
+    // Task tool errors never render as timeline tool cards.
+    expect(container.textContent).not.toContain('task update');
+  });
+
   it('collapses to the topbar pill and persists the preference', async () => {
     await enterComposerText('complex work');
     await submitComposer();

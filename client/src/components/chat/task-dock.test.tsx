@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -8,7 +10,24 @@ import type { TaskItem } from '@/lib/task-list';
 let container: HTMLDivElement;
 let root: Root | null;
 
+/**
+ * jsdom never evaluates media queries (matchMedia().matches is always
+ * false), so drawer/desktop mode is decided by this stub instead of the
+ * viewport width.
+ */
+function stubDrawerMode(drawer: boolean): void {
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn().mockReturnValue({
+      matches: drawer,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }),
+  );
+}
+
 beforeEach(() => {
+  stubDrawerMode(false);
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -16,6 +35,7 @@ beforeEach(() => {
 
 afterEach(() => {
   act(() => root?.unmount());
+  vi.unstubAllGlobals();
   document.body.innerHTML = '';
 });
 
@@ -104,16 +124,70 @@ describe('TaskDock expanded', () => {
     expect(onToggle).toHaveBeenCalledTimes(1);
   });
 
-  it('closes from the scrim tap target', () => {
+  it('closes on Escape only when it is the topmost overlay', () => {
     const onToggle = vi.fn();
     render({ tasks: TASKS, open: true, onToggle });
 
-    const scrim = container.querySelector<HTMLButtonElement>(
-      '.chat-task-scrim',
-    );
-    expect(scrim).not.toBeNull();
-    act(() => scrim!.click());
+    // A higher overlay (e.g. the delete ConfirmationDialog) is open on
+    // top: Escape belongs to it, not the dock.
+    const topmost = document.createElement('dialog');
+    topmost.open = true;
+    document.body.appendChild(topmost);
+    act(() => {
+      document.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+      );
+    });
+    expect(onToggle).not.toHaveBeenCalled();
+
+    topmost.remove();
+    act(() => {
+      document.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+      );
+    });
     expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes from a backdrop click in drawer mode', () => {
+    stubDrawerMode(true);
+    const onToggle = vi.fn();
+    render({ tasks: TASKS, open: true, onToggle });
+
+    const dialog = container.querySelector<HTMLDialogElement>(
+      'dialog.chat-task-dock-dialog',
+    );
+    expect(dialog).not.toBeNull();
+    // A click reaching the dialog element itself is outside the panel.
+    act(() => {
+      dialog!.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+    expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+
+  it('presents drawer mode as a native dialog and restores focus on close', () => {
+    stubDrawerMode(true);
+    const onToggle = vi.fn();
+    const opener = document.createElement('button');
+    document.body.appendChild(opener);
+    opener.focus();
+
+    render({ tasks: TASKS, open: true, onToggle });
+
+    const dialog = container.querySelector<HTMLDialogElement>(
+      'dialog.chat-task-dock-dialog',
+    );
+    expect(dialog).not.toBeNull();
+    expect(dialog!.getAttribute('open')).not.toBeNull();
+    // Focus moved into the drawer.
+    expect(document.activeElement?.closest('dialog')).toBe(dialog);
+
+    render({ tasks: TASKS, open: false, onToggle });
+    expect(dialog!.open).toBe(false);
+    // Focus restored to the element that opened the drawer.
+    expect(document.activeElement).toBe(opener);
   });
 
   it('renders the relative updated time when provided', () => {
@@ -148,6 +222,46 @@ describe('TaskDock expanded', () => {
     expect(
       list!.querySelector('.chat-task-item.in_progress'),
     ).not.toBeNull();
+  });
+
+  it('declares the scroll list as its own offset parent', () => {
+    // jsdom does not load stylesheets, so assert the rule exists in the
+    // stylesheet source instead.
+    const css = readFileSync(
+      resolve(__dirname, '../../app/studio.css'),
+      'utf8',
+    );
+    const listRule = css.match(/\.chat-task-dock-list\s*\{[^}]*\}/)?.[0];
+    expect(listRule).toBeDefined();
+    // offsetTop math needs the list positioned; otherwise rows measure
+    // against body (desktop) or the fixed aside (drawer) and the
+    // auto-scroll band is biased by the header height.
+    expect(listRule).toMatch(/position:\s*relative/);
+  });
+
+  it('pauses auto-scroll while the user has scrolled away', () => {
+    const onToggle = vi.fn();
+    render({ tasks: TASKS, open: true, onToggle });
+
+    const list = container.querySelector<HTMLOListElement>(
+      '.chat-task-dock-list',
+    )!;
+    // The user scrolls up to read earlier rows.
+    act(() => {
+      Object.defineProperty(list, 'scrollTop', {
+        configurable: true,
+        writable: true,
+        value: 40,
+      });
+      list.dispatchEvent(new Event('scroll', { bubbles: false }));
+    });
+
+    // A new snapshot arrives; the in-progress row may move but the dock
+    // must not yank the user's scroll position.
+    const scrolled = vi.spyOn(list, 'scrollTop', 'set');
+    render({ tasks: [...TASKS], open: true, onToggle });
+    expect(scrolled).not.toHaveBeenCalled();
+    scrolled.mockRestore();
   });
 });
 

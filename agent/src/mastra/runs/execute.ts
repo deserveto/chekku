@@ -83,16 +83,50 @@ export function chunkToRunEvent(
   if (typeof chunk.type !== 'string') return null;
 
   // Task tools are the transport for the dedicated Tasks UI, not chat
-  // timeline activity: their calls/results are suppressed here and their
-  // successful results surface as one authoritative `task-list` snapshot.
+  // timeline activity: their calls are suppressed, successful results
+  // surface as one authoritative `task-list` snapshot, and failures pass
+  // through as bounded `tool-error` events (the client routes them to a
+  // dock notice, never a timeline card) so a failed task call is not
+  // invisible.
   if (
     (chunk.type === 'tool-call' ||
       chunk.type === 'tool-result' ||
       chunk.type === 'tool-error') &&
     isTaskToolChunk(chunk)
   ) {
+    const payload = chunkPayload(chunk);
     const tasks = extractTaskSnapshot(chunk);
-    return tasks ? { type: 'task-list', payload: { tasks } } : null;
+    if (tasks) return { type: 'task-list', payload: { tasks } };
+
+    // Task tools also report semantic failures (no memory, validation)
+    // inside their result object instead of throwing.
+    const result = payload.result;
+    const resultIsError =
+      !!result && typeof result === 'object' && !Array.isArray(result)
+        ? (result as Record<string, unknown>).isError === true
+        : false;
+    const failed =
+      chunk.type === 'tool-error' || payload.isError === true || resultIsError;
+    if (failed && typeof payload.toolCallId === 'string') {
+      return {
+        type: 'tool-error',
+        payload: {
+          toolCallId: payload.toolCallId,
+          toolName: String(payload.toolName ?? 'task'),
+          error: sanitizeErrorText(
+            payload.error ??
+              (typeof result === 'string' ? result : undefined) ??
+              (result &&
+              typeof result === 'object' &&
+              typeof (result as Record<string, unknown>).content === 'string'
+                ? ((result as Record<string, unknown>).content as string)
+                : undefined) ??
+              result,
+          ),
+        },
+      };
+    }
+    return null;
   }
 
   switch (chunk.type) {

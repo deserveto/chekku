@@ -109,12 +109,45 @@ describe('extractTaskSnapshot', () => {
     expect(
       extractTaskSnapshot(taskResultChunk('task_write', { tasks: 'nope' })),
     ).toBeNull();
-    expect(extractTaskSnapshot(taskResultChunk('task_write', { tasks: [] }))).toBeNull();
     expect(
       extractTaskSnapshot(
         taskResultChunk('task_write', { tasks: [{ id: 'x' }] }),
       ),
     ).toBeNull();
+  });
+
+  it('emits an empty snapshot when the model clears the list', () => {
+    // `task_write({ tasks: [] })` is valid input; dropping it kept the
+    // pre-clearing snapshot on the dock and resurrected the deleted list
+    // after reload. An empty snapshot is a first-class "cleared" state.
+    expect(
+      extractTaskSnapshot(
+        taskResultChunk('task_write', { content: 'ok', tasks: [], isError: false }),
+      ),
+    ).toEqual([]);
+  });
+
+  it('skips entries whose id exceeds the id cap', () => {
+    // A runaway id would otherwise flow into the run event payload (one
+    // event can evict much of the 4 MiB run buffer) and into React keys.
+    const tasks = extractTaskSnapshot(
+      taskResultChunk('task_write', {
+        content: 'ok',
+        tasks: [
+          { id: 'x'.repeat(129), content: 'huge id', status: 'pending' },
+          { id: 'ok-id', content: 'Fine task', status: 'pending' },
+        ],
+        isError: false,
+      }),
+    );
+    expect(tasks).toEqual([
+      {
+        id: 'ok-id',
+        content: 'Fine task',
+        activeForm: 'Fine task',
+        status: 'pending',
+      },
+    ]);
   });
 
   it('skips invalid entries but keeps valid siblings', () => {
