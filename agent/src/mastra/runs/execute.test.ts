@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { RunRegistry, createRunId } from './run-registry.js';
 import {
-  buildThreadTitle,
   chunkToRunEvent,
   ensureFirstTurnThread,
   runExecution,
@@ -23,11 +22,11 @@ function streamOf(chunks: Chunk[]): { fullStream: ReadableStream<Chunk> } {
 }
 
 function makeMemory(existing: boolean) {
-  const calls: { titles: string[] } = { titles: [] };
+  const calls: { created: number } = { created: 0 };
   const memory: MemoryAccess = {
     getThreadById: async () => (existing ? { metadata: { kept: true } } : null),
     createThread: async (params) => {
-      calls.titles.push(params.title ?? '');
+      calls.created += 1;
       return params;
     },
   };
@@ -198,37 +197,8 @@ describe('chunkToRunEvent', () => {
   });
 });
 
-describe('buildThreadTitle', () => {
-  it('uses the prompt unchanged up to 52 characters', () => {
-    expect(buildThreadTitle('short prompt')).toBe('short prompt');
-  });
-
-  it('truncates long prompts the same way the client did', () => {
-    const long = 'a'.repeat(60);
-    const title = buildThreadTitle(long);
-    expect(title.length).toBe(50);
-    expect(title.endsWith('…')).toBe(true);
-  });
-
-  it('does not split surrogate pairs when truncating', () => {
-    // 48 BMP chars + one astral emoji + 10 more: the 49-code-point cut
-    // lands right after the emoji, where a UTF-16 slice(0, 49) would have
-    // kept only the high surrogate.
-    const prompt = `${'a'.repeat(48)}😀${'b'.repeat(10)}`;
-
-    expect(buildThreadTitle(prompt)).toBe(`${'a'.repeat(48)}😀…`);
-  });
-
-  it('keeps astral prompts within the character budget untruncated', () => {
-    // 52 code points (one astral) is 53 UTF-16 units; the budget counts
-    // characters, so it must not be truncated.
-    const prompt = `${'a'.repeat(51)}😀`;
-    expect(buildThreadTitle(prompt)).toBe(prompt);
-  });
-});
-
 describe('ensureFirstTurnThread', () => {
-  it('creates the missing thread record titled from the prompt', async () => {
+  it('creates the missing thread record untitled so Mastra can generate the LLM title', async () => {
     const { memory, calls } = makeMemory(false);
     const { agent } = makeAgent([], memory);
 
@@ -238,20 +208,7 @@ describe('ensureFirstTurnThread', () => {
       prompt: 'research the market',
     });
 
-    expect(calls.titles).toEqual(['research the market']);
-  });
-
-  it('truncates long prompts into the thread title', async () => {
-    const { memory, calls } = makeMemory(false);
-    const { agent } = makeAgent([], memory);
-
-    await ensureFirstTurnThread(agent, {
-      threadId: TUPLE.threadId,
-      resourceId: TUPLE.resourceId,
-      prompt: 'a'.repeat(60),
-    });
-
-    expect(calls.titles).toEqual([buildThreadTitle('a'.repeat(60))]);
+    expect(calls.created).toBe(1);
   });
 
   it('leaves an existing thread untouched', async () => {
@@ -264,7 +221,7 @@ describe('ensureFirstTurnThread', () => {
       prompt: 'second turn',
     });
 
-    expect(calls.titles).toEqual([]);
+    expect(calls.created).toBe(0);
   });
 
   it('swallows storage failures so the run can still start', async () => {
@@ -342,8 +299,9 @@ describe('runExecution', () => {
     ]);
 
     expect(registry.getRun(run.id)?.status).toBe('completed');
-    // Titles are owned by ensureFirstTurnThread at run start, not execution.
-    expect(memoryCalls.titles).toEqual([]);
+    // Thread creation is owned by ensureFirstTurnThread at run start, not
+    // execution.
+    expect(memoryCalls.created).toBe(0);
   });
 
   it('passes transient multimodal content to the agent stream', async () => {
