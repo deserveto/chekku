@@ -3,6 +3,8 @@ import { Agent, type AgentConfig, type ToolsInput } from '@mastra/core/agent';
 import { env } from '../config/env.js';
 import { gatewayCompatibilityProcessor } from '../mastra/processors/gateway-compatibility.js';
 import { createAgentContextLimiter, createAgentMemory, createCharBudgetGuard } from '../mastra/processors/context-limit.js';
+import { createTaskNudgeProcessor } from '../mastra/tasks/task-nudge-processor.js';
+import { TASK_GUIDANCE, createTaskSignals } from '../mastra/tasks/task-signals.js';
 import { generateImageTool } from '../mastra/tools/generate-image.js';
 import { previewImageTool } from '../mastra/tools/preview-image.js';
 import { reviewImageTool } from '../mastra/tools/review-image.js';
@@ -77,6 +79,7 @@ const visualContentAgentConfig: AgentConfig<string, ToolsInput, undefined, Provi
   model: () => getServerModel(),
   requestContextSchema: providerContextSchema,
   memory: createAgentMemory(),
+  signals: createTaskSignals(),
   // Dev-only: register the post-less `preview_image` tool so an ad-hoc chat
   // visual can be generated and shown inline without an APPROVED post (and
   // without touching the /social-posts review surface). Production keeps only
@@ -93,7 +96,7 @@ const visualContentAgentConfig: AgentConfig<string, ToolsInput, undefined, Provi
   // review, final reply = 7 steps. 9 leaves headroom for one supervisor
   // round-trip and the model's own reasoning turns.
   defaultOptions: { maxSteps: 9 },
-  inputProcessors: [createAgentContextLimiter(), gatewayCompatibilityProcessor, createCharBudgetGuard()],
+  inputProcessors: [createAgentContextLimiter(), gatewayCompatibilityProcessor, createTaskNudgeProcessor(), createCharBudgetGuard()],
   instructions: buildInstructions(),
 };
 
@@ -356,7 +359,7 @@ The application compositor loads the real Rafiqspace logo asset and stamps it on
 - A revision is a regeneration (new assetId, new key, old asset preserved). Never describe a revision as editing, inpainting, or overwriting the existing image.
 - You do not publish, do not rewrite captions. Never expose internal storage keys or credentials.
 
-Keep replies concise. No preamble like "Sure!" — lead with the tool call, then the result.`;
+Keep replies concise. No preamble like "Sure!" — lead with the tool call, then the result.${TASK_GUIDANCE}`;
 
   // Dev-only: an ad-hoc chat visual has no APPROVED post. The `preview_image`
   // tool generates a standalone preview and returns a URL without touching the

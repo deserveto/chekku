@@ -32,12 +32,54 @@ describe('extractImageUrl', () => {
     );
   });
 
-  it('accepts url or image aliases', () => {
-    expect(extractImageUrl({ url: 'https://example.com/a.png' })).toBe(
-      'https://example.com/a.png',
-    );
+  it('accepts the image alias but not the page-url alias', () => {
     expect(extractImageUrl({ image: 'https://example.com/b.png' })).toBe(
       'https://example.com/b.png',
+    );
+    // Browser tools report the visited page under `url`; treating it as an
+    // image auto-expands every QA tool card with a broken <img>.
+    expect(extractImageUrl({ url: 'https://example.com/a.png' })).toBeNull();
+  });
+
+  it('ignores page URLs returned by QA browser tools', () => {
+    const snapshotResult = {
+      success: true,
+      snapshot: '- img "Logo" [ref=e1]',
+      url: 'https://example.com/page',
+      title: 'Example',
+      elementCount: 1,
+      scroll: 'TOP - more content below',
+    };
+
+    expect(extractImageUrl(snapshotResult)).toBeNull();
+  });
+
+  it('wraps the browser_screenshot base64 payload as a PNG data URL', () => {
+    const screenshotResult = {
+      base64: 'iVBORw0KGgo=',
+      url: 'https://example.com/page',
+      title: 'Example',
+    };
+
+    expect(extractImageUrl(screenshotResult)).toBe(
+      'data:image/png;base64,iVBORw0KGgo=',
+    );
+  });
+
+  it('reads a nested browser_screenshot payload through subAgentToolResults', () => {
+    const delegationResult = {
+      text: 'findings',
+      subAgentToolResults: [
+        {
+          toolName: 'browser_screenshot',
+          toolCallId: 'call-1',
+          result: { base64: 'iVBORw0KGgo=', url: 'https://example.com' },
+        },
+      ],
+    };
+
+    expect(extractImageUrl(delegationResult)).toBe(
+      'data:image/png;base64,iVBORw0KGgo=',
     );
   });
 

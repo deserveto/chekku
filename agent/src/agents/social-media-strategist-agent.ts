@@ -1,6 +1,8 @@
 import { Agent, type AgentConfig, type ToolsInput } from '@mastra/core/agent';
 
 import { createAgentContextLimiter, createAgentMemory, createCharBudgetGuard } from '../mastra/processors/context-limit.js';
+import { createTaskNudgeProcessor } from '../mastra/tasks/task-nudge-processor.js';
+import { TASK_GUIDANCE, createTaskSignals } from '../mastra/tasks/task-signals.js';
 import { searchWebTool } from '../mastra/tools/searxng-search.js';
 import { readWebPageTool } from '../mastra/tools/web-reader.js';
 import { getServerModel } from '../providers/model.js';
@@ -290,7 +292,7 @@ Verified-facts rules (CRITICAL — these prevent semantic drift downstream):
 - Brand strategy briefs, content plans, audience research for a specific brand → use the Content Strategy Brief workflow above.
 - The user just wants a caption drafted with no factual claim about the world → delegate back to the Supervisor; you do not need to research.
 - The user asks for an evergreen topic with no current-events angle → use \`search_web\` for background but present the result inline as research notes, not as a News Research Result.
-- The user asks for celebration / hari besar content with NO news angle → still produce a News Research Result with \`Content pillar: CELEBRATION\` so downstream agents know the pillar, but the research focus shifts to: tanggal resmi, makna hari, konteks budaya, tema resmi tahun ini. NEVER fabricate cultural claims, quotes, or statistics for celebration content.`;
+- The user asks for celebration / hari besar content with NO news angle → still produce a News Research Result with \`Content pillar: CELEBRATION\` so downstream agents know the pillar, but the research focus shifts to: tanggal resmi, makna hari, konteks budaya, tema resmi tahun ini. NEVER fabricate cultural claims, quotes, or statistics for celebration content.${TASK_GUIDANCE}`;
 
 const socialMediaStrategistAgentConfig: AgentConfig<string, ToolsInput, undefined, ProviderContext> = {
   id: SOCIAL_MEDIA_STRATEGIST_AGENT_ID,
@@ -300,7 +302,8 @@ const socialMediaStrategistAgentConfig: AgentConfig<string, ToolsInput, undefine
   model: () => getServerModel(),
   requestContextSchema: providerContextSchema,
   memory: createAgentMemory(),
-  inputProcessors: [createAgentContextLimiter(), createCharBudgetGuard()],
+  signals: createTaskSignals(),
+  inputProcessors: [createAgentContextLimiter(), createTaskNudgeProcessor(), createCharBudgetGuard()],
   tools: {
     search_web: searchWebTool,
     read_web_page: readWebPageTool,
