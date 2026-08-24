@@ -6,6 +6,7 @@ import { PinoLogger } from '@mastra/loggers';
 import { InMemoryThreadStateStorage } from '@mastra/core/storage';
 import { env } from '../config/env.js';
 import { requestIdInjector, requestLogger } from '../config/middleware.js';
+import { registerTaskSignalProcessors } from './tasks/task-signals.js';
 import { mainAgent } from '../agents/main-agent.js';
 import { pmAgent } from '../agents/pm-agent.js';
 import { qaWebAgent } from '../agents/qa-web-agent.js';
@@ -106,6 +107,14 @@ export const mastra = new Mastra({
     ],
   },
 });
+
+// Mastra#addProcessor dedupes by processor id, and every agent's
+// TaskSignalProvider carries a `task-state` processor with that same
+// hardcoded id — left to the default registration path, only the first
+// agent's processor would receive its mastra reference and the other
+// seven would lose durable task state. Unique-key registration gives
+// every agent's processor a live reference (see task-signals.ts).
+registerTaskSignalProcessors(mastra);
 
 // Telegram intercepts /command messages as native slash commands and routes
 // them through the Chat SDK's slash-command pipeline — they never reach the

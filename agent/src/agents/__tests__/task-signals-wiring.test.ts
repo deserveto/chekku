@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { mastra } from '../../mastra/index.js';
-import { TASK_TOOL_NAMES } from '../../mastra/tasks/task-signals.js';
+import {
+  createdTaskSignalProviders,
+  TASK_TOOL_NAMES,
+} from '../../mastra/tasks/task-signals.js';
 /**
  * Every code-defined agent must carry the Mastra task tools (wired through
  * `signals: createTaskSignals()`), so task tracking is available across the
@@ -64,6 +67,30 @@ describe('code-defined agents task tool wiring', () => {
     expect(threadState).toBeDefined();
     expect(typeof threadState?.getState).toBe('function');
     expect(typeof threadState?.setState).toBe('function');
+  });
+
+  it('gives every agent task-state processor a live mastra reference', async () => {
+    // `Mastra#addProcessor` dedupes by processor id and skips
+    // `__registerMastra` for duplicates. Every agent's TaskSignalProvider
+    // builds its own `TaskStateProcessor` with the hardcoded id
+    // "task-state", so without unique-key registration only the first
+    // agent's processor would resolve the thread-state store; the other
+    // seven would silently fall back to reconstructing tasks from
+    // in-window messages and lose the list once it scrolls out of
+    // `lastMessages`.
+    const providers = createdTaskSignalProviders();
+    expect(providers.length).toBeGreaterThanOrEqual(AGENT_KEYS.length);
+    for (const [index, provider] of providers.entries()) {
+      const processor = provider.getInputProcessors()[0] as unknown as {
+        id?: unknown;
+        resolveTaskStore?: () => Promise<unknown>;
+      };
+      expect(processor?.id, `provider ${index}`).toBe('task-state');
+      await expect(
+        processor?.resolveTaskStore?.(),
+        `provider ${index} resolveTaskStore`,
+      ).resolves.toBeDefined();
+    }
   });
 
   it('wires the task nudge processor before the char-budget guard', async () => {

@@ -387,6 +387,50 @@ describe('ChatStudio task dock', () => {
     expect(container.querySelector('.chat-task-pill')).toBeNull();
   });
 
+  it('drops a run that resolves after the user switched threads mid-start', async () => {
+    // The send handler awaits startRun outside any effect; if the user
+    // switches threads during that round-trip, the resolved run belongs to
+    // the OLD thread and must never install a subscription into the new
+    // thread's view (dock snapshots, text deltas, disabled composer).
+    let resolveStart!: (value: unknown) => void;
+    startRun.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveStart = resolve;
+        }),
+    );
+
+    await enterComposerText('complex work');
+    await submitComposer();
+
+    // Switch to thread B while thread A's startRun is still in flight.
+    await act(async () => {
+      root!.render(
+        <ChatStudio
+          resourceId="local-user"
+          initialAgentId="main-agent"
+          initialThreadId={otherThreadId}
+        />,
+      );
+    });
+    await flushEffects();
+    observeRunEvents.mockClear();
+
+    // Thread A's run starts successfully — after the switch.
+    await act(async () => {
+      resolveStart(
+        runningRun('run_20260824000000_000000ee', activeThreadId),
+      );
+      await Promise.resolve();
+    });
+    await flushEffects();
+
+    // No subscription for thread A's run is installed into thread B's view.
+    expect(observeRunEvents).not.toHaveBeenCalled();
+    expect(container.querySelector('.chat-task-dock')).toBeNull();
+    expect(container.querySelector('.chat-task-pill')).toBeNull();
+  });
+
   it('collapses to the topbar pill and persists the preference', async () => {
     await enterComposerText('complex work');
     await submitComposer();

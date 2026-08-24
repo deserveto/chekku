@@ -7,6 +7,7 @@ import {
   KeyboardEvent,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -257,6 +258,11 @@ export function ChatStudio({
   // Whether any task snapshot was seen for the viewed thread; gates the
   // dock's auto-open so only the FIRST snapshot expands it.
   const hasTaskSnapshotRef = useRef(false);
+  // The thread this instance currently renders. The component survives
+  // thread switches (no remount key), so async callbacks started for one
+  // thread (the startRun round-trip) compare against this ref to avoid
+  // installing a stale thread's run into the newly viewed thread.
+  const threadRef = useRef(initialThreadId);
 
   const [agents, setAgents] = useState<ChekkuAgentSummary[]>([]);
   const [threads, setThreads] = useState<StudioThread[]>([]);
@@ -556,6 +562,14 @@ export function ChatStudio({
     },
     [beginSubscription],
   );
+
+  // Thread switches update the ref from the COMMITTED render (layout
+  // effect), never from a render pass that React may still discard under
+  // concurrent rendering — async guards must compare against the thread
+  // actually on screen, not a possibly-abandoned render.
+  useLayoutEffect(() => {
+    threadRef.current = threadId;
+  }, [threadId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -951,6 +965,13 @@ export function ChatStudio({
         content: runContent,
       });
 
+      // The user may have switched threads while the start request was in
+      // flight; the resolved run belongs to the thread this send started
+      // from, so attaching here would stream its events (text, tasks) into
+      // the newly viewed thread and disable its composer. Drop it — the
+      // run keeps executing server-side and remains visible in the sidebar.
+      if (threadRef.current !== threadId) return;
+
       setActiveRun(run);
       beginSubscription(run.id, assistantId);
       // The server creates the Memory thread (titled from the prompt)
@@ -963,6 +984,7 @@ export function ChatStudio({
         // tab). Drop the optimistic duplicate prompt and attach to the
         // existing run instead of starting a second execution; the existing
         // run's prompt is re-synthesized from the run record.
+        if (threadRef.current !== threadId) return;
         setMessages((current) =>
           current.filter(
             (message) =>
@@ -973,6 +995,9 @@ export function ChatStudio({
         return;
       }
 
+      // A failure of a thread the user already left must not surface in
+      // (or restore drafted input into) the thread now being viewed.
+      if (threadRef.current !== threadId) return;
       const detail =
         reason instanceof Error
           ? reason.message
@@ -1005,9 +1030,13 @@ export function ChatStudio({
   const stop = async () => {
     const run = activeRun;
     if (!run) return;
+    const stopThreadId = threadId;
     try {
       await cancelRun(run.id);
     } catch (reason) {
+      // The user may have switched threads while the cancel request was in
+      // flight; a stale thread's stop failure must not banner the view.
+      if (threadRef.current !== stopThreadId) return;
       setError(
         reason instanceof Error
           ? reason.message
