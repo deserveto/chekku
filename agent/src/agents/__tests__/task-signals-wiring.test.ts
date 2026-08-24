@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { mastra } from '../../mastra/index.js';
+import { BoundedThreadStateStorage } from '../../mastra/tasks/task-state-store.js';
 import {
   createdTaskSignalProviders,
   TASK_TOOL_NAMES,
@@ -53,6 +54,51 @@ describe('code-defined agents task tool wiring', () => {
         key,
       ).toBe(true);
     }
+  });
+
+  it('bounds task tool input at the Chekku boundary', async () => {
+    // Core's task tool schemas are unbounded (`z.string().min(1)`, no
+    // array cap); the Chekku-wrapped schemas must reject oversized lists,
+    // field text, and ids before the arguments reach the thread store.
+    const tools = createdTaskSignalProviders()[0]!.getTools() as Record<
+      string,
+      { inputSchema: { safeParse: (v: unknown) => { success: boolean } } }
+    >;
+    const flood = Array.from({ length: 101 }, (_, i) => ({
+      content: `Task ${i}`,
+      status: 'pending',
+      activeForm: `Working on task ${i}`,
+    }));
+    expect(
+      tools.task_write!.inputSchema.safeParse({ tasks: flood }).success,
+    ).toBe(false);
+    expect(
+      tools.task_write.inputSchema.safeParse({
+        tasks: [
+          { content: 'x'.repeat(501), status: 'pending', activeForm: 'ok' },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      tools.task_update.inputSchema.safeParse({ id: 'x'.repeat(129) }).success,
+    ).toBe(false);
+  });
+
+  it('uses a bounded, evicting threadState store wired to thread deletion', async () => {
+    const storage = await mastra.getStorage();
+    expect(storage).toBeDefined();
+    const threadState = await storage!.getStore('threadState');
+    expect(threadState).toBeInstanceOf(BoundedThreadStateStorage);
+
+    // Deleting a memory thread must drop its task state instead of
+    // leaking it for the process lifetime.
+    const threadId = 'main-agent-local-user-eviction-test';
+    await threadState!.setState({ threadId, type: 'task', value: [] });
+    const memory = await storage!.getStore('memory');
+    await memory!.deleteThread({ threadId });
+    expect(
+      await threadState!.getState({ threadId, type: 'task' }),
+    ).toBeUndefined();
   });
 
   it('backfills the threadState storage domain the task tools depend on', async () => {

@@ -1,5 +1,6 @@
 import type { Mastra } from '@mastra/core/mastra';
 import { TaskSignalProvider } from '@mastra/core/signals';
+import { BoundedTaskSignalProvider } from './bounded-task-tools.js';
 
 /**
  * Shared task-tracking wiring for Chekku agents.
@@ -47,7 +48,7 @@ const createdProviders: TaskSignalProvider[] = [];
  * calling this factory per agent config keeps every agent isolated.
  */
 export function createTaskSignals(): TaskSignalProvider[] {
-  const providers = [new TaskSignalProvider()];
+  const providers: TaskSignalProvider[] = [new BoundedTaskSignalProvider()];
   createdProviders.push(...providers);
   return providers;
 }
