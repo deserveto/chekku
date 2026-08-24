@@ -22,11 +22,15 @@ function streamOf(chunks: Chunk[]): { fullStream: ReadableStream<Chunk> } {
 }
 
 function makeMemory(existing: boolean) {
-  const calls: { created: number } = { created: 0 };
+  const calls: { created: number; titles: Array<string | undefined> } = {
+    created: 0,
+    titles: [],
+  };
   const memory: MemoryAccess = {
     getThreadById: async () => (existing ? { metadata: { kept: true } } : null),
     createThread: async (params) => {
       calls.created += 1;
+      calls.titles.push((params as { title?: string }).title);
       return params;
     },
   };
@@ -209,6 +213,7 @@ describe('ensureFirstTurnThread', () => {
     });
 
     expect(calls.created).toBe(1);
+    expect(calls.titles).toEqual([undefined]);
   });
 
   it('leaves an existing thread untouched', async () => {
