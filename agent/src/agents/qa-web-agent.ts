@@ -18,7 +18,7 @@ const qaWebAgentConfig: AgentConfig<string, ToolsInput, undefined, ProviderConte
   browser,
   tools: { calculatorTool, getCurrentTimeTool },
   inputProcessors: [createAgentContextLimiter(), gatewayCompatibilityProcessor, createCharBudgetGuard()],
-  memory: createAgentMemory(),
+  memory: createAgentMemory({ generateTitle: true }),
   defaultOptions: () => ({ maxSteps: 80 }),
   instructions: `You are QA Web Agent, a careful browser QA delegate.
 

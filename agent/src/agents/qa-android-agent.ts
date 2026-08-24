@@ -108,7 +108,7 @@ const qaAndroidAgentConfig: AgentConfig<string, ToolsInput, undefined, ProviderC
   model: () => getServerModel(),
   requestContextSchema: providerContextSchema,
   inputProcessors: [createAgentContextLimiter(), gatewayCompatibilityProcessor, createCharBudgetGuard()],
-  memory: createAgentMemory(),
+  memory: createAgentMemory({ generateTitle: true }),
   tools: async () => ({
     ...(await loadMaestroMcpTools()),
     run_maestro_flow: runMaestroFlowTool,

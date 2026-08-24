@@ -49,7 +49,7 @@ const pmAgentConfig: AgentConfig<string, ToolsInput, undefined, ProviderContext>
     read_web_page: withCompetitiveResearchBudget('read_web_page', readWebPageTool),
   },
   skills: [weeklyReportAnalysisSkill, competitiveAnalysisSkill],
-  memory: createAgentMemory(),
+  memory: createAgentMemory({ generateTitle: true }),
   inputProcessors: [
     createCompetitiveResearchGuard(),
     createAgentContextLimiter(),

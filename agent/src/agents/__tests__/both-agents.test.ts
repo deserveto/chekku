@@ -329,3 +329,29 @@ describe('social-media-supervisor-agent (three sub-agents and routing)', () => {
     expect(instructions).toContain('using-X-tech did not become X-owned');
   });
 });
+
+describe('thread title generation (main agents only)', () => {
+  it('enables Mastra title generation on the five main agents', async () => {
+    for (const agent of [
+      mainAgent,
+      qaWebAgent,
+      qaAndroidAgent,
+      pmAgent,
+      socialMediaSupervisorAgent,
+    ]) {
+      const memory = await agent.getMemory();
+      expect(memory?.getMergedThreadConfig().generateTitle).toBe(true);
+    }
+  });
+
+  it('keeps title generation off for sub-agents', async () => {
+    for (const agent of [
+      socialMediaContentWriter,
+      socialMediaStrategistAgent,
+      visualContentAgent,
+    ]) {
+      const memory = await agent.getMemory();
+      expect(memory?.getMergedThreadConfig().generateTitle).toBe(false);
+    }
+  });
+});
