@@ -7,21 +7,14 @@ import {
   visualContentAgent,
 } from '../visual-content-agent.js';
 
-describe('visual-content-agent (instructions env gating)', () => {
-  it('production instructions contain no preview_image mention', () => {
-    const text = buildInstructions('production');
-    expect(text).not.toContain('preview_image');
-    expect(text).not.toContain('previewId');
-    expect(text).not.toContain('Gambar preview');
-    // The production delegation rule, workflow, and worked example steer only
-    // toward the registered post-bound tool.
-    expect(text).toContain('Use generate_image with postId <id>');
-    expect(text).toContain('smp_20260817120000_a1b2c3d4');
-  });
-
-  it('non-production instructions keep the dev-only preview_image guidance', () => {
-    const text = buildInstructions('development');
+describe('visual-content-agent (instructions preview guidance)', () => {
+  it('instructions cover both preview_image and generate_image in every environment', () => {
+    const text = buildInstructions();
+    // `preview_image` is registered in every environment (production included),
+    // so the single instruction variant always carries its delegation rule,
+    // reporting line, and ad-hoc section alongside the post-bound tool.
     expect(text).toContain('Use preview_image (no postId)');
+    expect(text).toContain('Use generate_image with postId <id>');
     expect(text).toContain('Gambar preview sudah jadi');
     expect(text).toContain('## Ad-hoc chat visuals (no post)');
   });
@@ -61,12 +54,11 @@ describe('visual-content-agent (memory, context protection, tools)', () => {
     expect(ids).toEqual(['token-limiter', 'gateway-system-message-compatibility', 'char-budget-guard']);
   });
 
-  it('binds generate_image, review_image, plus the dev-only preview_image', async () => {
+  it('binds generate_image, review_image, and preview_image', async () => {
     const tools = await visualContentAgent.listTools();
-    // Vitest runs with NODE_ENV='test' (non-production), so the dev-only
-    // post-less `previewImageTool` is registered alongside `generateImageTool`
-    // and its companion `reviewImageTool`. In production only
-    // `generateImageTool` and `reviewImageTool` are registered.
+    // `previewImageTool` is registered in every environment (production
+    // included) alongside `generateImageTool` and its companion
+    // `reviewImageTool`.
     expect(Object.keys(tools).sort()).toEqual(['generateImageTool', 'previewImageTool', 'reviewImageTool']);
   });
 });

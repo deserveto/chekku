@@ -3,21 +3,15 @@ import { NextResponse } from 'next/server';
 import { ChatPreviewError, getChatPreviewForUser } from '@/server/chat-previews';
 
 /**
- * Serve one chat-side image preview's bytes. Dev-only: the `preview_image`
- * agent tool that writes these previews is registered only outside
- * production, so in production this route returns 404.
+ * Serve one chat-side image preview's bytes. The `preview_image` agent tool
+ * that writes these previews is registered in every environment, so this
+ * route serves previews in production too (identity-checked through the
+ * seam, canonical preview ids only).
  */
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ file: string }> },
 ) {
-  if (process.env.NODE_ENV === 'production') {
-    return NextResponse.json(
-      { error: { code: 'not-available', message: 'Chat previews are dev-only.' } },
-      { status: 404 },
-    );
-  }
-
   try {
     const { file } = await params;
     const asset = await getChatPreviewForUser(file);

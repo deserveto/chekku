@@ -1,6 +1,5 @@
 import { Agent, type AgentConfig, type ToolsInput } from '@mastra/core/agent';
 
-import { env } from '../config/env.js';
 import { gatewayCompatibilityProcessor } from '../mastra/processors/gateway-compatibility.js';
 import { createAgentContextLimiter, createAgentMemory, createCharBudgetGuard } from '../mastra/processors/context-limit.js';
 import { searchWebTool } from '../mastra/tools/searxng-search.js';
@@ -42,21 +41,18 @@ import { visualContentAgent } from './visual-content-agent.js';
  */
 
 /**
- * Build the supervisor instructions for the given runtime environment.
- * `preview_image` is a dev-only tool on the Visual Content Agent (it is not
- * registered in production), so the supervisor must not propose it there â€”
- * production instructions only ever steer delegations toward
- * `generate_image` with an approved postId.
+ * Build the supervisor instructions. The Visual Content Agent registers the
+ * post-less `preview_image` tool in every environment (production included),
+ * so the supervisor always knows both delegation prefixes —
+ * `"Use preview_image (no postId)"` for ad-hoc chat visuals and
+ * `"Use generate_image with postId <id>"` for approved posts.
  */
-export function buildSupervisorInstructions(nodeEnv: string = env.NODE_ENV): string {
-  const isProduction = nodeEnv === 'production';
-  const visualAgentScope = isProduction
-    ? 'When the user explicitly names an APPROVED post by postId, it attaches the visual to that post.'
-    : 'For an ad-hoc chat visual (no postId) it produces a standalone preview; when the user explicitly names an APPROVED post by postId, it attaches the visual to that post.';
-  const delegationToolRule = isProduction
-    ? 'Prefix the block with one short line that says which tool to use: "Use generate_image with postId <id>".'
-    : 'Prefix the block with one short line that says which tool to use: "Use preview_image (no postId)" for an ad-hoc chat visual, or "Use generate_image with postId <id>" for an approved post.';
-  const successSignal = isProduction ? 'an imageUrl' : 'an imageUrl or previewId';
+export function buildSupervisorInstructions(): string {
+  const visualAgentScope =
+    'For an ad-hoc chat visual (no postId) it produces a standalone preview; when the user explicitly names an APPROVED post by postId, it attaches the visual to that post.';
+  const delegationToolRule =
+    'Prefix the block with one short line that says which tool to use: "Use preview_image (no postId)" for an ad-hoc chat visual, or "Use generate_image with postId <id>" for an approved post.';
+  const successSignal = 'an imageUrl or previewId';
 
   return `You are the Social Media Supervisor, the routing agent for Chekku's social-media surface.
 
