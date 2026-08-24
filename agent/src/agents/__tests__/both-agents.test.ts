@@ -36,6 +36,11 @@ describe('qa-web-agent (browser QA)', () => {
     expect(Object.keys(tools).sort()).toEqual([
       'calculatorTool',
       'getCurrentTimeTool',
+      // Task tracking tools arrive through `signals: createTaskSignals()`.
+      'task_check',
+      'task_complete',
+      'task_update',
+      'task_write',
     ]);
   });
 });
@@ -54,6 +59,10 @@ describe('pm-agent (weekly and competitive analysis)', () => {
       'save_competitive_analysis_to_garage',
       'save_pm_report_to_garage',
       'search_web',
+      'task_check',
+      'task_complete',
+      'task_update',
+      'task_write',
       'view_competitive_analysis_from_garage',
       'view_pm_report_from_garage',
     ]);
@@ -62,9 +71,14 @@ describe('pm-agent (weekly and competitive analysis)', () => {
       'weekly-report-analysis',
     ]);
     expect(await pmAgent.getDefaultOptions()).toMatchObject({ maxSteps: 25 });
+    // Mastra prepends the signal providers' TaskStateProcessor ahead of the
+    // agent's own processors; the agent-configured order keeps the
+    // char-budget guard last with the task nudge before it.
     expect((await pmAgent.listConfiguredInputProcessors()).map(({ id }) => id)).toEqual([
+      'task-state',
       'competitive-research-guard',
       'token-limiter',
+      'task-nudge',
       'char-budget-guard',
     ]);
   });
@@ -152,8 +166,17 @@ describe('visual-content-agent (identity and tools)', () => {
     const tools = await visualContentAgent.listTools();
     // Vitest runs with NODE_ENV='test' (non-production), so the dev-only
     // post-less `previewImageTool` is also registered alongside
-    // `generateImageTool` and its companion `reviewImageTool`.
-    expect(Object.keys(tools).sort()).toEqual(['generateImageTool', 'previewImageTool', 'reviewImageTool']);
+    // `generateImageTool` and its companion `reviewImageTool`. Task tools
+    // arrive through `signals: createTaskSignals()`.
+    expect(Object.keys(tools).sort()).toEqual([
+      'generateImageTool',
+      'previewImageTool',
+      'reviewImageTool',
+      'task_check',
+      'task_complete',
+      'task_update',
+      'task_write',
+    ]);
   });
 });
 
@@ -190,17 +213,29 @@ describe('social-media-supervisor-agent (three sub-agents and routing)', () => {
     expect(subAgents.visualContentAgent).toBe(visualContentAgent);
   });
 
-  it('binds exactly the two research tools and nothing else', async () => {
+  it('binds exactly the two research tools plus task tracking and nothing else', async () => {
     const tools = await socialMediaSupervisorAgent.listTools();
-    expect(Object.keys(tools).sort()).toEqual(['read_web_page', 'search_web']);
+    expect(Object.keys(tools).sort()).toEqual([
+      'read_web_page',
+      'search_web',
+      'task_check',
+      'task_complete',
+      'task_update',
+      'task_write',
+    ]);
   });
 
   it('wires the char-budget guard last, after the gateway compatibility processor', async () => {
+    // Mastra prepends the TaskStateProcessor from the task signal provider;
+    // the agent-configured order keeps the guard last, with the task nudge
+    // before it.
     expect(
       (await socialMediaSupervisorAgent.listConfiguredInputProcessors()).map(({ id }) => id),
     ).toEqual([
+      'task-state',
       'token-limiter',
       'gateway-system-message-compatibility',
+      'task-nudge',
       'char-budget-guard',
     ]);
   });

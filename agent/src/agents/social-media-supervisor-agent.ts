@@ -3,6 +3,8 @@ import { Agent, type AgentConfig, type ToolsInput } from '@mastra/core/agent';
 import { env } from '../config/env.js';
 import { gatewayCompatibilityProcessor } from '../mastra/processors/gateway-compatibility.js';
 import { createAgentContextLimiter, createAgentMemory, createCharBudgetGuard } from '../mastra/processors/context-limit.js';
+import { createTaskNudgeProcessor } from '../mastra/tasks/task-nudge-processor.js';
+import { TASK_GUIDANCE, createTaskSignals } from '../mastra/tasks/task-signals.js';
 import { searchWebTool } from '../mastra/tools/searxng-search.js';
 import { readWebPageTool } from '../mastra/tools/web-reader.js';
 import { getServerModel } from '../providers/model.js';
@@ -120,7 +122,7 @@ The /social-posts review UI has its own two-stage approval flow, separate from t
 - When the user asks in chat about turning a draft into a stored post or a published visual for the workflow pipeline, point them to the /social-posts review flow.
 
 Scheduled workflow routing (deterministic fast-path):
-- When the prompt starts with the system marker "[weekly-social-drafts]", the request comes from the scheduled weekly-social-drafts workflow. It always wants the Content Writer (canonical content unit drafting) â€” never the Strategist. Delegate to Content Writer immediately without reasoning about which sub-agent is appropriate, without preamble, and without surfacing the marker to the user. The workflow already knows the target sub-agent; your reasoning step would only add latency and a non-determinism risk for a deterministic call path.`;
+- When the prompt starts with the system marker "[weekly-social-drafts]", the request comes from the scheduled weekly-social-drafts workflow. It always wants the Content Writer (canonical content unit drafting) â€” never the Strategist. Delegate to Content Writer immediately without reasoning about which sub-agent is appropriate, without preamble, and without surfacing the marker to the user. The workflow already knows the target sub-agent; your reasoning step would only add latency and a non-determinism risk for a deterministic call path.${TASK_GUIDANCE}`;
 }
 
 const socialMediaSupervisorAgentConfig: AgentConfig<string, ToolsInput, undefined, ProviderContext> = {
@@ -131,6 +133,7 @@ const socialMediaSupervisorAgentConfig: AgentConfig<string, ToolsInput, undefine
   model: () => getServerModel(),
   requestContextSchema: providerContextSchema,
   memory: createAgentMemory({ generateTitle: true }),
+  signals: createTaskSignals(),
   tools: {
     search_web: searchWebTool,
     read_web_page: readWebPageTool,
@@ -151,7 +154,7 @@ const socialMediaSupervisorAgentConfig: AgentConfig<string, ToolsInput, undefine
     socialMediaStrategistAgent,
     visualContentAgent,
   },
-  inputProcessors: [createAgentContextLimiter(), gatewayCompatibilityProcessor, createCharBudgetGuard()],
+  inputProcessors: [createAgentContextLimiter(), gatewayCompatibilityProcessor, createTaskNudgeProcessor(), createCharBudgetGuard()],
   instructions: buildSupervisorInstructions(),
 };
 

@@ -3,6 +3,8 @@ import type { Tool } from '@mastra/core/tools';
 
 import { gatewayCompatibilityProcessor } from '../mastra/processors/gateway-compatibility.js';
 import { createAgentContextLimiter, createAgentMemory, createCharBudgetGuard } from '../mastra/processors/context-limit.js';
+import { createTaskNudgeProcessor } from '../mastra/tasks/task-nudge-processor.js';
+import { TASK_GUIDANCE, createTaskSignals } from '../mastra/tasks/task-signals.js';
 import { filterMaestroTools, createMaestroMcpClient, type CreateMaestroMcpClientOptions } from '../mastra/maestro/mcp-client.js';
 import { calculatorTool } from '../mastra/tools/calculator.js';
 import { currentAppTool } from '../mastra/tools/current-app.js';
@@ -98,7 +100,7 @@ Findings
 Blockers
 - Missing device, missing application, authentication requirement, or infrastructure problem
 
-Never claim a test Passed unless Maestro completed successfully. If Maestro is not enabled or no device is reachable, report Result as Blocked.`;
+Never claim a test Passed unless Maestro completed successfully. If Maestro is not enabled or no device is reachable, report Result as Blocked.${TASK_GUIDANCE}`;
 
 const qaAndroidAgentConfig: AgentConfig<string, ToolsInput, undefined, ProviderContext> = {
   id: 'qa-android-agent',
@@ -107,7 +109,8 @@ const qaAndroidAgentConfig: AgentConfig<string, ToolsInput, undefined, ProviderC
     'Completes Android application QA through Maestro, then returns concise findings, evidence, reproduction steps, and blockers. Use when a task requires interacting with an Android emulator or device.',
   model: () => getServerModel(),
   requestContextSchema: providerContextSchema,
-  inputProcessors: [createAgentContextLimiter(), gatewayCompatibilityProcessor, createCharBudgetGuard()],
+  signals: createTaskSignals(),
+  inputProcessors: [createAgentContextLimiter(), gatewayCompatibilityProcessor, createTaskNudgeProcessor(), createCharBudgetGuard()],
   memory: createAgentMemory({ generateTitle: true }),
   tools: async () => ({
     ...(await loadMaestroMcpTools()),

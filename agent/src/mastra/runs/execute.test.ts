@@ -201,6 +201,87 @@ describe('chunkToRunEvent', () => {
   });
 });
 
+describe('chunkToRunEvent task tools', () => {
+  const snapshot = [
+    {
+      id: 'task_1',
+      content: 'First task',
+      activeForm: 'Working on the first task',
+      status: 'completed',
+    },
+    {
+      id: 'task_2',
+      content: 'Second task',
+      activeForm: 'Working on the second task',
+      status: 'in_progress',
+    },
+  ];
+
+  it('maps a successful task tool result to a task-list snapshot', () => {
+    expect(
+      chunkToRunEvent({
+        type: 'tool-result',
+        payload: {
+          toolCallId: 'tc-1',
+          toolName: 'task_write',
+          result: { content: 'ok', tasks: snapshot, isError: false },
+        },
+      }),
+    ).toEqual({ type: 'task-list', payload: { tasks: snapshot } });
+  });
+
+  it('suppresses task tool calls and errors from the timeline', () => {
+    expect(
+      chunkToRunEvent({
+        type: 'tool-call',
+        payload: {
+          toolCallId: 'tc-1',
+          toolName: 'task_write',
+          args: { tasks: snapshot },
+        },
+      }),
+    ).toBeNull();
+
+    expect(
+      chunkToRunEvent({
+        type: 'tool-error',
+        payload: { toolCallId: 'tc-1', toolName: 'task_update', error: 'x' },
+      }),
+    ).toBeNull();
+
+    expect(
+      chunkToRunEvent({
+        type: 'tool-result',
+        payload: {
+          toolCallId: 'tc-1',
+          toolName: 'task_check',
+          result: { content: 'failed', tasks: [], isError: true },
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it('keeps non-task tool events unchanged', () => {
+    expect(
+      chunkToRunEvent({
+        type: 'tool-result',
+        payload: {
+          toolCallId: 'tc-2',
+          toolName: 'search_web',
+          result: { content: 'ok', tasks: snapshot },
+        },
+      }),
+    ).toEqual({
+      type: 'tool-result',
+      payload: {
+        toolCallId: 'tc-2',
+        toolName: 'search_web',
+        result: { content: 'ok', tasks: snapshot },
+      },
+    });
+  });
+});
+
 describe('ensureFirstTurnThread', () => {
   it('creates the missing thread record untitled so Mastra can generate the LLM title', async () => {
     const { memory, calls } = makeMemory(false);
@@ -334,6 +415,77 @@ describe('runExecution', () => {
     expect(calls.prompt).toEqual([
       { role: 'user', content },
     ]);
+  });
+
+  it('appends task-list snapshots in sequence and replays them', async () => {
+    const registry = new RunRegistry();
+    const { memory } = makeMemory(true);
+    const tasks = [
+      { id: 'task_1', content: 'First', activeForm: 'First', status: 'pending' },
+    ];
+    const { agent } = makeAgent(
+      [
+        { type: 'tool-call', payload: { toolCallId: 'tc-1', toolName: 'task_write', args: {} } },
+        {
+          type: 'tool-result',
+          payload: {
+            toolCallId: 'tc-1',
+            toolName: 'task_write',
+            result: { content: 'ok', tasks, isError: false },
+          },
+        },
+        {
+          type: 'tool-result',
+          payload: {
+            toolCallId: 'tc-2',
+            toolName: 'task_update',
+            result: {
+              content: 'ok',
+              tasks: [
+                { ...tasks[0], status: 'in_progress' },
+              ],
+              isError: false,
+            },
+          },
+        },
+        { type: 'text-delta', payload: { text: 'working' } },
+      ],
+      memory,
+    );
+    const run = registry.createRun({
+      id: createRunId(),
+      ...TUPLE,
+      prompt: 'multi-step work',
+      requestAbort: () => undefined,
+    });
+
+    await runExecution(registry, agent, {
+      runId: run.id,
+      ...TUPLE,
+      prompt: 'multi-step work',
+      abortSignal: new AbortController().signal,
+    });
+
+    const events: { sequence: number; type: string; payload?: unknown }[] = [];
+    registry.subscribeFrom(run.id, 0, (event) =>
+      events.push({
+        sequence: event.sequence,
+        type: event.type,
+        payload: event.payload,
+      }),
+    );
+    // Task tool calls are suppressed; only the snapshots enter the buffer,
+    // in stream order, and replay resolves to the latest state.
+    expect(events.map((event) => `${event.sequence}:${event.type}`)).toEqual([
+      '0:task-list',
+      '1:task-list',
+      '2:text-delta',
+      '3:finish',
+    ]);
+    const snapshots = events.filter((event) => event.type === 'task-list');
+    expect(snapshots[1]?.payload).toEqual({
+      tasks: [{ ...tasks[0], status: 'in_progress' }],
+    });
   });
 
   it('fails the run when the stream reports an error chunk', async () => {
