@@ -162,12 +162,11 @@ describe('visual-content-agent (identity and tools)', () => {
     expect(await visualContentAgent.getMemory()).toBeDefined();
   });
 
-  it('binds generate_image, review_image, plus the dev-only preview_image', async () => {
+  it('binds generate_image, review_image, and preview_image', async () => {
     const tools = await visualContentAgent.listTools();
-    // Vitest runs with NODE_ENV='test' (non-production), so the dev-only
-    // post-less `previewImageTool` is also registered alongside
-    // `generateImageTool` and its companion `reviewImageTool`. Task tools
-    // arrive through `signals: createTaskSignals()`.
+    // `previewImageTool` is registered in every environment (production
+    // included) alongside `generateImageTool` and its companion
+    // `reviewImageTool`. Task tools arrive through `signals: createTaskSignals()`.
     expect(Object.keys(tools).sort()).toEqual([
       'generateImageTool',
       'previewImageTool',
@@ -180,21 +179,14 @@ describe('visual-content-agent (identity and tools)', () => {
   });
 });
 
-describe('social-media-supervisor-agent (instructions env gating)', () => {
-  it('production instructions never propose the dev-only preview_image tool', async () => {
+describe('social-media-supervisor-agent (instructions preview delegation)', () => {
+  it('instructions propose both preview_image and generate_image delegations', async () => {
     const { buildSupervisorInstructions } = await import('../social-media-supervisor-agent.js');
-    const text = buildSupervisorInstructions('production');
-    expect(text).not.toContain('preview_image');
-    expect(text).not.toContain('previewId');
-    expect(text).not.toContain('standalone preview');
-    // The production delegation rule still steers toward the registered tool.
-    expect(text).toContain('"Use generate_image with postId <id>"');
-  });
-
-  it('non-production instructions keep the ad-hoc preview delegation path', async () => {
-    const { buildSupervisorInstructions } = await import('../social-media-supervisor-agent.js');
-    const text = buildSupervisorInstructions('development');
+    const text = buildSupervisorInstructions();
+    // The Visual Content Agent registers `preview_image` in every environment,
+    // so the supervisor always knows both delegation prefixes.
     expect(text).toContain('"Use preview_image (no postId)"');
+    expect(text).toContain('"Use generate_image with postId <id>"');
     expect(text).toContain('standalone preview');
   });
 });

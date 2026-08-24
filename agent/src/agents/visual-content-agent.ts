@@ -1,6 +1,5 @@
 import { Agent, type AgentConfig, type ToolsInput } from '@mastra/core/agent';
 
-import { env } from '../config/env.js';
 import { gatewayCompatibilityProcessor } from '../mastra/processors/gateway-compatibility.js';
 import { createAgentContextLimiter, createAgentMemory, createCharBudgetGuard } from '../mastra/processors/context-limit.js';
 import { createTaskNudgeProcessor } from '../mastra/tasks/task-nudge-processor.js';
@@ -62,7 +61,7 @@ export const RAFIQSPACE_BRAND = {
  * - On-demand only. Never generate automatically after content writing.
  * - Only for APPROVED content (the tool verifies from persisted metadata).
  * - The self-review loop runs ONLY for post-bound `generate_image` calls, not
- *   for the dev-only `preview_image` ad-hoc visuals (no post, no brief).
+ *   for the post-less `preview_image` ad-hoc visuals (no post, no brief).
  * - A revision is a regeneration: a new asset id, a new object key, the old
  *   asset preserved. Never an edit, never an overwrite.
  * - Does not publish, does not rewrite captions, does not expose internal
@@ -80,14 +79,15 @@ const visualContentAgentConfig: AgentConfig<string, ToolsInput, undefined, Provi
   requestContextSchema: providerContextSchema,
   memory: createAgentMemory(),
   signals: createTaskSignals(),
-  // Dev-only: register the post-less `preview_image` tool so an ad-hoc chat
-  // visual can be generated and shown inline without an APPROVED post (and
-  // without touching the /social-posts review surface). Production keeps only
-  // the post-bound `generate_image` tool and its companion `review_image`.
+  // The post-less `preview_image` tool lets an ad-hoc chat visual be generated
+  // and shown inline without an APPROVED post (and without touching the
+  // /social-posts review surface). It is registered in every environment —
+  // production included — alongside the post-bound `generate_image` tool and
+  // its companion `review_image`.
   tools: {
     generateImageTool,
     reviewImageTool,
-    ...(env.NODE_ENV !== 'production' ? { previewImageTool } : {}),
+    previewImageTool,
   },
   // Pembahasan 1 self-review loop budget. One happy-path delegation consumes:
   //   generate_image → review_image → (pass: stop | fail: regen → review_image → ...)
@@ -101,32 +101,22 @@ const visualContentAgentConfig: AgentConfig<string, ToolsInput, undefined, Provi
 };
 
 /**
- * Build the Visual Content Agent instructions for the given runtime
- * environment. The dev-only `preview_image` tool is not registered in
- * production, so every `preview_image` mention — the delegation rule, the
- * workflow steps, the worked example, and the self-review header — is emitted
- * ONLY in the non-production variant. Shipping preview instructions to a
- * runtime without the tool steers the model into a tool-not-found error.
+ * Build the Visual Content Agent instructions. The post-less `preview_image`
+ * tool is registered in every environment (production included), so the
+ * delegation rule, the workflow steps, the worked example, the self-review
+ * header, and the ad-hoc chat visual section always cover both tools.
  */
-export function buildInstructions(nodeEnv: string = env.NODE_ENV): string {
-  const isProduction = nodeEnv === 'production';
-  const delegationRule = isProduction
-    ? 'You receive a delegation from the supervisor that says "Use generate_image with postId <id>", followed by a structured concept block.'
-    : 'You receive a delegation from the supervisor that says either "Use preview_image (no postId)" or "Use generate_image with postId <id>", followed by a structured concept block.';
-  const workflowStepOne = isProduction
-    ? '1. Read the delegation. Identify the postId: "Use generate_image with postId <id>" → call `generate_image` with that postId.'
-    : '1. Read the delegation. Identify the tool: "Use preview_image" → call `preview_image`. "Use generate_image with postId <id>" → call `generate_image` with that postId.';
-  const workflowStepFour = isProduction
-    ? `4. After the tool returns:
-   - \`generate_image\` success → call \`review_image\` next (see self-review loop).
-   - Tool error → relay the exact error text and stop.`
-    : `4. After the tool returns:
+export function buildInstructions(): string {
+  const delegationRule =
+    'You receive a delegation from the supervisor that says either "Use preview_image (no postId)" or "Use generate_image with postId <id>", followed by a structured concept block.';
+  const workflowStepOne =
+    '1. Read the delegation. Identify the tool: "Use preview_image" → call `preview_image`. "Use generate_image with postId <id>" → call `generate_image` with that postId.';
+  const workflowStepFour = `4. After the tool returns:
    - \`preview_image\` success → reply with ONE line: "Gambar preview sudah jadi: <imageUrl>". Nothing else.
    - \`generate_image\` success → call \`review_image\` next (see self-review loop).
    - Tool error → relay the exact error text and stop.`;
-  const selfReviewHeader = isProduction
-    ? '## Self-review loop (after every `generate_image`)'
-    : '## Self-review loop (post-bound `generate_image` ONLY — skip for `preview_image`)';
+  const selfReviewHeader =
+    '## Self-review loop (post-bound `generate_image` ONLY — skip for `preview_image`)';
   const conceptBlock = `Content pillar: TECHNOLOGY
 Visual style: premium technology editorial photography of a modern AI data center interior, symmetrical server racks receding into the distance, controlled cinematic lighting with deep navy shadows and subtle electric-blue accents, intentional negative space on the left and bottom for typography.
 Hero number: 360 MW
@@ -155,26 +145,7 @@ Logo placement: bottom-right`;
   "context": "Memperkuat infrastruktur compute untuk AI lokal.",
   "source": "Sumber: DetikInet",
   "logoPosition": "bottom-right"`;
-  const workedExample = isProduction
-    ? `## Worked example
-
-DELEGATION FROM SUPERVISOR:
-\`\`\`
-Use generate_image with postId smp_20260817120000_a1b2c3d4
-
-${conceptBlock}
-\`\`\`
-
-YOUR TOOL CALL (\`generate_image\`):
-\`\`\`json
-{
-  "postId": "smp_20260817120000_a1b2c3d4",
-${briefFields}
-}
-\`\`\`
-
-Then call \`review_image\` with the same postId, the returned assetId, and a brief built from the concept block (see the self-review loop below).`
-    : `## Worked example
+  const workedExample = `## Worked example
 
 DELEGATION FROM SUPERVISOR:
 \`\`\`
@@ -361,12 +332,10 @@ The application compositor loads the real Rafiqspace logo asset and stamps it on
 
 Keep replies concise. No preamble like "Sure!" — lead with the tool call, then the result.${TASK_GUIDANCE}`;
 
-  // Dev-only: an ad-hoc chat visual has no APPROVED post. The `preview_image`
-  // tool generates a standalone preview and returns a URL without touching the
-  // social-post surface. This section is omitted in production, where only the
-  // post-bound `generate_image` tool (with its companion `review_image`) is
-  // registered.
-  if (isProduction) return base;
+  // An ad-hoc chat visual has no APPROVED post. The `preview_image` tool
+  // generates a standalone preview and returns a URL without touching the
+  // social-post surface. This section ships in every environment — the tool
+  // is registered everywhere.
   return `${base}
 
 ## Ad-hoc chat visuals (no post)

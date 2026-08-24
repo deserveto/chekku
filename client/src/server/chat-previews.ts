@@ -14,14 +14,14 @@ import { getUserId } from './auth';
 /**
  * Server-only read seam for chat-side image previews.
  *
- * The dev-only `preview_image` agent tool writes standalone preview images
- * under an isolated `chat-previews/` prefix in the `social-media-agent`
- * namespace (the same namespace the social-post surface uses, but a different
- * prefix, so `/social-posts` never lists them). This seam reads one preview's
- * bytes for the application-facing image route, after the same identity check
- * the rest of the storage routes apply. It never accepts an arbitrary object
- * key from a URL — the file param must be `<previewId>.<ext>` with a canonical
- * preview id and an allowlisted extension.
+ * The `preview_image` agent tool writes standalone preview images under an
+ * isolated `chat-previews/` prefix in the `social-media-agent` namespace (the
+ * same namespace the social-post surface uses, but a different prefix, so
+ * `/social-posts` never lists them). This seam reads one preview's bytes for
+ * the application-facing image route, after the same identity check the rest
+ * of the storage routes apply. It never accepts an arbitrary object key from
+ * a URL — the file param must be `<previewId>.<ext>` with a canonical preview
+ * id and an allowlisted extension.
  */
 
 const PREVIEW_ID_RE = /^prev_[0-9]{14}_[0-9a-f]{8}$/;

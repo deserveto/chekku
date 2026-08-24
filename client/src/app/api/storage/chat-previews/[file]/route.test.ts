@@ -54,15 +54,22 @@ describe('GET /api/storage/chat-previews/[file]', () => {
     expect(response.status).toBe(404);
   });
 
-  it('returns 404 in production (dev-only gate)', async () => {
+  it('serves previews in production too (no dev-only gate)', async () => {
     const previous = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';
     try {
+      mocks.getChatPreviewForUser.mockResolvedValue({
+        value: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+        contentType: 'image/png',
+      });
+
       const response = await GET(new Request('http://localhost/'), {
         params: Promise.resolve({ file: 'prev_20260808120000_abcd1234.png' }),
       });
-      expect(response.status).toBe(404);
-      expect(mocks.getChatPreviewForUser).not.toHaveBeenCalled();
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Content-Type')).toBe('image/png');
+      expect(mocks.getChatPreviewForUser).toHaveBeenCalledWith('prev_20260808120000_abcd1234.png');
     } finally {
       process.env.NODE_ENV = previous;
     }
