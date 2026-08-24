@@ -57,8 +57,15 @@ export function getCharBudget(modelId: string): number {
   );
 }
 
-export function createAgentMemory(): Memory {
-  return new Memory({ options: { lastMessages: AGENT_MEMORY_LAST_MESSAGES } });
+export function createAgentMemory(
+  options: { generateTitle?: boolean } = {},
+): Memory {
+  return new Memory({
+    options: {
+      lastMessages: AGENT_MEMORY_LAST_MESSAGES,
+      generateTitle: options.generateTitle === true,
+    },
+  });
 }
 
 type VisionCountableMessage = {

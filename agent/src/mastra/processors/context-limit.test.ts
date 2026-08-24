@@ -100,6 +100,16 @@ describe('agent context limiting (model-adaptive)', () => {
     expect(a).not.toBe(b);
   });
 
+  it('leaves thread title generation off by default', () => {
+    const memory = createAgentMemory();
+    expect(memory.getMergedThreadConfig().generateTitle).toBe(false);
+  });
+
+  it('opts into Mastra thread title generation when requested', () => {
+    const memory = createAgentMemory({ generateTitle: true });
+    expect(memory.getMergedThreadConfig().generateTitle).toBe(true);
+  });
+
   it('bounds recalled message history to a finite positive window', () => {
     expect(Number.isFinite(AGENT_MEMORY_LAST_MESSAGES)).toBe(true);
     expect(AGENT_MEMORY_LAST_MESSAGES).toBeGreaterThan(0);
