@@ -48,6 +48,24 @@ export function appendTextDelta(
 }
 
 /**
+ * Flip every still-running tool card to `interrupted`. Used optimistically
+ * right after the user requests a stop: the server-side abort only lands at
+ * the next engine step boundary (an in-flight tool call is not interrupted
+ * by the durable runtime), so without this the card can keep spinning until
+ * the terminal event arrives. A late `tool-result` still upserts over the
+ * interrupted state, so a tool that completes anyway renders correctly.
+ */
+export function interruptRunningToolParts(
+  parts: AssistantPart[],
+): AssistantPart[] {
+  return parts.map((part) =>
+    part.type === 'tool' && part.status === 'running'
+      ? { ...part, status: 'interrupted' as ToolEventStatus }
+      : part,
+  );
+}
+
+/**
  * Insert or update one tool part keyed by `toolCallId`. The first event
  * (usually `tool-call`) creates a running card at the current timeline
  * position; later events (`tool-result` / `tool-error`) update that same
@@ -295,11 +313,19 @@ export function restoreAssistantParts(
         continue;
       }
 
+      // The abort-persistence bridge stamps synthetic results with
+      // `interrupted: true`: the tool did not fail, the run was stopped
+      // while it was in flight, so the restored card must say interrupted.
       const { value, error } = unwrapToolOutput(part.output ?? part.result);
       parts = upsertToolPart(parts, {
         toolCallId,
         ...(toolName !== undefined ? { toolName } : {}),
-        status: error ? 'error' : 'complete',
+        status:
+          part.interrupted === true
+            ? 'interrupted'
+            : error
+              ? 'error'
+              : 'complete',
         result: value,
       });
     }

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import { mastra } from '../../mastra/index.js';
 import { mainAgent } from '../main-agent.js';
-import { pmAgent } from '../pm-agent.js';
+import { durablePmAgent, pmAgent } from '../pm-agent.js';
 import { qaWebAgent } from '../qa-web-agent.js';
 import { qaAndroidAgent } from '../qa-android-agent.js';
 import { socialMediaContentWriter } from '../social-media-content-writer.js';
@@ -85,6 +86,25 @@ describe('pm-agent (weekly and competitive analysis)', () => {
     expect(instructions).toContain('Generic requests to list saved reports mean weekly reports');
     expect(instructions).toContain('reportsMarkdown unchanged');
     expect(instructions).toContain('unrelated messages conversationally');
+  });
+});
+
+describe('pm-agent (durable execution pilot, N8_4)', () => {
+  it('wraps the plain agent with createDurableAgent and keeps its identity', () => {
+    // The public id must stay `pm-agent` so `getAgentById`, thread-id
+    // ownership, and the /runs surface resolve unchanged.
+    expect(durablePmAgent.id).toBe('pm-agent');
+    expect(durablePmAgent.name).toBe('PM Agent');
+  });
+
+  it('registers the durable instance in the composition root under the pmAgent key', () => {
+    const agents = mastra.listAgents();
+    expect(agents.pmAgent).toBe(durablePmAgent);
+    expect(agents.pmAgent).not.toBe(pmAgent);
+  });
+
+  it('resolves by public id through getAgentById', () => {
+    expect(mastra.getAgentById('pm-agent')).toBe(durablePmAgent);
   });
 });
 

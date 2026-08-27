@@ -568,6 +568,68 @@ describe('agent-scoped memory threads', () => {
     });
   });
 
+  it('restores an abort-bridge cancelled turn with interrupted tools and prompt-first order', async () => {
+    // Shape produced by buildCancelledTurnMessages: a user row and an
+    // assistant row whose in-flight tool-calls carry synthetic error-text
+    // results stamped `interrupted: true`, with distinct timestamps so the
+    // pair restores in order even when the API returns the assistant row
+    // first (N9_3: interrupted status + bubble order after refresh).
+    const assistantRow = {
+      id: 'run_20260824215300_abcd1234-assistant',
+      role: 'assistant',
+      content: {
+        format: 2,
+        parts: [
+          { type: 'tool-call', toolCallId: 'tc-1', toolName: 'skill' },
+          { type: 'tool-result', toolCallId: 'tc-1', toolName: 'skill', output: { type: 'text', value: 'loaded' } },
+          { type: 'tool-call', toolCallId: 'tc-2', toolName: 'search_web' },
+          { type: 'tool-result', toolCallId: 'tc-2', toolName: 'search_web', output: { type: 'text', value: 'hits' } },
+          { type: 'tool-call', toolCallId: 'tc-3', toolName: 'read_web_page' },
+          {
+            type: 'tool-result',
+            toolCallId: 'tc-3',
+            toolName: 'read_web_page',
+            output: { type: 'error-text', value: 'Tool call was interrupted before completing (run stopped by the user).' },
+            interrupted: true,
+          },
+        ],
+      },
+      createdAt: '2026-08-24T12:00:00.001Z',
+    };
+    threadListMessages.mockResolvedValueOnce({
+      // Assistant row returned first (the Postgres id tie-break can produce
+      // this order); the distinct createdAt values let the client's ASC
+      // sort put the prompt back on top.
+      messages: [
+        assistantRow,
+        {
+          id: 'run_20260824215300_abcd1234-user',
+          role: 'user',
+          content: {
+            format: 2,
+            parts: [{ type: 'text', text: 'Lakukan competitive analysis' }],
+          },
+          createdAt: '2026-08-24T12:00:00.000Z',
+        },
+      ],
+    });
+
+    const messages = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    expect(messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+    expect(messages[0]?.content).toBe('Lakukan competitive analysis');
+    const tools = messages[1]?.parts ?? [];
+    expect(tools.filter((part) => part.type === 'tool').map((part) => (part as { status: string }).status)).toEqual([
+      'complete',
+      'complete',
+      'interrupted',
+    ]);
+  });
+
   it('restores a sub-agent delegation invocation with nested tool results intact', async () => {
     threadListMessages.mockResolvedValueOnce({
       messages: [

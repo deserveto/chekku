@@ -6,7 +6,7 @@ import { PinoLogger } from '@mastra/loggers';
 import { env } from '../config/env.js';
 import { requestIdInjector, requestLogger } from '../config/middleware.js';
 import { mainAgent } from '../agents/main-agent.js';
-import { pmAgent } from '../agents/pm-agent.js';
+import { durablePmAgent } from '../agents/pm-agent.js';
 import { qaWebAgent } from '../agents/qa-web-agent.js';
 import { qaAndroidAgent } from '../agents/qa-android-agent.js';
 import {
@@ -43,7 +43,11 @@ const storage = new PostgresStore({
 export const mastra = new Mastra({
   agents: {
     mainAgent,
-    pmAgent,
+    // Durable pilot (N8_4): the PM Agent's long-running analyses run through
+    // `createDurableAgent`. The composition key stays `pmAgent` and the public
+    // id stays `pm-agent`, so `getAgentById` and the `/runs` surface are
+    // unchanged; every other agent still registers its plain instance.
+    pmAgent: durablePmAgent,
     qaWebAgent,
     qaAndroidAgent,
     socialMediaContentWriter,

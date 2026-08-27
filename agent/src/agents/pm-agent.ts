@@ -1,4 +1,5 @@
 import { Agent, type AgentConfig, type ToolsInput } from '@mastra/core/agent';
+import { createDurableAgent } from '@mastra/core/agent/durable';
 
 import { createCompetitiveResearchGuard } from '../mastra/processors/competitive-research-guard.js';
 import { createAgentContextLimiter, createAgentMemory, createCharBudgetGuard } from '../mastra/processors/context-limit.js';
@@ -60,3 +61,36 @@ const pmAgentConfig: AgentConfig<string, ToolsInput, undefined, ProviderContext>
 };
 
 export const pmAgent = new Agent(pmAgentConfig);
+
+/**
+ * Durable execution pilot (N8_4): the PM Agent runs the longest jobs on the
+ * server (competitive research: up to 25 steps, bounded web research, one
+ * save), so it is the pilot agent wrapped with `createDurableAgent`.
+ *
+ * The wrapper runs the same agentic loop inside the built-in workflow
+ * engine using the default in-process PubSub and in-memory event cache —
+ * no Redis, no external infra. Public identity is unchanged (id stays
+ * `pm-agent`, the composition key stays `pmAgent`), so `getAgentById`,
+ * thread-id ownership (`{agentId}-{resourceId}-{uuid}`), and the whole
+ * `/runs` HTTP surface work unchanged against the wrapped instance.
+ *
+ * Stop still flows through the run registry's AbortController
+ * (`abortSignal` is forwarded to the durable run's internal controller).
+ * Resume is conversational: after a stop, prompting again in the SAME
+ * thread continues from persisted Memory context instead of restarting.
+ * The run-execution driver calls the stream result's `cleanup()` once the
+ * run reaches a terminal state so durable registry entries and PubSub
+ * subscriptions never leak.
+ *
+ * Crash recovery is intentionally NOT enabled: `recoverActiveRuns` /
+ * `recovery.durableAgents` do not exist in the pinned `@mastra/core`
+ * 1.50.1, and re-driving abandoned runs would re-issue real LLM calls.
+ */
+export const durablePmAgent = createDurableAgent({
+  // The factory's `agent` parameter leaves the request-context generic at
+  // `unknown` while code-defined agents carry a zod `requestContextSchema`
+  // (`ProviderContext`); the runtime shapes are identical but TypeScript
+  // contravariance on the model callback rejects the direct assignment.
+  // Re-run the agent typecheck whenever `@mastra/core` moves.
+  agent: pmAgent as Agent<string, ToolsInput, undefined>,
+});

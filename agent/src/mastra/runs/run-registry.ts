@@ -232,6 +232,17 @@ export class RunRegistry {
     return record ? { ...record.summary } : null;
   }
 
+  /**
+   * Snapshot copy of one run's buffered events (replay order). Used by the
+   * execution driver to reconstruct a cancelled turn for Memory persistence.
+   */
+  getEvents(runId: string): AgentRunEvent[] | null {
+    this.evictExpired();
+    const record = this.records.get(runId);
+    if (!record) return null;
+    return record.events.map((event) => ({ ...event }));
+  }
+
   findActiveRun(
     agentId: string,
     threadId: string,
