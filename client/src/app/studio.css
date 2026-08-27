@@ -1676,8 +1676,22 @@ body.studio-sidebar-resizing * {
 .chat-task-dock-notice {
   margin: 0;
   padding: 8px 14px 0;
-  color: var(--studio-warn, #b3762a);
+  color: var(--studio-warning);
   font: 8px var(--font-dm-mono);
+}
+
+/* Fallback notice surface for task tool failures with no dock body to
+   live in: a rejected first task_write (no snapshot exists yet) or the
+   collapsed pill. Rendered in the chat topbar. */
+.chat-task-notice-topbar {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: min(320px, 60vw);
+  color: var(--studio-warning);
+  font: 8px var(--font-dm-mono);
+  overflow-wrap: anywhere;
 }
 
 .chat-task-dock-list {
@@ -1789,23 +1803,11 @@ body.studio-sidebar-resizing * {
   transition: width 0.3s;
 }
 
-/* Drawer scrim: visible only where the dock overlays the conversation.
-   Drawer mode below the breakpoint now renders the dock inside a native
-   <dialog>, so the scrim itself is only kept for the legacy click-to-close
-   surface on desktop-sized viewports that still run the column layout. */
-.chat-task-scrim {
-  position: fixed;
-  inset: 0;
-  z-index: 39;
-  display: none;
-  border: 0;
-  padding: 0;
-  background: rgb(15 12 10 / 45%);
-  cursor: pointer;
-}
-
 /* Native dialog drawer: the browser top layer hosts it; the panel mimics
-   the old fixed-position drawer and the dialog backdrop is the scrim. */
+   the old fixed-position drawer and the dialog backdrop is the scrim.
+   `display` must live ONLY under `[open]`: an author `display:flex` on
+   the closed dialog overrides the UA rule that hides non-open dialogs,
+   laying an opaque panel over the conversation while collapsed. */
 dialog.chat-task-dock-dialog {
   position: fixed;
   inset: 0;
@@ -1816,7 +1818,6 @@ dialog.chat-task-dock-dialog {
   bottom: 0;
   right: 0;
   left: auto;
-  display: flex;
   flex-direction: column;
   margin: 0;
   padding: 0;
@@ -1827,6 +1828,12 @@ dialog.chat-task-dock-dialog {
   box-shadow: -18px 0 40px rgb(15 12 10 / 55%);
   color: var(--studio-ink);
   overflow: hidden;
+}
+
+/* Defensive alongside the UA's own `dialog:not([open])` hiding: never
+   render a closed drawer panel. */
+dialog.chat-task-dock-dialog:not([open]) {
+  display: none;
 }
 
 dialog.chat-task-dock-dialog::backdrop {
@@ -3172,10 +3179,6 @@ dialog.chat-task-dock-dialog[open] {
     grid-template-columns: auto minmax(0, 1fr);
   }
 
-  .chat-task-scrim {
-    display: block;
-  }
-
   .chat-task-dock {
     position: fixed;
     top: 69px;
@@ -3399,7 +3402,10 @@ dialog.chat-task-dock-dialog[open] {
   }
 
   /* The task pill is the mobile entry point to the drawer — it stays
-     visible even where decorative badges are hidden. */
+     visible even where decorative badges are hidden. The dialog selector
+     must tie the base dialog rule's specificity or the drawer keeps the
+     69px desktop top offset below 760px. */
+  dialog.chat-task-dock-dialog,
   .chat-task-dock {
     top: 137px;
   }

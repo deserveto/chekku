@@ -32,7 +32,7 @@ const STATUS_LABELS: Record<TaskItemStatus, string> = {
   pending: 'pending',
 };
 
-/** Below this viewport width the dock renders as a drawer with a scrim. */
+/** Below this viewport width the dock renders as a native dialog drawer. */
 const DRAWER_BREAKPOINT_PX = 1080;
 
 function relativeTime(from: string, nowMs: number): string | null {
@@ -90,9 +90,14 @@ export function TaskDock({
   const dialogRef = useRef<HTMLDialogElement>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
   const wasDrawerOpenRef = useRef(false);
-  // True while the user has scrolled the list away from the auto-scroll
-  // target; snapshots must not yank their position (#8).
+  // True while the user's scroll position keeps the active row out of
+  // the visible band; snapshots must not yank their position (#8). The
+  // flag clears again once the user scrolls back to the active row.
   const userScrolledRef = useRef(false);
+  // Armed around programmatic scrollTop writes: the scroll event such a
+  // write fires must not be mistaken for user interaction, or the dock's
+  // own auto-scroll would pause itself on its first adjustment (#7).
+  const programmaticScrollRef = useRef(false);
   const { completed, total } = taskProgress(tasks);
   const allCompleted = total > 0 && completed === total;
   const isDrawer = useDrawerMode(DRAWER_BREAKPOINT_PX);
@@ -109,7 +114,7 @@ export function TaskDock({
       const higherOverlay =
         document.querySelector('dialog[open]') ||
         (document.fullscreenElement ?? null) ||
-        document.querySelector('[popover]:not(:popover-open)');
+        document.querySelector('[popover]:popover-open');
       if (higherOverlay) return;
       onToggle();
     };
@@ -119,10 +124,29 @@ export function TaskDock({
 
   // Drawer mode: native <dialog> lifecycle — save the invoker, show
   // modally, move focus in; on close restore focus. Keyed on both `open`
-  // and `isDrawer` so crossing the breakpoint while open re-runs it.
+  // and `isDrawer` so crossing the breakpoint while open re-runs it: the
+  // desktop branch closes any lingering dialog surface and still restores
+  // focus to the saved invoker instead of dropping it to <body>.
   useEffect(() => {
     const dialog = dialogRef.current;
-    if (!isDrawer) return;
+    const closeDialogSurface = () => {
+      if (dialog?.open) {
+        // jsdom lacks the dialog methods; the attribute fallback keeps
+        // the open state observable there.
+        if (typeof dialog.close === 'function') dialog.close();
+        else dialog.removeAttribute('open');
+      }
+      if (wasDrawerOpenRef.current && restoreFocusRef.current?.isConnected) {
+        restoreFocusRef.current.focus();
+      }
+      wasDrawerOpenRef.current = false;
+    };
+    if (!isDrawer) {
+      // Only meaningful right after a drawer→desktop crossing while the
+      // dock was open; otherwise this is a no-op.
+      closeDialogSurface();
+      return;
+    }
     if (open) {
       if (!wasDrawerOpenRef.current) {
         restoreFocusRef.current =
@@ -138,16 +162,7 @@ export function TaskDock({
       wasDrawerOpenRef.current = true;
       return;
     }
-    if (dialog?.open) {
-      // jsdom lacks the dialog methods; the attribute fallback keeps the
-      // open state observable there.
-      if (typeof dialog.close === 'function') dialog.close();
-      else dialog.removeAttribute('open');
-    }
-    if (wasDrawerOpenRef.current && restoreFocusRef.current?.isConnected) {
-      restoreFocusRef.current.focus();
-    }
-    wasDrawerOpenRef.current = false;
+    closeDialogSurface();
   }, [open, isDrawer]);
 
   // Native dialog cancel (Escape / close request) collapses the dock.
@@ -163,23 +178,38 @@ export function TaskDock({
     return () => dialog.removeEventListener('cancel', onCancel);
   }, [isDrawer, onToggle, open]);
 
-  // Mark snapshots where the user's scroll position leaves the bottom
-  // band as "user-driven"; the auto-scroll below stays paused until the
-  // user returns near the active row.
+  // Distinguish user scrolls from the dock's own programmatic writes:
+  // auto-follow pauses when the user's scroll position leaves the active
+  // row's visible band and resumes once they scroll back to it.
   useEffect(() => {
     const list = listRef.current;
     if (!list) return;
+    const activeRowVisible = () => {
+      const active = list.querySelector<HTMLElement>(
+        '.chat-task-item.in_progress',
+      );
+      if (!active) return true; // nothing to follow — never treat as paused
+      const top = active.offsetTop;
+      const bottom = top + active.offsetHeight;
+      return top < list.scrollTop + list.clientHeight && bottom > list.scrollTop;
+    };
     const onScroll = () => {
-      userScrolledRef.current = true;
+      if (programmaticScrollRef.current) {
+        // The dock's own scrollTop write fired this event.
+        programmaticScrollRef.current = false;
+        return;
+      }
+      userScrolledRef.current = !activeRowVisible();
     };
     list.addEventListener('scroll', onScroll);
     return () => list.removeEventListener('scroll', onScroll);
   }, []);
 
-  // Keep the active task visible unless the user scrolled on their own:
-  // when the in-progress row sits below the dock's scroll fold, bring it
+  // Keep the active task visible unless the user scrolled away from it:
+  // when the in-progress row sits outside the dock's scroll fold, bring it
   // into view. Manual scroll math (instead of scrollIntoView) so the page
-  // behind the dock never moves.
+  // behind the dock never moves. The write arms the programmatic flag so
+  // the scroll event it fires is not misread as user interaction.
   useEffect(() => {
     const list = listRef.current;
     if (!list) return;
@@ -188,13 +218,18 @@ export function TaskDock({
     if (!active) return;
     const top = active.offsetTop;
     const bottom = top + active.offsetHeight;
+    const setScrollTop = (value: number) => {
+      // An unchanged value fires no scroll event; arming the flag there
+      // would swallow the next genuine user scroll.
+      if (list.scrollTop === value) return;
+      programmaticScrollRef.current = true;
+      list.scrollTop = value;
+    };
     if (top < list.scrollTop) {
-      list.scrollTop = top;
+      setScrollTop(top);
     } else if (bottom > list.scrollTop + list.clientHeight) {
-      list.scrollTop = bottom - list.clientHeight;
+      setScrollTop(bottom - list.clientHeight);
     }
-    // A snapshot may replace the rows the user was reading; treat each
-    // applied snapshot as a fresh interaction point only after it runs.
   }, [tasks]);
 
   useEffect(() => {

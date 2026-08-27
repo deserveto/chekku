@@ -64,6 +64,11 @@ const taskUpdateInput = z
 
 const taskCompleteInput = z.object({ id: taskId });
 
+// Core's task_check takes no input (z.object({})); wrapped with the same
+// empty schema so "all four task tools run through the boundary" holds
+// literally true.
+const taskCheckInput = z.object({}).describe('No input required.');
+
 /** The tool-record shape the provider's `getTools()` returns. */
 type ProviderToolBag = ReturnType<TaskSignalProvider['getTools']>;
 type ProviderTool = NonNullable<ProviderToolBag['task_write']>;
@@ -78,12 +83,15 @@ function wrapTool(
     id: name,
     description: base.description,
     inputSchema,
+    // Carry the base output contract forward so the wrapper cannot
+    // silently relax validation core still applies.
+    ...(base.outputSchema ? { outputSchema: base.outputSchema } : {}),
     execute: (input, context) => execute?.(input, context),
   }) as ProviderTool;
 }
 
 /**
- * Replace the four raw core task tools with schema-bounded wrappers that
+ * Replace the raw core task tools with schema-bounded wrappers that
  * delegate execution unchanged. Unknown tools pass through untouched.
  */
 export function boundTaskTools<T extends Partial<ProviderToolBag>>(base: T): T {
@@ -104,6 +112,11 @@ export function boundTaskTools<T extends Partial<ProviderToolBag>>(base: T): T {
             base.task_complete,
             taskCompleteInput,
           ),
+        }
+      : {}),
+    ...(base.task_check
+      ? {
+          task_check: wrapTool('task_check', base.task_check, taskCheckInput),
         }
       : {}),
   } as T;

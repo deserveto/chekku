@@ -55,12 +55,27 @@ export interface MemoryAccess {
   }): Promise<unknown>;
 }
 
-const MAX_ERROR_TEXT_BYTES = 500;
+const MAX_ERROR_TEXT_CHARS = 500;
 
 function sanitizeErrorText(error: unknown): string {
-  const text =
-    error instanceof Error ? error.message : String(error ?? 'Unknown error');
-  return text.slice(0, MAX_ERROR_TEXT_BYTES);
+  let text: string;
+  if (typeof error === 'string') text = error;
+  else if (error instanceof Error) text = error.message;
+  else if (typeof error === 'number' || typeof error === 'bigint') {
+    text = String(error);
+  } else {
+    // Objects, symbols, null, undefined: coercing with String() would
+    // surface "[object Object]" in run events.
+    text = '';
+  }
+  const source = text || 'Unknown error';
+  // Truncate on Unicode code points, not UTF-16 code units: slicing a
+  // surrogate pair in half would end the error in a lone surrogate
+  // (same rule as buildThreadTitle below).
+  const characters = Array.from(source);
+  return characters.length <= MAX_ERROR_TEXT_CHARS
+    ? source
+    : characters.slice(0, MAX_ERROR_TEXT_CHARS).join('');
 }
 
 function chunkPayload(chunk: StreamChunk): Record<string, unknown> {
@@ -113,6 +128,8 @@ export function chunkToRunEvent(
         payload: {
           toolCallId: payload.toolCallId,
           toolName: String(payload.toolName ?? 'task'),
+          // Only string-shaped detail feeds the notice; a raw result
+          // object would stringify to "[object Object]" downstream.
           error: sanitizeErrorText(
             payload.error ??
               (typeof result === 'string' ? result : undefined) ??
@@ -120,8 +137,7 @@ export function chunkToRunEvent(
               typeof result === 'object' &&
               typeof (result as Record<string, unknown>).content === 'string'
                 ? ((result as Record<string, unknown>).content as string)
-                : undefined) ??
-              result,
+                : undefined),
           ),
         },
       };

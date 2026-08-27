@@ -280,6 +280,70 @@ describe('chunkToRunEvent task tools', () => {
         error: 'failed',
       },
     });
+
+    // Non-string error detail must not stringify to "[object Object]".
+    expect(
+      chunkToRunEvent({
+        type: 'tool-error',
+        payload: {
+          toolCallId: 'tc-1',
+          toolName: 'task_write',
+          error: { weird: true },
+        },
+      }),
+    ).toEqual({
+      type: 'tool-error',
+      payload: {
+        toolCallId: 'tc-1',
+        toolName: 'task_write',
+        error: 'Unknown error',
+      },
+    });
+    // A result object with no string content falls back the same way
+    // instead of leaking a serialized object.
+    expect(
+      chunkToRunEvent({
+        type: 'tool-result',
+        payload: {
+          toolCallId: 'tc-1',
+          toolName: 'task_write',
+          result: { tasks: [], isError: true, detail: { nested: 1 } },
+        },
+      }) as unknown as { payload: { error: unknown } },
+    ).toEqual({
+      type: 'tool-error',
+      payload: {
+        toolCallId: 'tc-1',
+        toolName: 'task_write',
+        error: 'Unknown error',
+      },
+    });
+  });
+
+  it('truncates error text on code points so surrogate pairs stay whole', () => {
+    // 499 single-unit chars plus one astral emoji = 500 code points but
+    // 501 UTF-16 units. A UTF-16-unit slice at 500 would cut the emoji
+    // in half and end the notice in a lone surrogate.
+    const mapped = chunkToRunEvent({
+      type: 'tool-error',
+      payload: {
+        toolCallId: 'tc-1',
+        toolName: 'task_write',
+        error: `${'a'.repeat(499)}😀`,
+      },
+    }) as unknown as { payload: { error: string } };
+    expect(mapped.payload.error).toBe(`${'a'.repeat(499)}😀`);
+    expect(mapped.payload.error.length).toBe(501);
+
+    const overflow = chunkToRunEvent({
+      type: 'tool-error',
+      payload: {
+        toolCallId: 'tc-2',
+        toolName: 'task_write',
+        error: '😀'.repeat(600),
+      },
+    }) as unknown as { payload: { error: string } };
+    expect(overflow.payload.error.length).toBe(1000); // 500 code points
   });
 
   it('keeps non-task tool events unchanged', () => {

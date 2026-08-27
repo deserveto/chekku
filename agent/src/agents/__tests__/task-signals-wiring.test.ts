@@ -84,6 +84,47 @@ describe('code-defined agents task tool wiring', () => {
     ).toBe(false);
   });
 
+  it('accepts task tool input exactly at the caps', async () => {
+    // A regression like `.max(MAX - 1)` keeps every cap+1 rejection test
+    // green; the boundary values themselves must parse.
+    const tools = createdTaskSignalProviders()[0]!.getTools() as Record<
+      string,
+      { inputSchema: { safeParse: (v: unknown) => { success: boolean } } }
+    >;
+    const atLimit = Array.from({ length: 100 }, (_, i) => ({
+      content: `Task ${i}`,
+      status: 'pending',
+      activeForm: `Working on task ${i}`,
+    }));
+    expect(
+      tools.task_write!.inputSchema.safeParse({ tasks: atLimit }).success,
+    ).toBe(true);
+    expect(
+      tools.task_write.inputSchema.safeParse({
+        tasks: [
+          {
+            content: 'c'.repeat(500),
+            status: 'pending',
+            activeForm: 'a'.repeat(500),
+          },
+        ],
+      }).success,
+    ).toBe(true);
+    const id128 = 'i'.repeat(128);
+    expect(
+      tools.task_update.inputSchema.safeParse({
+        id: id128,
+        status: 'pending',
+      }).success,
+    ).toBe(true);
+    expect(
+      tools.task_complete.inputSchema.safeParse({ id: id128 }).success,
+    ).toBe(true);
+    // task_check takes no input; its wrapper keeps an empty schema so
+    // all four task tools run through the boundary.
+    expect(tools.task_check!.inputSchema.safeParse({}).success).toBe(true);
+  });
+
   it('uses a bounded, evicting threadState store wired to thread deletion', async () => {
     const storage = await mastra.getStorage();
     expect(storage).toBeDefined();

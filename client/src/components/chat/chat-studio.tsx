@@ -1198,7 +1198,11 @@ export function ChatStudio({
   return (
     <div
       className={`chat-studio-shell${
-        taskDockOpen && threadTasks ? ' has-task-dock' : ''
+        taskDockOpen &&
+        threadTasks &&
+        threadTasks.tasks.length > 0
+          ? ' has-task-dock'
+          : ''
       }`}
     >
       <ResizableSidebar
@@ -1360,6 +1364,22 @@ export function ChatStudio({
                 onToggle={toggleTaskDock}
               />
             )}
+            {/* Task tool failures must stay visible even when no dock body
+                exists to host them: a rejected first task_write leaves no
+                snapshot, and the collapsed pill hides the dock body. */}
+            {taskNotice &&
+              !(
+                taskDockOpen &&
+                threadTasks &&
+                threadTasks.tasks.length > 0
+              ) && (
+                <p
+                  className="chat-task-notice-topbar"
+                  role="status"
+                >
+                  <span aria-hidden="true">⚠</span> {taskNotice}
+                </p>
+              )}
           </div>
         </header>
 

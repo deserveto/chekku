@@ -23,6 +23,16 @@ describe('BoundedThreadStateStorage', () => {
     expect(await store.getState({ threadId: 't3', type: 'task' })).toBeDefined();
   });
 
+  it('retains every thread exactly at the cap', async () => {
+    // A regression like evicting at `size >= maxThreads` would churn the
+    // store on every write at capacity; only overflow may evict.
+    const store = new BoundedThreadStateStorage({ maxThreads: 2 });
+    await store.setState({ threadId: 't1', type: 'task', value: [] });
+    await store.setState({ threadId: 't2', type: 'task', value: [] });
+    expect(await store.getState({ threadId: 't1', type: 'task' })).toBeDefined();
+    expect(await store.getState({ threadId: 't2', type: 'task' })).toBeDefined();
+  });
+
   it('evicts every state type of a thread on evictThread', async () => {
     const store = new BoundedThreadStateStorage();
     await store.setState({ threadId: 't1', type: 'task', value: [] });

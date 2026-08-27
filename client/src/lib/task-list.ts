@@ -134,7 +134,21 @@ export function tasksFromRestoredParts(
   for (const part of parts) {
     if (part.type !== 'tool' || !isTaskToolName(part.toolName)) continue;
     if (part.status === 'error') continue;
-    const snapshot = parseTaskListPayload(part.result);
+    // Core's task tools report semantic failures (validation, missing
+    // memory) inside a *successful* result object — `{ content: 'Failed
+    // to update tasks: …', tasks: [], isError: true }`. That empty list
+    // is not a snapshot: honoring it would wipe the dock after reload
+    // for a transient failure (mirrors the server adapter's rule).
+    const result = part.result;
+    if (
+      result &&
+      typeof result === 'object' &&
+      !Array.isArray(result) &&
+      (result as Record<string, unknown>).isError === true
+    ) {
+      continue;
+    }
+    const snapshot = parseTaskListPayload(result);
     if (snapshot) latest = snapshot;
   }
   return latest;

@@ -10,6 +10,14 @@ import { InMemoryThreadStateStorage } from '@mastra/core/storage';
  * wiring every thread's task state would live for the agent server's
  * whole process lifetime — a model-influenced, never-evicting growth
  * path.
+ *
+ * Upgrade-sensitive coupling: eviction reaches into core
+ * `InMemoryThreadStateStorage`'s de-facto-private `stateByThread` map
+ * because the class exposes no enumeration API. A core update that
+ * renames or restructures that field breaks eviction here silently —
+ * the retention/eviction tests in task-state-store.test.ts are the
+ * tripwire; re-pin them when core changes (same caveat class as the
+ * VisionAwareTokenLimiterProcessor prototype shadowing).
  */
 
 export const MAX_THREAD_STATE_THREADS = 2048;

@@ -26,6 +26,33 @@ function stubDrawerMode(drawer: boolean): void {
   );
 }
 
+/**
+ * Like stubDrawerMode, but captures `change` listeners so a test can
+ * simulate the viewport crossing the breakpoint while the dock lives.
+ */
+function stubDrawerModeWithChange(initial: boolean) {
+  const listeners = new Set<(event: { matches: boolean }) => void>();
+  const mql = {
+    matches: initial,
+    addEventListener: vi.fn(
+      (_type: string, listener: (event: { matches: boolean }) => void) => {
+        listeners.add(listener);
+      },
+    ),
+    removeEventListener: vi.fn(),
+  };
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn().mockReturnValue(mql),
+  );
+  return {
+    fireChange(matches: boolean) {
+      mql.matches = matches;
+      for (const listener of listeners) listener({ matches });
+    },
+  };
+}
+
 beforeEach(() => {
   stubDrawerMode(false);
   container = document.createElement('div');
@@ -190,6 +217,54 @@ describe('TaskDock expanded', () => {
     expect(document.activeElement).toBe(opener);
   });
 
+  it('collapses from the native dialog cancel event (drawer Escape)', () => {
+    stubDrawerMode(true);
+    const onToggle = vi.fn();
+    render({ tasks: TASKS, open: true, onToggle });
+
+    const dialog = container.querySelector<HTMLDialogElement>(
+      'dialog.chat-task-dock-dialog',
+    )!;
+    const cancelEvent = new Event('cancel', { cancelable: true });
+    act(() => {
+      dialog.dispatchEvent(cancelEvent);
+    });
+    // The collapse is owned by Chekku state, not the browser's own
+    // dialog close: preventDefault keeps the two from racing.
+    expect(cancelEvent.defaultPrevented).toBe(true);
+    expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+
+  it('switches surfaces when the viewport crosses the breakpoint while open', () => {
+    const media = stubDrawerModeWithChange(false);
+    const onToggle = vi.fn();
+    const opener = document.createElement('button');
+    document.body.appendChild(opener);
+    opener.focus();
+
+    render({ tasks: TASKS, open: true, onToggle });
+    // Desktop column: aside, no dialog.
+    expect(container.querySelector('dialog')).toBeNull();
+    expect(container.querySelector('aside.chat-task-dock')).not.toBeNull();
+
+    // Shrink below the breakpoint while open: the dialog takes over.
+    act(() => media.fireChange(true));
+    const dialog = container.querySelector<HTMLDialogElement>(
+      'dialog.chat-task-dock-dialog',
+    );
+    expect(dialog).not.toBeNull();
+    expect(dialog!.hasAttribute('open')).toBe(true);
+
+    // Grow back past the breakpoint while open: the dialog surface is
+    // gone, the column renders again, and focus returns to the saved
+    // invoker instead of falling to <body>.
+    act(() => media.fireChange(false));
+    expect(container.querySelector('dialog')).toBeNull();
+    expect(container.querySelector('aside.chat-task-dock')).not.toBeNull();
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
+  });
+
   it('renders the relative updated time when provided', () => {
     render({
       tasks: TASKS,
@@ -239,6 +314,47 @@ describe('TaskDock expanded', () => {
     expect(listRule).toMatch(/position:\s*relative/);
   });
 
+  it('never lays out the closed drawer dialog', () => {
+    // jsdom applies no CSS, so a collapsed drawer that paints an opaque
+    // panel over the conversation is invisible to every DOM test. Assert
+    // the source: an author `display` on the base dialog rule overrides
+    // the UA's `dialog:not([open]) { display: none }` regardless of
+    // specificity, so display may live ONLY under [open].
+    const css = readFileSync(
+      resolve(__dirname, '../../app/studio.css'),
+      'utf8',
+    );
+    const baseRule =
+      css.match(/dialog\.chat-task-dock-dialog\s*\{[^}]*\}/)?.[0];
+    expect(baseRule).toBeDefined();
+    expect(baseRule).not.toMatch(/display:/);
+
+    const closedRule = css.match(
+      /dialog\.chat-task-dock-dialog:not\(\[open\]\)\s*\{[^}]*\}/,
+    )?.[0];
+    expect(closedRule).toMatch(/display:\s*none/);
+
+    const openRule = css.match(
+      /dialog\.chat-task-dock-dialog\[open\]\s*\{[^}]*\}/,
+    )?.[0];
+    expect(openRule).toMatch(/display:\s*flex/);
+  });
+
+  it('drops the mobile drawer below the taller mobile topbar', () => {
+    // The 760px override must outrank the base dialog rule's 69px top
+    // (equal specificity, later in the stylesheet) — assert the override
+    // targets the dialog element itself.
+    const css = readFileSync(
+      resolve(__dirname, '../../app/studio.css'),
+      'utf8',
+    );
+    const mobileBlock = css.match(/@media \(max-width: 760px\)\s*\{[\s\S]*$/);
+    expect(mobileBlock).toBeDefined();
+    expect(mobileBlock![0]).toMatch(
+      /dialog\.chat-task-dock-dialog[\s\S]{0,200}?top:\s*137px/,
+    );
+  });
+
   it('pauses auto-scroll while the user has scrolled away', () => {
     const onToggle = vi.fn();
     render({ tasks: TASKS, open: true, onToggle });
@@ -262,6 +378,111 @@ describe('TaskDock expanded', () => {
     render({ tasks: [...TASKS], open: true, onToggle });
     expect(scrolled).not.toHaveBeenCalled();
     scrolled.mockRestore();
+  });
+
+  it('does not pause auto-scroll on its own programmatic scroll event', () => {
+    const onToggle = vi.fn();
+    render({ tasks: TASKS, open: true, onToggle });
+
+    const list = container.querySelector<HTMLOListElement>(
+      '.chat-task-dock-list',
+    )!;
+    // Lay the active row (task_2) below the fold: rows 250..280 in a
+    // 200px viewport.
+    Object.defineProperty(list, 'clientHeight', {
+      configurable: true,
+      value: 200,
+    });
+    const active = list.querySelector<HTMLElement>(
+      '.chat-task-item.in_progress',
+    )!;
+    Object.defineProperty(active, 'offsetTop', { configurable: true, value: 250 });
+    Object.defineProperty(active, 'offsetHeight', { configurable: true, value: 30 });
+
+    // Re-run the snapshot effect with the geometry in place.
+    render({ tasks: [...TASKS], open: true, onToggle });
+    expect(list.scrollTop).toBe(80); // 280 - 200
+
+    // The browser fires a (async) scroll event for that programmatic
+    // write; it must not latch the user-scrolled pause.
+    act(() => {
+      list.dispatchEvent(new Event('scroll', { bubbles: false }));
+    });
+
+    // The active row moves further down; auto-follow must still work.
+    const next = list.querySelectorAll<HTMLElement>('.chat-task-item')[2]!;
+    Object.defineProperty(next, 'offsetTop', { configurable: true, value: 400 });
+    Object.defineProperty(next, 'offsetHeight', { configurable: true, value: 30 });
+    render({
+      tasks: TASKS.map((task, index) =>
+        index === 1
+          ? { ...task, status: 'completed' as const }
+          : index === 2
+            ? { ...task, status: 'in_progress' as const }
+            : task,
+      ),
+      open: true,
+      onToggle,
+    });
+    expect(list.scrollTop).toBe(230); // 430 - 200
+  });
+
+  it('resumes auto-scroll after the user scrolls back to the active row', () => {
+    const onToggle = vi.fn();
+    render({ tasks: TASKS, open: true, onToggle });
+
+    const list = container.querySelector<HTMLOListElement>(
+      '.chat-task-dock-list',
+    )!;
+    Object.defineProperty(list, 'clientHeight', {
+      configurable: true,
+      value: 200,
+    });
+    const active = list.querySelector<HTMLElement>(
+      '.chat-task-item.in_progress',
+    )!;
+    Object.defineProperty(active, 'offsetTop', { configurable: true, value: 250 });
+    Object.defineProperty(active, 'offsetHeight', { configurable: true, value: 30 });
+
+    // Auto-follow scrolls the active row into view (scrollTop 80).
+    render({ tasks: [...TASKS], open: true, onToggle });
+    expect(list.scrollTop).toBe(80);
+    act(() => {
+      list.dispatchEvent(new Event('scroll', { bubbles: false }));
+    });
+
+    // The user scrolls up; the active row leaves the visible band and
+    // snapshots must not yank their position.
+    act(() => {
+      list.scrollTop = 0;
+      list.dispatchEvent(new Event('scroll', { bubbles: false }));
+    });
+    const scrolled = vi.spyOn(list, 'scrollTop', 'set');
+    render({ tasks: [...TASKS], open: true, onToggle });
+    expect(scrolled).not.toHaveBeenCalled();
+    scrolled.mockRestore();
+
+    // The user scrolls back until the active row is visible again —
+    // auto-follow resumes on the next snapshot.
+    act(() => {
+      list.scrollTop = 80;
+      list.dispatchEvent(new Event('scroll', { bubbles: false }));
+    });
+    const next = list.querySelectorAll<HTMLElement>('.chat-task-item')[2]!;
+    Object.defineProperty(next, 'offsetTop', { configurable: true, value: 400 });
+    Object.defineProperty(next, 'offsetHeight', { configurable: true, value: 30 });
+    render({
+      tasks: TASKS.map((task, index) =>
+        index === 1
+          ? { ...task, status: 'completed' as const }
+          : index === 2
+            ? { ...task, status: 'in_progress' as const }
+            : task,
+      ),
+      open: true,
+      onToggle,
+    });
+    expect(list.scrollTop).toBe(230); // 430 - 200
   });
 });
 
