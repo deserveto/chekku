@@ -85,6 +85,7 @@ import {
 import {
   appendTextDelta,
   groupAssistantParts,
+  interruptRunningToolParts,
   textFromAssistantParts,
   upsertToolPart,
 } from '@/lib/assistant-parts';
@@ -1063,6 +1064,20 @@ export function ChatStudio({
     const stopThreadId = threadId;
     try {
       await cancelRun(run.id);
+      // Optimistic feedback: the server abort lands at the next engine step
+      // boundary (an in-flight tool call keeps running until it finishes),
+      // so flip pending tool cards to `interrupted` immediately. A late
+      // tool-result event still upserts over this state.
+      const assistantId = activeAssistantId;
+      if (assistantId) {
+        setMessages((current) =>
+          current.map((message) =>
+            message.id === assistantId && message.parts?.length
+              ? { ...message, parts: interruptRunningToolParts(message.parts) }
+              : message,
+          ),
+        );
+      }
     } catch (reason) {
       // The user may have switched threads while the cancel request was in
       // flight; a stale thread's stop failure must not banner the view.

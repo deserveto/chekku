@@ -11,6 +11,7 @@ import {
 } from '../runs/run-registry.js';
 import {
   ensureFirstTurnThread,
+  persistCancelledTurn,
   runExecution,
   type RunUserContent,
   type RunnableAgent,
@@ -417,7 +418,7 @@ export const runEventsRoute = registerApiRoute('/runs/:runId/events', {
 export const cancelRunRoute = registerApiRoute('/runs/:runId/cancel', {
   method: 'POST',
   requiresAuth: false,
-  handler: (c: RunsRouteContext) => {
+  handler: async (c: RunsRouteContext) => {
     const runId = c.req.param('runId') ?? '';
     const resourceId = c.req.query('resourceId') ?? '';
 
@@ -430,6 +431,30 @@ export const cancelRunRoute = registerApiRoute('/runs/:runId/cancel', {
       return c.json({ error: 'Run not found' }, 404);
     }
 
-    return c.json({ run: agentRunRegistry.requestCancel(runId) });
+    const run = agentRunRegistry.requestCancel(runId);
+    if (!run) return c.json({ error: 'Run not found' }, 404);
+
+    // A durable tool step can take up to its own bounded timeout to observe
+    // the abort signal. Persist the snapshot and release this thread's run
+    // lock now, rather than making the user wait for that unrelated drain
+    // before they can continue the conversation. Late events are ignored by
+    // the terminal registry record; runExecution may safely save the same
+    // IDs again when its stream finally unwinds (saveMessages is an upsert).
+    if (run.status === 'running') {
+      const agent = resolveAgent(c, run.agentId);
+      if (agent) {
+        await persistCancelledTurn(agentRunRegistry, agent, {
+          runId: run.id,
+          agentId: run.agentId,
+          threadId: run.threadId,
+          resourceId: run.resourceId,
+          prompt: run.prompt,
+          abortSignal: new AbortController().signal,
+        });
+      }
+      return c.json({ run: agentRunRegistry.finishRun(runId, 'cancelled') });
+    }
+
+    return c.json({ run });
   },
 });

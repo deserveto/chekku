@@ -393,6 +393,45 @@ describe('run routes: ownership collapses foreign runs to 404', () => {
   });
 });
 
+describe('run routes: cancellation snapshot', () => {
+  it('persists the partial turn and releases the thread immediately', async () => {
+    const saveMessages = vi.fn();
+    const run = seedRunningRun();
+    registryState.registry.appendEvent(run.id, 'text-delta', {
+      text: 'Partial competitive research.',
+    });
+
+    const response = await cancelHandler(
+      makeContext({
+        params: { runId: run.id },
+        query: { resourceId: 'user-1' },
+        mastra: {
+          getAgentById: () => ({
+            stream: async () => ({ fullStream: new ReadableStream() }),
+            getMemory: async () => ({
+              getThreadById: async () => null,
+              createThread: async () => undefined,
+              saveMessages,
+            }),
+          }),
+        },
+      }) as never,
+    );
+
+    expect(response.status).toBe(200);
+    expect((await response.json() as { run: { status: string } }).run.status).toBe('cancelled');
+    expect(registryState.registry.findActiveRun('main-agent', run.threadId, 'user-1')).toBeNull();
+    expect(saveMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({ id: `${run.id}-user`, role: 'user' }),
+          expect.objectContaining({ id: `${run.id}-assistant`, role: 'assistant' }),
+        ]),
+      }),
+    );
+  });
+});
+
 describe('run routes: concurrency cap surfaces as 429', () => {
   function startContext(threadId: string, resourceId: string) {
     return makeContext({

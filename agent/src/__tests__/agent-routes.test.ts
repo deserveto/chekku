@@ -37,7 +37,14 @@ describe('agent server routes', () => {
     ]);
     expect(
       Object.keys(mastra.listWorkflows()).filter((key) => !key.endsWith('-input-processor')),
-    ).toEqual(['weeklySocialDrafts', 'repurposeSocialPost', 'generateSocialPostVisual']);
+    ).toEqual([
+      'weeklySocialDrafts',
+      'repurposeSocialPost',
+      'generateSocialPostVisual',
+      // Internal engine workflow auto-registered by the pm-agent durable
+      // pilot (`createDurableAgent`); not an application workflow.
+      'durable-agentic-loop',
+    ]);
     expect(mastra.listMCPServers()).toEqual({
       garage: garageMcpServer,
       searxng: searxngMcpServer,

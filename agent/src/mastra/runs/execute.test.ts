@@ -1,8 +1,10 @@
-import { describe, expect, it } from 'vitest';
-import { RunRegistry, createRunId } from './run-registry.js';
+import { describe, expect, it, vi } from 'vitest';
+import { RunRegistry, createRunId, type AgentRunEvent } from './run-registry.js';
 import {
+  buildCancelledTurnMessages,
   chunkToRunEvent,
   ensureFirstTurnThread,
+  persistCancelledTurn,
   runExecution,
   type MemoryAccess,
   type RunnableAgent,
@@ -685,5 +687,330 @@ describe('runExecution', () => {
     const final = registry.getRun(run.id);
     expect(final?.status).toBe('failed');
     expect(final?.error).toBe('connection refused to model host');
+  });
+
+  describe('durable stream cleanup (terminal release)', () => {
+    it('calls cleanup once after a completed run', async () => {
+      const registry = new RunRegistry();
+      const cleanup = vi.fn();
+      const agent: RunnableAgent = {
+        stream: async () => ({
+          fullStream: streamOf([
+            { type: 'text-delta', payload: { text: 'ok' } },
+          ]).fullStream,
+          cleanup,
+        }),
+        getMemory: async () => undefined,
+      };
+      const run = registry.createRun({
+        id: createRunId(),
+        ...TUPLE,
+        prompt: 'durable done',
+        requestAbort: () => undefined,
+      });
+
+      await runExecution(registry, agent, {
+        runId: run.id,
+        ...TUPLE,
+        prompt: 'durable done',
+        abortSignal: new AbortController().signal,
+      });
+
+      expect(registry.getRun(run.id)?.status).toBe('completed');
+      expect(cleanup).toHaveBeenCalledTimes(1);
+    });
+
+    it('calls cleanup after a cancelled run', async () => {
+      const registry = new RunRegistry();
+      const cleanup = vi.fn();
+      const controller = new AbortController();
+      const agent: RunnableAgent = {
+        stream: async () => {
+          controller.abort();
+          return {
+            fullStream: streamOf([]).fullStream,
+            cleanup,
+          };
+        },
+        getMemory: async () => undefined,
+      };
+      const run = registry.createRun({
+        id: createRunId(),
+        ...TUPLE,
+        prompt: 'durable stop',
+        requestAbort: () => controller.abort(),
+      });
+
+      registry.requestCancel(run.id);
+      await runExecution(registry, agent, {
+        runId: run.id,
+        ...TUPLE,
+        prompt: 'durable stop',
+        abortSignal: controller.signal,
+      });
+
+      expect(registry.getRun(run.id)?.status).toBe('cancelled');
+      expect(cleanup).toHaveBeenCalledTimes(1);
+    });
+
+    it('calls cleanup after a failed stream and swallows cleanup errors', async () => {
+      const registry = new RunRegistry();
+      const cleanup = vi.fn(() => {
+        throw new Error('pubsub already gone');
+      });
+      const agent: RunnableAgent = {
+        stream: async () => ({
+          fullStream: streamOf([
+            { type: 'error', payload: { error: 'gateway down' } },
+          ]).fullStream,
+          cleanup,
+        }),
+        getMemory: async () => undefined,
+      };
+      const run = registry.createRun({
+        id: createRunId(),
+        ...TUPLE,
+        prompt: 'durable fail',
+        requestAbort: () => undefined,
+      });
+
+      await expect(
+        runExecution(registry, agent, {
+          runId: run.id,
+          ...TUPLE,
+          prompt: 'durable fail',
+          abortSignal: new AbortController().signal,
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(registry.getRun(run.id)?.status).toBe('failed');
+      expect(cleanup).toHaveBeenCalledTimes(1);
+    });
+
+    it('never calls cleanup when stream() itself throws (no result to release)', async () => {
+      const registry = new RunRegistry();
+      const cleanup = vi.fn();
+      const agent: RunnableAgent = {
+        stream: async () => {
+          throw new Error('workflow start failed');
+        },
+        getMemory: async () => undefined,
+      };
+      const run = registry.createRun({
+        id: createRunId(),
+        ...TUPLE,
+        prompt: 'no stream',
+        requestAbort: () => undefined,
+      });
+
+      await runExecution(registry, agent, {
+        runId: run.id,
+        ...TUPLE,
+        prompt: 'no stream',
+        abortSignal: new AbortController().signal,
+      });
+
+      expect(registry.getRun(run.id)?.status).toBe('failed');
+      expect(cleanup).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('cancelled turn persistence (abort bridge)', () => {
+    const PARAMS = {
+      runId: 'run_20260824120000_abcd1234',
+      threadId: TUPLE.threadId,
+      resourceId: TUPLE.resourceId,
+      prompt: 'analyze the market',
+    };
+
+    function event(
+      type: AgentRunEvent['type'],
+      payload: Record<string, unknown>,
+    ): AgentRunEvent {
+      return { sequence: 0, type, payload, createdAt: '2026-08-24T12:00:00Z' };
+    }
+
+    it('builds the user message from the prompt and the assistant partial from events', () => {
+      const [user, assistant] = buildCancelledTurnMessages(PARAMS, [
+        event('text-delta', { text: 'Found 3 competitors. ' }),
+        event('tool-call', { toolCallId: 'tc-1', toolName: 'search_web', args: { query: 'x' } }),
+        event('tool-result', { toolCallId: 'tc-1', toolName: 'search_web', result: { results: [] } }),
+        event('text-delta', { text: 'Reading pages…' }),
+      ]);
+
+      expect(user.id).toBe(`${PARAMS.runId}-user`);
+      expect(user.role).toBe('user');
+      expect(user.content).toEqual({
+        format: 2,
+        parts: [{ type: 'text', text: 'analyze the market' }],
+      });
+
+      expect(assistant.id).toBe(`${PARAMS.runId}-assistant`);
+      expect(assistant.role).toBe('assistant');
+      const parts = assistant.content.parts as Array<Record<string, unknown>>;
+      expect(parts[0]).toMatchObject({ type: 'tool-call', toolCallId: 'tc-1', input: { query: 'x' } });
+      expect(parts[1]).toMatchObject({ type: 'tool-result', toolCallId: 'tc-1', output: { results: [] } });
+      const textPart = parts[parts.length - 1] as { type: string; text: string };
+      expect(textPart.type).toBe('text');
+      expect(textPart.text).toContain('Found 3 competitors. Reading pages…');
+      expect(textPart.text).toContain('Run dihentikan');
+    });
+
+    it('pairs an interrupted tool-call with a synthetic tool-result the next provider request needs', () => {
+      const [, assistant] = buildCancelledTurnMessages(PARAMS, [
+        event('tool-call', { toolCallId: 'tc-9', toolName: 'read_web_page', args: { url: 'https://x' } }),
+      ]);
+
+      const parts = assistant.content.parts as Array<Record<string, unknown>>;
+      const synthetic = parts.find(
+        (part) =>
+          part.type === 'tool-result' &&
+          part.toolCallId === 'tc-9' &&
+          (part.output as { type?: string })?.type === 'error-text',
+      );
+      expect(synthetic).toBeDefined();
+      expect((synthetic?.output as { value: string }).value).toContain('interrupted');
+    });
+
+    it('stamps synthetic tool-results with the interrupted marker so restored cards are not errors', () => {
+      // The client restore path reads this marker; without it the persisted
+      // `error-text` output renders the stopped tool as a failure after a
+      // page refresh (N9_3 action item 1).
+      const [, assistant] = buildCancelledTurnMessages(PARAMS, [
+        event('tool-call', { toolCallId: 'tc-inflight', toolName: 'read_web_page' }),
+        event('tool-call', { toolCallId: 'tc-done', toolName: 'search_web' }),
+        event('tool-result', { toolCallId: 'tc-done', toolName: 'search_web', result: 'ok' }),
+      ]);
+
+      const parts = assistant.content.parts as Array<Record<string, unknown>>;
+      const inflight = parts.find((part) => part.type === 'tool-result' && part.toolCallId === 'tc-inflight');
+      const done = parts.find((part) => part.type === 'tool-result' && part.toolCallId === 'tc-done');
+      expect(inflight?.interrupted).toBe(true);
+      expect(done?.interrupted).toBeUndefined();
+    });
+
+    it('timestamps the user prompt before the assistant partial so the pair restores in order', () => {
+      // The Postgres store tie-breaks equal createdAt by message id, and
+      // `${runId}-assistant` sorts before `${runId}-user`; equal timestamps
+      // restored the assistant bubble above the user prompt (N9_3 action
+      // item 1). The assistant row must land strictly later.
+      const [user, assistant] = buildCancelledTurnMessages(PARAMS, [
+        event('tool-call', { toolCallId: 'tc-1', toolName: 'search_web' }),
+      ]);
+
+      expect(user.createdAt.getTime()).toBeLessThan(assistant.createdAt.getTime());
+    });
+
+    it('bounds oversized tool results in the reconstructed turn', () => {
+      const [, assistant] = buildCancelledTurnMessages(PARAMS, [
+        event('tool-call', { toolCallId: 'tc-1', toolName: 'read_web_page' }),
+        event('tool-result', {
+          toolCallId: 'tc-1',
+          toolName: 'read_web_page',
+          result: { markdown: 'x'.repeat(10_000) },
+        }),
+      ]);
+
+      const parts = assistant.content.parts as Array<Record<string, unknown>>;
+      const result = parts.find((part) => part.type === 'tool-result');
+      expect(String(result?.output)).toContain('…[truncated]');
+    });
+
+    it('marks image attachments as not retained for multimodal cancelled turns', () => {
+      const [user] = buildCancelledTurnMessages(
+        { ...PARAMS, content: [{ type: 'text', text: 'see this' }, { type: 'image', image: 'QUJD', mimeType: 'image/png', filename: 'shot.png' }] },
+        [],
+      );
+      const parts = user.content.parts as Array<{ type: string; text: string }>;
+      expect(parts[0]).toEqual({ type: 'text', text: 'see this' });
+      expect(parts[1].text).toContain('shot.png');
+    });
+
+    it('persists new cancelled messages through memory.saveMessages and never throws', async () => {
+      const registry = new RunRegistry();
+      const saveMessages = vi.fn();
+      const memory: MemoryAccess = {
+        getThreadById: async () => null,
+        createThread: async () => undefined,
+        saveMessages,
+      };
+      const agent: RunnableAgent = {
+        stream: async () => streamOf([]),
+        getMemory: async () => memory,
+      };
+      const run = registry.createRun({
+        id: createRunId(),
+        ...TUPLE,
+        prompt: 'stop me',
+        requestAbort: () => undefined,
+      });
+      registry.requestCancel(run.id);
+
+      await persistCancelledTurn(registry, agent, {
+        runId: run.id,
+        ...TUPLE,
+        prompt: 'stop me',
+        abortSignal: new AbortController().signal,
+      });
+
+      expect(saveMessages).toHaveBeenCalledTimes(1);
+      const persisted = saveMessages.mock.calls[0]?.[0]?.messages as Array<{ id: string }>;
+      expect(persisted.map(({ id }) => id)).toEqual([`${run.id}-user`, `${run.id}-assistant`]);
+    });
+
+    it('runExecution persists the cancelled turn and skips completed runs', async () => {
+      const registry = new RunRegistry();
+      const saveMessages = vi.fn();
+      const memory: MemoryAccess = {
+        getThreadById: async () => null,
+        createThread: async () => undefined,
+        saveMessages,
+      };
+
+      const cancelledAgent: RunnableAgent = {
+        stream: async () => streamOf([
+          { type: 'text-delta', payload: { text: 'partial' } },
+        ]),
+        getMemory: async () => memory,
+      };
+      const controller = new AbortController();
+      const cancelledRun = registry.createRun({
+        id: createRunId(),
+        ...TUPLE,
+        prompt: 'cancel me',
+        requestAbort: () => controller.abort(),
+      });
+      registry.requestCancel(cancelledRun.id);
+      await runExecution(registry, cancelledAgent, {
+        runId: cancelledRun.id,
+        ...TUPLE,
+        prompt: 'cancel me',
+        abortSignal: controller.signal,
+      });
+      expect(registry.getRun(cancelledRun.id)?.status).toBe('cancelled');
+      expect(saveMessages).toHaveBeenCalledTimes(1);
+
+      const completedAgent: RunnableAgent = {
+        stream: async () => streamOf([
+          { type: 'text-delta', payload: { text: 'done' } },
+        ]),
+        getMemory: async () => memory,
+      };
+      const completedRun = registry.createRun({
+        id: createRunId(),
+        ...TUPLE,
+        prompt: 'finish me',
+        requestAbort: () => undefined,
+      });
+      await runExecution(registry, completedAgent, {
+        runId: completedRun.id,
+        ...TUPLE,
+        prompt: 'finish me',
+        abortSignal: new AbortController().signal,
+      });
+      // Mastra persists completed turns itself; the bridge must not duplicate.
+      expect(registry.getRun(completedRun.id)?.status).toBe('completed');
+      expect(saveMessages).toHaveBeenCalledTimes(1);
+    });
   });
 });
