@@ -366,27 +366,23 @@ describe('social-media-supervisor-agent (three sub-agents and routing)', () => {
 });
 
 describe('thread title generation (main agents only)', () => {
-  it('enables Mastra title generation on the five main agents', async () => {
-    for (const agent of [
-      mainAgent,
-      qaWebAgent,
-      qaAndroidAgent,
-      pmAgent,
-      socialMediaSupervisorAgent,
-    ]) {
-      const memory = await agent.getMemory();
-      expect(memory?.getMergedThreadConfig().generateTitle).toBe(true);
-    }
+  it.each([
+    ['main-agent', mainAgent],
+    ['qa-web-agent', qaWebAgent],
+    ['qa-android-agent', qaAndroidAgent],
+    ['pm-agent', pmAgent],
+    ['social-media-supervisor-agent', socialMediaSupervisorAgent],
+  ] as const)('enables Mastra title generation on %s', async (_id, agent) => {
+    const memory = await agent.getMemory();
+    expect(memory?.getMergedThreadConfig().generateTitle).toBe(true);
   });
 
-  it('keeps title generation off for sub-agents', async () => {
-    for (const agent of [
-      socialMediaContentWriter,
-      socialMediaStrategistAgent,
-      visualContentAgent,
-    ]) {
-      const memory = await agent.getMemory();
-      expect(memory?.getMergedThreadConfig().generateTitle).toBe(false);
-    }
+  it.each([
+    ['social-media-content-writer', socialMediaContentWriter],
+    ['social-media-strategist-agent', socialMediaStrategistAgent],
+    ['visual-content-agent', visualContentAgent],
+  ] as const)('keeps title generation off for sub-agent %s', async (_id, agent) => {
+    const memory = await agent.getMemory();
+    expect(memory?.getMergedThreadConfig().generateTitle).toBe(false);
   });
 });

@@ -56,6 +56,23 @@ describe('agent-scoped memory threads', () => {
     ]);
   });
 
+  it("renders untitled first-turn threads through the 'New conversation' fallback", async () => {
+    listMemoryThreads.mockResolvedValue({
+      threads: [
+        { id: 'main-agent-local-user-a' },
+        { id: 'main-agent-local-user-b', title: '' },
+        { id: 'main-agent-local-user-c', title: '   ' },
+      ],
+    });
+
+    const threads = await listAgentThreads('local-user', 'main-agent');
+    expect(threads.map((thread) => thread.title)).toEqual([
+      'New conversation',
+      'New conversation',
+      'New conversation',
+    ]);
+  });
+
   it('rejects foreign message reads before calling Mastra', async () => {
     await expect(
       listThreadMessages('main-agent', 'qa-web-agent-local-user-b', 'local-user'),
