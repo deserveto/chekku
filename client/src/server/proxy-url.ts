@@ -24,9 +24,24 @@ export function normalizeAgentProxyPath(
     path.length === 1 &&
     ROOT_CUSTOM_ROUTES.has(path[0]);
 
-  return path[0] === 'api' || isRootCustomRoute
+  const normalized = path[0] === 'api' || isRootCustomRoute
     ? [...path]
     : ['api', ...path];
+
+  // Mastra's native workflow HTTP API is a server-side transport with no
+  // browser consumers: the app workflows (weekly-social-drafts, ...) are
+  // triggered server-side over AGENT_URL directly, never through this
+  // proxy. Wrapping an agent with `createDurableAgent` also auto-registers
+  // a general-purpose engine workflow (`durable-agentic-loop`) whose input
+  // accepts caller-chosen agent ids and run options, and the agent server
+  // runs without an auth provider — so proxying this namespace would let
+  // any signed-in user drive any agent outside the guarded `/runs` surface
+  // (no 409 lock, 429 caps, watchdog, or ownership collapse). Block it.
+  if (normalized[0] === 'api' && normalized[1] === 'workflows') {
+    throw new Error('Workflow API is not available through the agent proxy');
+  }
+
+  return normalized;
 }
 
 export function buildAgentProxyUrl(

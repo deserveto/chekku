@@ -3,9 +3,13 @@
  *
  * A run's lifetime is the agent server process: execution is driven by a
  * server-owned AbortController, never by an HTTP connection, so navigating
- * away or reloading the browser never cancels a run. Because a server
- * restart kills both the execution and this registry together, no durable
- * run storage exists — persisted conversation state remains Mastra Memory.
+ * away or reloading the browser never cancels a run. A server restart kills
+ * both the execution and this registry together — the run-status surface
+ * (status, replay, 409 locks) has no durable storage of its own. The single
+ * sanctioned exception is the pm-agent durable pilot: its execution snapshots
+ * persist through the workflow engine into Postgres, but they never feed
+ * this registry's HTTP surface and carry no automatic recovery. Persisted
+ * conversation state remains Mastra Memory.
  */
 
 export type AgentRunStatus = 'running' | 'completed' | 'failed' | 'cancelled';
