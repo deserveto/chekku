@@ -2,7 +2,6 @@ import Link from 'next/link';
 
 import { AgentIcon } from '@/components/agents/agent-icon';
 import { StudioNav } from '@/components/studio/studio-nav';
-import { ReportTabs } from '@/components/reports/report-tabs';
 import { requireUserId } from '@/server/auth';
 
 export const dynamic = 'force-dynamic';
@@ -23,7 +22,6 @@ export default async function ReportsPage() {
         </header>
 
         <section className="studio-section">
-          <ReportTabs active="all" />
           <div className="studio-report-choice-grid">
             <Link className="studio-agent-card studio-report-choice" href="/reports/weekly">
               <div className="studio-agent-card-top">
@@ -45,9 +43,6 @@ export default async function ReportsPage() {
                   <dd>PM Agent</dd>
                 </div>
               </dl>
-              <div className="studio-card-actions">
-                <span className="studio-button studio-button-primary" aria-hidden="true">Browse reports →</span>
-              </div>
             </Link>
             <Link className="studio-agent-card studio-report-choice" href="/reports/competitive">
               <div className="studio-agent-card-top">
@@ -69,9 +64,6 @@ export default async function ReportsPage() {
                   <dd>PM Agent</dd>
                 </div>
               </dl>
-              <div className="studio-card-actions">
-                <span className="studio-button studio-button-primary" aria-hidden="true">Browse analyses →</span>
-              </div>
             </Link>
           </div>
         </section>

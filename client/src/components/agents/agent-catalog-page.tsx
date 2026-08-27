@@ -10,12 +10,11 @@ import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
 import {
   AgentApiError,
   deleteStoredAgent,
-  ensureStoredAgentUsesServerGateway,
   listAllAgents,
 } from '@/lib/stored-agents';
+import { resolveAgentChatThreadId } from '@/lib/agent-chat-entry';
+import { listActiveRuns } from '@/lib/agent-runs';
 import { buildChatHref } from '@/lib/chat-route';
-import { loadModelRegistry } from '@/lib/model-registry';
-import { createOwnedThreadId } from '@/lib/thread-id';
 import {
   RESERVED_AGENT_IDS,
   type ChekkuAgentSummary,
@@ -83,6 +82,26 @@ export function AgentCatalogPage({
     };
   }, []);
 
+  const [runningAgentIds, setRunningAgentIds] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    void listActiveRuns()
+      .then((runs) => {
+        if (!cancelled) {
+          setRunningAgentIds(new Set(runs.map((run) => run.agentId)));
+        }
+      })
+      .catch(() => {
+        // Without the run surface the catalog simply shows no run chips.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return agents;
@@ -99,9 +118,7 @@ export function AgentCatalogPage({
     setError(undefined);
 
     try {
-      const modelRegistry = await loadModelRegistry();
-      await ensureStoredAgentUsesServerGateway(target, modelRegistry);
-      const threadId = createOwnedThreadId(target.id, resourceId);
+      const threadId = await resolveAgentChatThreadId(resourceId, target);
       router.push(buildChatHref(target.id, threadId));
     } catch (reason) {
       setError(
@@ -167,8 +184,8 @@ export function AgentCatalogPage({
         <section className="studio-section">
           <div className="studio-section-heading">
             <div>
-              <p className="studio-eyebrow">Available agents</p>
-              <h2 ref={registryHeadingRef} tabIndex={-1}>Registry</h2>
+              <p className="studio-eyebrow">Registry</p>
+              <h2 ref={registryHeadingRef} tabIndex={-1}>Available agents</h2>
             </div>
 
             <label className="studio-search">
@@ -243,6 +260,11 @@ export function AgentCatalogPage({
                     </dl>
 
                     <div className="studio-card-actions">
+                      {runningAgentIds.has(agent.id) && (
+                        <span className="studio-running-chip">
+                          <span aria-hidden="true">●</span> Running
+                        </span>
+                      )}
                       <button
                         className="studio-button studio-button-primary"
                         type="button"
@@ -284,7 +306,7 @@ export function AgentCatalogPage({
       <ConfirmationDialog
         open={Boolean(pendingDelete)}
         title={pendingDelete ? `Delete ${pendingDelete.name}?` : 'Delete agent?'}
-        description="This removes the stored agent and cannot be undone. Built-in agents are never affected."
+        description="This permanently removes the stored agent. Its past conversations stay in Memory but can no longer be opened. Built-in agents are never affected."
         pending={Boolean(pendingDelete && deletingAgentId === pendingDelete.id)}
         fallbackFocusRef={registryHeadingRef}
         onCancel={() => setPendingDelete(undefined)}

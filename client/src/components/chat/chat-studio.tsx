@@ -111,6 +111,26 @@ function readTaskDockCollapsedPreference(): boolean {
   }
 }
 
+/**
+ * Message timestamps: time only for today; otherwise a short date anchor so
+ * multi-day threads keep temporal context.
+ */
+function formatMessageTime(value: string | number | Date): string {
+  const date = new Date(value);
+  const now = new Date();
+  const time = date.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  if (date.toDateString() === now.toDateString()) return time;
+  const day = date.toLocaleDateString([], {
+    year: date.getFullYear() === now.getFullYear() ? undefined : 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
+  return `${day} · ${time}`;
+}
+
 function safeDisplay(value: unknown): string {
   let text: string;
   if (value === undefined) return '';
@@ -272,6 +292,7 @@ export function ChatStudio({
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [commandOpen, setCommandOpen] = useState(false);
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [commandIndex, setCommandIndex] = useState(0);
   const [skills, setSkills] = useState<AgentSkillSummary[]>([]);
   const [search, setSearch] = useState('');
@@ -1387,7 +1408,6 @@ export function ChatStudio({
           className={`chat-conversation ${
             messages.length ? 'has-messages' : ''
           }`}
-          aria-live="polite"
         >
           {loading ? (
             <div className="chat-loading">
@@ -1399,6 +1419,32 @@ export function ChatStudio({
               <h2>
                 What should we <em>do?</em>
               </h2>
+              {skills.length > 0 ? (
+                <div
+                  className="chat-welcome-skills"
+                  role="group"
+                  aria-label="Skills for this agent"
+                >
+                  {skills.slice(0, 4).map((skill) => (
+                    <button
+                      key={skill.name}
+                      type="button"
+                      className="chat-welcome-skill"
+                      title={skill.description || undefined}
+                      onClick={() => {
+                        applySelection(skill.name);
+                        textareaRef.current?.focus();
+                      }}
+                    >
+                      <span aria-hidden="true">/</span>
+                      {skill.name}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              <p className="chat-welcome-hint">
+                / for skills · attach files · paste images
+              </p>
             </div>
           ) : (
             <div className="chat-message-list">
@@ -1443,14 +1489,7 @@ export function ChatStudio({
                           ? currentAgent?.name || 'Chekku'
                           : 'You'}
                       </strong>
-                      <time>
-                        {new Date(
-                          message.createdAt,
-                        ).toLocaleTimeString([], {
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
-                      </time>
+                      <time>{formatMessageTime(message.createdAt)}</time>
                     </div>
 
                     {partGroups ? (
@@ -1531,11 +1570,23 @@ export function ChatStudio({
                       <div className="chat-message-actions">
                         <button
                           type="button"
-                          onClick={() =>
-                            void navigator.clipboard.writeText(copyText)
+                          className={
+                            copiedMessageId === message.id ? 'copied' : ''
                           }
+                          onClick={() => {
+                            void navigator.clipboard
+                              .writeText(copyText)
+                              .then(() => {
+                                setCopiedMessageId(message.id);
+                                window.setTimeout(() => {
+                                  setCopiedMessageId((current) =>
+                                    current === message.id ? null : current,
+                                  );
+                                }, 2000);
+                              });
+                          }}
                         >
-                          Copy
+                          {copiedMessageId === message.id ? 'Copied' : 'Copy'}
                         </button>
                       </div>
                     )}
@@ -1546,6 +1597,9 @@ export function ChatStudio({
             </div>
           )}
         </section>
+        <p className="studio-sr-only" role="status">
+          {runActive ? 'Assistant is responding…' : 'Assistant is idle'}
+        </p>
 
         <div className="chat-composer-wrap">
           {error && (
@@ -1555,8 +1609,10 @@ export function ChatStudio({
           )}
           {!modelReady && !loading && (
             <div className="studio-alert studio-alert-error">
-              No model was returned by the server’s <code>/models</code>{' '}
-              endpoint.
+              The agent server returned no models. Set{' '}
+              <code>LLM_BASE_URL</code>, <code>LLM_API_KEY</code>, and{' '}
+              <code>LLM_DEFAULT_MODEL</code> in <code>agent/.env</code>, then
+              restart the agent server.
             </div>
           )}
 
@@ -1630,6 +1686,14 @@ export function ChatStudio({
                 }}
                 onKeyDown={keyDown}
                 onPaste={paste}
+                role="combobox"
+                aria-expanded={commandOpen && filteredSkills.length > 0}
+                aria-controls={
+                  commandOpen && filteredSkills.length > 0
+                    ? 'chat-command-menu'
+                    : undefined
+                }
+                aria-autocomplete="list"
                 placeholder={
                   modelReady
                     ? `Message ${currentAgent?.name || agentId}…`

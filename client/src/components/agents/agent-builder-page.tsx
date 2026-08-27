@@ -1,10 +1,17 @@
 'use client';
 
 import Link from 'next/link';
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import {
+  FormEvent,
+  useEffect,
+  useMemo,
+  useState,
+  type MouseEvent,
+} from 'react';
 import { useRouter } from 'next/navigation';
 import { StudioNav } from '@/components/studio/studio-nav';
 import { AgentIcon } from '@/components/agents/agent-icon';
+import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
 import {
   AGENT_ICON_IDS,
   defaultAgentIcon,
@@ -132,6 +139,7 @@ export function AgentBuilderPage({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string>();
 
+  const [initialValues, setInitialValues] = useState<Values>(EMPTY);
   useEffect(() => {
     let cancelled = false;
 
@@ -163,7 +171,7 @@ export function AgentBuilderPage({
             ? migratedModel
             : modelRegistry.defaultModel || modelIds[0] || '';
 
-          setValues({
+          const loaded: Values = {
             id: detail.id,
             name: detail.name,
             description: detail.description || '',
@@ -175,7 +183,9 @@ export function AgentBuilderPage({
             mcpClients: detail.mcpClients,
             iconKey: detail.iconKey ?? defaultAgentIcon(detail.id),
             metadata: detail.metadata,
-          });
+          };
+          setInitialValues(loaded);
+          setValues(loaded);
         } else {
           setValues((current) => ({
             ...current,
@@ -205,6 +215,24 @@ export function AgentBuilderPage({
     };
   }, [agentId, mode]);
 
+  const [idTouched, setIdTouched] = useState(false);
+  const [pendingExit, setPendingExit] = useState<string | null>(null);
+
+  const dirty = useMemo(
+    () => JSON.stringify(values) !== JSON.stringify(initialValues),
+    [values, initialValues],
+  );
+
+  useEffect(() => {
+    if (!dirty) return;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [dirty]);
+
   const duplicateIds = useMemo(() => {
     const copy = new Set(existingIds);
     if (mode === 'edit' && agentId) copy.delete(agentId);
@@ -212,18 +240,29 @@ export function AgentBuilderPage({
   }, [agentId, existingIds, mode]);
 
   const idIssue =
-    mode === 'create'
+    mode === 'create' && idTouched
       ? validateAgentId(values.id, duplicateIds)
       : null;
+  const idValidNow =
+    mode === 'edit' || validateAgentId(values.id, duplicateIds) === null;
 
   const valid =
-    (mode === 'edit' || idIssue === null) &&
+    idValidNow &&
     values.name.trim().length > 0 &&
     values.instructions.trim().length > 0 &&
     values.model.trim().length > 0;
 
   const set = <K extends keyof Values>(key: K, value: Values[K]) => {
     setValues((current) => ({ ...current, [key]: value }));
+  };
+
+  const guardExit = (
+    event: MouseEvent<HTMLAnchorElement>,
+    target: string,
+  ) => {
+    if (!dirty) return;
+    event.preventDefault();
+    setPendingExit(target);
   };
 
   const submit = async (event: FormEvent) => {
@@ -276,12 +315,16 @@ export function AgentBuilderPage({
             <p className="studio-eyebrow">Agent builder</p>
             <h1>{mode === 'create' ? 'Create an agent' : 'Edit agent'}</h1>
             <p>
-              This form writes a stored-agent record. Mastra hydrates that
-              record into a runtime Agent on the next request.
+              Save an agent with its own model, tools, and instructions. It
+              joins your registry and is ready to chat immediately.
             </p>
           </div>
 
-          <Link className="studio-button" href="/agents">
+          <Link
+            className="studio-button"
+            href="/agents"
+            onClick={(event) => guardExit(event, '/agents')}
+          >
             ← Back to registry
           </Link>
         </header>
@@ -306,7 +349,11 @@ export function AgentBuilderPage({
                   <span>Agent ID</span>
                   <input
                     value={values.id}
-                    onChange={(event) => set('id', event.target.value)}
+                    onChange={(event) => {
+                      set('id', event.target.value);
+                      setIdTouched(true);
+                    }}
+                    onBlur={() => setIdTouched(true)}
                     disabled={mode === 'edit' || submitting}
                     placeholder="research-assistant"
                     aria-invalid={Boolean(idIssue)}
@@ -563,7 +610,11 @@ export function AgentBuilderPage({
             )}
 
             <footer className="studio-builder-footer">
-              <Link className="studio-button" href="/agents">
+              <Link
+                className="studio-button"
+                href="/agents"
+                onClick={(event) => guardExit(event, '/agents')}
+              >
                 Cancel
               </Link>
               <button
@@ -581,6 +632,18 @@ export function AgentBuilderPage({
           </form>
         )}
       </main>
+      <ConfirmationDialog
+        open={pendingExit !== null}
+        title="Discard unsaved changes?"
+        description="Your edits have not been saved."
+        confirmLabel="Discard"
+        onCancel={() => setPendingExit(null)}
+        onConfirm={() => {
+          const target = pendingExit;
+          setPendingExit(null);
+          if (target) router.push(target);
+        }}
+      />
     </div>
   );
 }

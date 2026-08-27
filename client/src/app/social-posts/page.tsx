@@ -1,6 +1,7 @@
 import Link from 'next/link';
 
 import { StudioNav } from '@/components/studio/studio-nav';
+import { BrandMark } from '@/components/ui/brand-mark';
 import { requireUserId } from '@/server/auth';
 import { formatSocialPostCreatedAt } from '@/server/social-post-format';
 import {
@@ -44,8 +45,15 @@ export default async function SocialPostsPage() {
             </div>
           ) : posts.length === 0 ? (
             <div className="studio-empty-state">
+              <BrandMark />
               <h3>No saved drafts</h3>
-              <p>Scheduled social posts will appear here after the weekly workflow runs.</p>
+              <p>
+                Scheduled social posts appear here after the weekly workflow
+                runs (Mondays 09:00 Asia/Jakarta).
+              </p>
+              {process.env.NODE_ENV !== 'production' ? (
+                <RunWeeklyDraftsButton />
+              ) : null}
             </div>
           ) : (
             <div

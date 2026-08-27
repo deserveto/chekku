@@ -1,3 +1,4 @@
+import { DefaultAgentField } from '@/components/settings/default-agent-field';
 import { StudioNav } from '@/components/studio/studio-nav';
 import { requireUserId } from '@/server/auth';
 
@@ -30,6 +31,16 @@ export default async function SettingsPage() {
               Use the account menu in the sidebar to sign out. Profile editing and
               password management will appear here when those server operations are enabled.
             </p>
+          </article>
+          <article className="studio-panel studio-form-panel">
+            <div className="studio-panel-heading">
+              <span>02</span>
+              <div>
+                <h2>Workspace</h2>
+                <p>Preferences for this browser profile.</p>
+              </div>
+            </div>
+            <DefaultAgentField />
           </article>
         </section>
       </main>

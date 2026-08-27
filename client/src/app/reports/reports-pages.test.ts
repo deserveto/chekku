@@ -77,8 +77,9 @@ describe('reports landing page', () => {
     expect(markup).toContain('href="/reports/competitive"');
     expect(markup).toContain('>Competitive Analyses</h2>');
     expect(mocks.listReports).not.toHaveBeenCalled();
-    expect(markup).toContain('aria-label="Report views"');
-    expect(markup).toContain('aria-current="page"');
+    // The overview drops the view switcher: the two choice cards do the
+    // choosing, so tabs would only repeat the page heading beneath itself.
+    expect(markup).not.toContain('aria-label="Report views"');
   });
 
   it('gives report choices visible focus styles and one mobile column', () => {
