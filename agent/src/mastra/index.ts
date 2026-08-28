@@ -1,5 +1,4 @@
 import 'dotenv/config';
-import { Mastra } from '@mastra/core/mastra';
 import { MastraEditor } from '@mastra/editor';
 import { PostgresStore } from '@mastra/pg';
 import { PinoLogger } from '@mastra/loggers';
@@ -9,6 +8,7 @@ import {
 } from './tasks/task-state-store.js';
 import { env } from '../config/env.js';
 import { requestIdInjector, requestLogger } from '../config/middleware.js';
+import { MastraWithDurableStoredAgents } from './durable-stored-agents.js';
 import { registerTaskSignalProcessors } from './tasks/task-signals.js';
 import { durableMainAgent } from '../agents/main-agent.js';
 import { durablePmAgent } from '../agents/pm-agent.js';
@@ -64,15 +64,17 @@ if (!storage.stores?.threadState) {
   };
 }
 if (storage.stores) wireThreadStateEviction(storage.stores);
-export const mastra = new Mastra({
+
+export const mastra = new MastraWithDurableStoredAgents({
   agents: {
     // Durable execution (N8_4 pilot + Task D rollout Fase 1 & 2): main, pm,
     // qa-web, and the social cluster (strategist, supervisor, visual) run
     // through `createDurableAgent` — composition keys and public ids are
     // unchanged, so `getAgentById` and the `/runs` surface are unaffected.
-    // Excluded by design: social-media-content-writer (the wrapper does not
-    // carry Telegram channels), qa-android-agent (not production-ready),
-    // and stored agents (hydration owned by MastraEditor).
+    // Stored agents are wrapped at registration time by
+    // MastraWithDurableStoredAgents (Fase 3). Excluded by design:
+    // social-media-content-writer (the wrapper does not carry Telegram
+    // channels) and qa-android-agent (not production-ready).
     mainAgent: durableMainAgent,
     pmAgent: durablePmAgent,
     qaWebAgent: durableQaWebAgent,
