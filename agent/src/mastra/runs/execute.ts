@@ -51,7 +51,6 @@ export interface MemoryAccess {
   createThread(params: {
     threadId: string;
     resourceId: string;
-    title?: string;
   }): Promise<unknown>;
 }
 
@@ -221,21 +220,16 @@ export function chunkToRunEvent(
   }
 }
 
-export function buildThreadTitle(prompt: string): string {
-  // Truncate on Unicode code points, not UTF-16 code units: slicing a
-  // surrogate pair in half would end the title in a lone surrogate.
-  const characters = Array.from(prompt);
-  if (characters.length <= 52) return prompt;
-  return `${characters.slice(0, 49).join('').trim()}…`;
-}
-
 /**
  * Creates the Memory thread record for a first turn before execution starts,
- * titled from the prompt. Mastra's stream would create the thread record on
- * its own once consumption begins, but doing it here (before the 202 goes
- * out) means the thread and its name are already visible to thread listings
- * the moment the client is told the run started. Best-effort: on failure,
- * Mastra's own thread creation during the run still applies.
+ * untitled. The record must exist before the 202 goes out so the thread is
+ * listed the moment the client is told the run started, but the title stays
+ * empty on purpose: Mastra's native title generation (generateTitle on the
+ * agent's Memory) fires at first-turn completion only while the thread has no
+ * title, and a pre-set truncated prompt title would suppress it. The client
+ * renders its 'New conversation' fallback until the generated title lands.
+ * Best-effort: on failure, Mastra's own thread creation during the run still
+ * applies.
  */
 export async function ensureFirstTurnThread(
   agent: RunnableAgent,
@@ -249,10 +243,9 @@ export async function ensureFirstTurnThread(
     await memory.createThread({
       threadId: params.threadId,
       resourceId: params.resourceId,
-      title: buildThreadTitle(params.prompt),
     });
   } catch {
-    // Title creation is best-effort; the run itself must still start.
+    // Thread creation is best-effort; the run itself must still start.
   }
 }
 

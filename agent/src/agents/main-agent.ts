@@ -11,7 +11,7 @@ const mainAgentConfig: AgentConfig<string, ToolsInput, undefined, ProviderContex
   description: 'A general-purpose AI assistant for everyday tasks.',
   model: () => getServerModel(),
   requestContextSchema: providerContextSchema,
-  memory: createAgentMemory(),
+  memory: createAgentMemory({ generateTitle: true }),
   signals: createTaskSignals(),
   inputProcessors: [createAgentContextLimiter(), createTaskNudgeProcessor(), createCharBudgetGuard()],
   instructions: `You are Chekku Assistant, a general-purpose AI assistant inside Chekku.

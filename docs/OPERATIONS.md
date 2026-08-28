@@ -192,7 +192,7 @@ The chat composer accepts text files, images, and PDFs. Processing is entirely i
 - Text files are capped at 256 Ki UTF-16 chars each (a UTF-16-unit count, not bytes — CJK text can reach ~1 MiB of UTF-8); larger files are truncated with a visible marker.
 - Images larger than 1568 px long edge or 600 KB are downscaled and re-encoded as JPEG before sending.
 - PDFs render to page images in the browser: at most 20 pages, each ≤1580 px long edge. A `pdfjs-dist` worker loads from the client bundle; if the bundler cannot emit it, pdf.js falls back to its main-thread worker.
-- Attachment filenames are sanitized (control characters collapsed, 120 code points max) before they reach the model prompt or a persisted thread title.
+- Attachment filenames are sanitized (control characters collapsed, 120 code points max) before they reach the model prompt (and, through it, the LLM thread-title input).
 
 The agent server enforces its own `content` bounds on every run start (the browser caps are conveniences, not the security boundary): at most 200 parts, text parts ≤2.5 Mi chars, image base64 ≤2 Mi chars per part and ≤8 Mi chars total, `data:` URL image values rejected, filenames ≤256 chars. Violations return the fixed 400 `content must be valid multimodal message parts`.
 

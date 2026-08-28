@@ -132,7 +132,7 @@ const socialMediaSupervisorAgentConfig: AgentConfig<string, ToolsInput, undefine
     'Supervisor for the social-media surface. Receives user requests and delegates drafting, planning, and visual-generation work to its sub-agents, running lightweight web research (search_web, read_web_page) itself when a request needs a quick lookup.',
   model: () => getServerModel(),
   requestContextSchema: providerContextSchema,
-  memory: createAgentMemory(),
+  memory: createAgentMemory({ generateTitle: true }),
   signals: createTaskSignals(),
   tools: {
     search_web: searchWebTool,

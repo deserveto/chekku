@@ -57,8 +57,23 @@ export function getCharBudget(modelId: string): number {
   );
 }
 
-export function createAgentMemory(): Memory {
-  return new Memory({ options: { lastMessages: AGENT_MEMORY_LAST_MESSAGES } });
+/**
+ * Shared Memory factory. `generateTitle` opts an agent into Mastra's native
+ * thread title generation (first-turn completion, agent's own model). Note:
+ * Mastra serializes the recent user message for the title call OUTSIDE the
+ * agent's inputProcessors, so the context limiter and char-budget guard do
+ * not bound it; an oversized first turn can make the provider reject the
+ * title request, which Mastra swallows (thread keeps the untitled fallback).
+ */
+export function createAgentMemory(
+  options: { generateTitle?: boolean } = {},
+): Memory {
+  return new Memory({
+    options: {
+      lastMessages: AGENT_MEMORY_LAST_MESSAGES,
+      generateTitle: options.generateTitle === true,
+    },
+  });
 }
 
 type VisionCountableMessage = {

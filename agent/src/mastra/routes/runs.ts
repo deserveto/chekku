@@ -213,10 +213,10 @@ export const startRunRoute = registerApiRoute('/runs', {
       return c.json({ error: 'Unknown agent' }, 404);
     }
 
-    // First turn: create the Memory thread record (titled from the prompt)
-    // before execution starts, so the thread and its name are visible in
-    // listings the moment the run starts — not when Mastra persists the
-    // first completed turn.
+    // First turn: create the Memory thread record (untitled — Mastra's
+    // generateTitle names the thread at first-turn completion) before
+    // execution starts, so the thread is visible in listings the moment the
+    // run starts, not when Mastra persists the first completed turn.
     await ensureFirstTurnThread(agent, { threadId, resourceId, prompt });
 
     const runId = createRunId();

@@ -111,7 +111,7 @@ const qaAndroidAgentConfig: AgentConfig<string, ToolsInput, undefined, ProviderC
   requestContextSchema: providerContextSchema,
   signals: createTaskSignals(),
   inputProcessors: [createAgentContextLimiter(), gatewayCompatibilityProcessor, createTaskNudgeProcessor(), createCharBudgetGuard()],
-  memory: createAgentMemory(),
+  memory: createAgentMemory({ generateTitle: true }),
   tools: async () => ({
     ...(await loadMaestroMcpTools()),
     run_maestro_flow: runMaestroFlowTool,
