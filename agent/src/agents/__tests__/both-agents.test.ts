@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { mastra } from '../../mastra/index.js';
-import { mainAgent } from '../main-agent.js';
+import { durableMainAgent, mainAgent } from '../main-agent.js';
 import { durablePmAgent, pmAgent } from '../pm-agent.js';
-import { qaWebAgent } from '../qa-web-agent.js';
+import { durableQaWebAgent, qaWebAgent } from '../qa-web-agent.js';
 import { qaAndroidAgent } from '../qa-android-agent.js';
 import { socialMediaContentWriter } from '../social-media-content-writer.js';
 import { socialMediaStrategistAgent } from '../social-media-strategist-agent.js';
@@ -119,6 +119,53 @@ describe('pm-agent (durable execution pilot, N8_4)', () => {
 
   it('resolves by public id through getAgentById', () => {
     expect(mastra.getAgentById('pm-agent')).toBe(durablePmAgent);
+  });
+});
+
+describe('durable rollout (Task D, Fase 1: qa-web + main)', () => {
+  it('wraps qa-web-agent with createDurableAgent and keeps its identity', () => {
+    expect(durableQaWebAgent.id).toBe('qa-web-agent');
+    expect(durableQaWebAgent.name).toBe('QA Web Agent');
+  });
+
+  it('registers the durable qa-web instance in the composition root', () => {
+    const agents = mastra.listAgents();
+    expect(agents.qaWebAgent).toBe(durableQaWebAgent);
+    expect(agents.qaWebAgent).not.toBe(qaWebAgent);
+    expect(mastra.getAgentById('qa-web-agent')).toBe(durableQaWebAgent);
+  });
+
+  it('delegates the wrapped qa-web agent memory and tools', async () => {
+    await expect(durableQaWebAgent.getMemory()).resolves.toBe(
+      await qaWebAgent.getMemory(),
+    );
+    expect(Object.keys(await durableQaWebAgent.listTools()).sort()).toEqual(
+      Object.keys(await qaWebAgent.listTools()).sort(),
+    );
+  });
+
+  it('wraps main-agent with createDurableAgent and keeps its identity', () => {
+    expect(durableMainAgent.id).toBe('main-agent');
+    expect(durableMainAgent.name).toBe('Chekku Assistant');
+  });
+
+  it('registers the durable main instance in the composition root', () => {
+    const agents = mastra.listAgents();
+    expect(agents.mainAgent).toBe(durableMainAgent);
+    expect(agents.mainAgent).not.toBe(mainAgent);
+    expect(mastra.getAgentById('main-agent')).toBe(durableMainAgent);
+  });
+
+  it('keeps the excluded agents on plain instances', () => {
+    const agents = mastra.listAgents();
+    // social-media-content-writer: the wrapper does not carry Telegram
+    // channels; qa-android-agent: not production-ready; the social cluster
+    // and stored agents stay plain until Fase 2 / later review.
+    expect(agents.socialMediaContentWriter).toBe(socialMediaContentWriter);
+    expect(agents.socialMediaSupervisorAgent).toBe(socialMediaSupervisorAgent);
+    expect(agents.visualContentAgent).toBe(visualContentAgent);
+    expect(agents.socialMediaStrategistAgent).toBe(socialMediaStrategistAgent);
+    expect(agents.qaAndroidAgent).toBe(qaAndroidAgent);
   });
 });
 

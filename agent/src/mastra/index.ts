@@ -10,9 +10,9 @@ import {
 import { env } from '../config/env.js';
 import { requestIdInjector, requestLogger } from '../config/middleware.js';
 import { registerTaskSignalProcessors } from './tasks/task-signals.js';
-import { mainAgent } from '../agents/main-agent.js';
+import { durableMainAgent } from '../agents/main-agent.js';
 import { durablePmAgent } from '../agents/pm-agent.js';
-import { qaWebAgent } from '../agents/qa-web-agent.js';
+import { durableQaWebAgent } from '../agents/qa-web-agent.js';
 import { qaAndroidAgent } from '../agents/qa-android-agent.js';
 import {
   socialMediaContentWriter,
@@ -66,13 +66,16 @@ if (!storage.stores?.threadState) {
 if (storage.stores) wireThreadStateEviction(storage.stores);
 export const mastra = new Mastra({
   agents: {
-    mainAgent,
-    // Durable pilot (N8_4): the PM Agent's long-running analyses run through
-    // `createDurableAgent`. The composition key stays `pmAgent` and the public
-    // id stays `pm-agent`, so `getAgentById` and the `/runs` surface are
-    // unchanged; every other agent still registers its plain instance.
+    // Durable execution (N8_4 pilot + Task D rollout): main, pm, and
+    // qa-web run through `createDurableAgent` — composition keys and public
+    // ids are unchanged, so `getAgentById` and the `/runs` surface are
+    // unaffected. Excluded by design: social-media-content-writer (the
+    // wrapper does not carry Telegram channels), qa-android-agent (not
+    // production-ready), and stored agents (hydration owned by
+    // MastraEditor).
+    mainAgent: durableMainAgent,
     pmAgent: durablePmAgent,
-    qaWebAgent,
+    qaWebAgent: durableQaWebAgent,
     qaAndroidAgent,
     socialMediaContentWriter,
     socialMediaStrategistAgent,
