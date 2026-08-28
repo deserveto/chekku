@@ -55,12 +55,27 @@ export interface MemoryAccess {
   }): Promise<unknown>;
 }
 
-const MAX_ERROR_TEXT_BYTES = 500;
+const MAX_ERROR_TEXT_CHARS = 500;
 
 function sanitizeErrorText(error: unknown): string {
-  const text =
-    error instanceof Error ? error.message : String(error ?? 'Unknown error');
-  return text.slice(0, MAX_ERROR_TEXT_BYTES);
+  let text: string;
+  if (typeof error === 'string') text = error;
+  else if (error instanceof Error) text = error.message;
+  else if (typeof error === 'number' || typeof error === 'bigint') {
+    text = String(error);
+  } else {
+    // Objects, symbols, null, undefined: coercing with String() would
+    // surface "[object Object]" in run events.
+    text = '';
+  }
+  const source = text || 'Unknown error';
+  // Truncate on Unicode code points, not UTF-16 code units: slicing a
+  // surrogate pair in half would end the error in a lone surrogate
+  // (same rule as buildThreadTitle below).
+  const characters = Array.from(source);
+  return characters.length <= MAX_ERROR_TEXT_CHARS
+    ? source
+    : characters.slice(0, MAX_ERROR_TEXT_CHARS).join('');
 }
 
 function chunkPayload(chunk: StreamChunk): Record<string, unknown> {
@@ -83,16 +98,51 @@ export function chunkToRunEvent(
   if (typeof chunk.type !== 'string') return null;
 
   // Task tools are the transport for the dedicated Tasks UI, not chat
-  // timeline activity: their calls/results are suppressed here and their
-  // successful results surface as one authoritative `task-list` snapshot.
+  // timeline activity: their calls are suppressed, successful results
+  // surface as one authoritative `task-list` snapshot, and failures pass
+  // through as bounded `tool-error` events (the client routes them to a
+  // dock notice, never a timeline card) so a failed task call is not
+  // invisible.
   if (
     (chunk.type === 'tool-call' ||
       chunk.type === 'tool-result' ||
       chunk.type === 'tool-error') &&
     isTaskToolChunk(chunk)
   ) {
+    const payload = chunkPayload(chunk);
     const tasks = extractTaskSnapshot(chunk);
-    return tasks ? { type: 'task-list', payload: { tasks } } : null;
+    if (tasks) return { type: 'task-list', payload: { tasks } };
+
+    // Task tools also report semantic failures (no memory, validation)
+    // inside their result object instead of throwing.
+    const result = payload.result;
+    const resultIsError =
+      !!result && typeof result === 'object' && !Array.isArray(result)
+        ? (result as Record<string, unknown>).isError === true
+        : false;
+    const failed =
+      chunk.type === 'tool-error' || payload.isError === true || resultIsError;
+    if (failed && typeof payload.toolCallId === 'string') {
+      return {
+        type: 'tool-error',
+        payload: {
+          toolCallId: payload.toolCallId,
+          toolName: String(payload.toolName ?? 'task'),
+          // Only string-shaped detail feeds the notice; a raw result
+          // object would stringify to "[object Object]" downstream.
+          error: sanitizeErrorText(
+            payload.error ??
+              (typeof result === 'string' ? result : undefined) ??
+              (result &&
+              typeof result === 'object' &&
+              typeof (result as Record<string, unknown>).content === 'string'
+                ? ((result as Record<string, unknown>).content as string)
+                : undefined),
+          ),
+        },
+      };
+    }
+    return null;
   }
 
   switch (chunk.type) {

@@ -48,13 +48,32 @@ describe('parseTaskListPayload', () => {
     expect(parseTaskListPayload('tasks')).toBeNull();
     expect(parseTaskListPayload({})).toBeNull();
     expect(parseTaskListPayload({ tasks: 'no' })).toBeNull();
-    expect(parseTaskListPayload({ tasks: [] })).toBeNull();
     expect(parseTaskListPayload({ tasks: [{ id: 'x' }] })).toBeNull();
     expect(
       parseTaskListPayload({
         tasks: [{ id: 'x', content: 'do', status: 'done' }],
       }),
     ).toBeNull();
+  });
+
+  it('accepts an empty array as a cleared list', () => {
+    // task_write({ tasks: [] }) clears the list; the empty snapshot must
+    // reach the dock instead of being dropped (which resurrected the
+    // deleted list after reload).
+    expect(parseTaskListPayload({ tasks: [] })).toEqual([]);
+  });
+
+  it('skips entries whose id exceeds the id cap', () => {
+    expect(
+      parseTaskListPayload({
+        tasks: [
+          { id: 'x'.repeat(129), content: 'huge id', status: 'pending' },
+          { id: 'ok', content: 'fine', status: 'pending' },
+        ],
+      }),
+    ).toEqual([
+      { id: 'ok', content: 'fine', activeForm: 'fine', status: 'pending' },
+    ]);
   });
 });
 
@@ -198,5 +217,72 @@ describe('tasksFromRestoredParts', () => {
       },
     ];
     expect(tasksFromRestoredParts(parts)).toBeNull();
+  });
+
+  it('restores a cleared list instead of the last non-empty snapshot', () => {
+    const parts: AssistantPart[] = [
+      {
+        type: 'tool',
+        id: 't1',
+        toolCallId: 'tc-1',
+        toolName: 'task_write',
+        status: 'complete',
+        result: { content: 'ok', tasks: SNAPSHOT, isError: false },
+      },
+      {
+        type: 'tool',
+        id: 't2',
+        toolCallId: 'tc-2',
+        toolName: 'task_write',
+        status: 'complete',
+        result: { content: 'cleared', tasks: [], isError: false },
+      },
+    ];
+    expect(tasksFromRestoredParts(parts)).toEqual([]);
+  });
+
+  it('skips failed result objects instead of wiping the dock after reload', () => {
+    // Core's task tools report semantic failures (validation, missing
+    // memory) inside a successful result object — `tasks: []` with
+    // `isError: true`. That is a failure, not a cleared list: honoring
+    // it would hide the earlier non-empty snapshot after reload.
+    const parts: AssistantPart[] = [
+      {
+        type: 'tool',
+        id: 't1',
+        toolCallId: 'tc-1',
+        toolName: 'task_write',
+        status: 'complete',
+        result: { content: 'ok', tasks: SNAPSHOT, isError: false },
+      },
+      {
+        type: 'tool',
+        id: 't2',
+        toolCallId: 'tc-2',
+        toolName: 'task_update',
+        status: 'complete',
+        result: {
+          content: 'Failed to update tasks: list exceeds the maximum',
+          tasks: [],
+          isError: true,
+        },
+      },
+    ];
+    expect(taskProgress(tasksFromRestoredParts(parts)!)).toEqual({
+      completed: 1,
+      total: 3,
+    });
+  });
+
+  it('accepts values exactly at the caps (100 tasks, 128-char id, 500-char text)', () => {
+    const atLimit = Array.from({ length: 100 }, (_, index) => ({
+      id: index === 0 ? 't'.repeat(128) : `task_${index}`,
+      content: index === 1 ? 'c'.repeat(500) : `Task ${index}`,
+      status: 'pending' as const,
+    }));
+    const parsed = parseTaskListPayload({ tasks: atLimit })!;
+    expect(parsed).toHaveLength(100);
+    expect(parsed[0]!.id).toBe('t'.repeat(128));
+    expect(parsed[1]!.content).toBe('c'.repeat(500));
   });
 });

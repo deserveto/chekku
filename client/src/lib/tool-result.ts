@@ -8,6 +8,14 @@
  * React tree.
  */
 
+/**
+ * Base64 screenshot payloads above this length are not rendered as decoded
+ * images: long QA runs would otherwise accumulate multi-megabyte data URLs
+ * with auto-opened full-size `<img>` decodes. The JSON card still shows the
+ * raw result either way.
+ */
+const MAX_SCREENSHOT_BASE64_CHARS = 2_000_000;
+
 function imageUrlFromObject(rec: Record<string, unknown>): string | null {
   // `url` is deliberately NOT treated as an image source: browser tools
   // return the visited page URL there, which auto-expanded every QA tool
@@ -19,6 +27,7 @@ function imageUrlFromObject(rec: Record<string, unknown>): string | null {
   // the page URL; only the payload is an image (Playwright type is 'png').
   const base64 = rec.base64;
   if (typeof base64 === 'string' && base64.trim()) {
+    if (base64.length > MAX_SCREENSHOT_BASE64_CHARS) return null;
     return `data:image/png;base64,${base64}`;
   }
 

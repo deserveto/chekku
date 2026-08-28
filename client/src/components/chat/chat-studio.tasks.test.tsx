@@ -431,6 +431,107 @@ describe('ChatStudio task dock', () => {
     expect(container.querySelector('.chat-task-pill')).toBeNull();
   });
 
+  it('hides the dock when the model clears the task list', async () => {
+    await enterComposerText('complex work');
+    await submitComposer();
+
+    const events = observeRunEvents.mock.calls[0]![1] as {
+      onEvent: (event: unknown) => void;
+    };
+    await act(async () => {
+      events.onEvent({
+        sequence: 0,
+        type: 'task-list',
+        payload: { tasks: tasks(['in_progress', 'pending']) },
+        createdAt: '',
+      });
+    });
+    expect(container.querySelector('.chat-task-dock')).not.toBeNull();
+
+    // task_write({ tasks: [] }) — the cleared snapshot must empty the dock.
+    await act(async () => {
+      events.onEvent({
+        sequence: 1,
+        type: 'task-list',
+        payload: { tasks: [] },
+        createdAt: '',
+      });
+    });
+    expect(container.querySelector('.chat-task-dock')).toBeNull();
+    expect(container.querySelector('.chat-task-pill')).toBeNull();
+    // The reserved dock column must not linger as a blank gutter either.
+    expect(
+      container.querySelector('.chat-studio-shell')?.className,
+    ).not.toContain('has-task-dock');
+  });
+
+  it('surfaces a bounded dock notice when a task tool fails', async () => {
+    await enterComposerText('complex work');
+    await submitComposer();
+
+    const events = observeRunEvents.mock.calls[0]![1] as {
+      onEvent: (event: unknown) => void;
+    };
+    await act(async () => {
+      events.onEvent({
+        sequence: 0,
+        type: 'task-list',
+        payload: { tasks: tasks(['in_progress']) },
+        createdAt: '',
+      });
+      events.onEvent({
+        sequence: 1,
+        type: 'tool-error',
+        payload: {
+          toolCallId: 'tc-task',
+          toolName: 'task_update',
+          error: `Task not found: ${'x'.repeat(2_000)}`,
+        },
+        createdAt: '',
+      });
+    });
+
+    const notice = container.querySelector('.chat-task-dock-notice');
+    expect(notice).not.toBeNull();
+    expect(notice!.textContent).toContain('Task not found');
+    // The client slices the notice to exactly 300 chars; assert the real
+    // bound so deleting the slice fails this test.
+    const message = notice!.textContent!.replace('⚠ ', '');
+    expect(message.length).toBe(300);
+    // Task tool errors never render as timeline tool cards.
+    expect(container.textContent).not.toContain('task update');
+  });
+
+  it('surfaces a failed first task_write in the topbar when no snapshot exists', async () => {
+    // A rejected first task_write (over-cap list/text/id) never creates
+    // a snapshot, so no dock exists to host the notice — the failure
+    // must still be visible.
+    await enterComposerText('complex work');
+    await submitComposer();
+
+    const events = observeRunEvents.mock.calls[0]![1] as {
+      onEvent: (event: unknown) => void;
+    };
+    await act(async () => {
+      events.onEvent({
+        sequence: 0,
+        type: 'tool-error',
+        payload: {
+          toolCallId: 'tc-task',
+          toolName: 'task_write',
+          error: 'Too many tasks: list exceeds the maximum of 100 entries',
+        },
+        createdAt: '',
+      });
+    });
+
+    expect(container.querySelector('.chat-task-dock')).toBeNull();
+    const notice = container.querySelector('.chat-task-notice-topbar');
+    expect(notice).not.toBeNull();
+    expect(notice!.getAttribute('role')).toBe('status');
+    expect(notice!.textContent).toContain('Too many tasks');
+  });
+
   it('collapses to the topbar pill and persists the preference', async () => {
     await enterComposerText('complex work');
     await submitComposer();

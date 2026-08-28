@@ -36,6 +36,9 @@ export function isTaskToolName(name: string | undefined): boolean {
 
 const MAX_TASKS = 100;
 const MAX_TASK_TEXT_CHARS = 500;
+/** Ids beyond this are dropped, not clamped: a truncated id breaks
+ *  task_update/task_complete targeting. */
+const MAX_TASK_ID_CHARS = 128;
 const TASK_STATUSES: ReadonlySet<string> = new Set([
   'pending',
   'in_progress',
@@ -56,7 +59,7 @@ function normalizeTask(value: unknown): TaskItem | null {
   const record = value as Record<string, unknown>;
 
   const id = typeof record.id === 'string' ? record.id.trim() : '';
-  if (!id) return null;
+  if (!id || id.length > MAX_TASK_ID_CHARS) return null;
 
   const content = clampText(record.content);
   if (!content) return null;
@@ -77,7 +80,11 @@ function normalizeTask(value: unknown): TaskItem | null {
 export function parseTaskListPayload(payload: unknown): TaskItem[] | null {
   if (!payload || typeof payload !== 'object') return null;
   const rawTasks = (payload as Record<string, unknown>).tasks;
-  if (!Array.isArray(rawTasks) || rawTasks.length === 0) return null;
+  if (!Array.isArray(rawTasks)) return null;
+  // An empty array is a first-class "cleared" snapshot: dropping it kept
+  // the pre-clearing state on the dock and resurrected the deleted list
+  // after reload. Non-empty-but-all-invalid stays malformed (null).
+  if (rawTasks.length === 0) return [];
 
   const tasks: TaskItem[] = [];
   for (const entry of rawTasks) {
@@ -127,7 +134,21 @@ export function tasksFromRestoredParts(
   for (const part of parts) {
     if (part.type !== 'tool' || !isTaskToolName(part.toolName)) continue;
     if (part.status === 'error') continue;
-    const snapshot = parseTaskListPayload(part.result);
+    // Core's task tools report semantic failures (validation, missing
+    // memory) inside a *successful* result object — `{ content: 'Failed
+    // to update tasks: …', tasks: [], isError: true }`. That empty list
+    // is not a snapshot: honoring it would wipe the dock after reload
+    // for a transient failure (mirrors the server adapter's rule).
+    const result = part.result;
+    if (
+      result &&
+      typeof result === 'object' &&
+      !Array.isArray(result) &&
+      (result as Record<string, unknown>).isError === true
+    ) {
+      continue;
+    }
+    const snapshot = parseTaskListPayload(result);
     if (snapshot) latest = snapshot;
   }
   return latest;
