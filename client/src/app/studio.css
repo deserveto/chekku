@@ -2673,6 +2673,26 @@ dialog.chat-task-dock-dialog[open] {
   font: 9px var(--font-dm-mono);
 }
 
+.chat-knowledge-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  border: 1px dashed var(--studio-line);
+  border-radius: 3px;
+  color: var(--studio-muted);
+  font: 9px var(--font-dm-mono);
+}
+
+.chat-knowledge-status[data-knowledge-state='added'] {
+  color: var(--studio-ok, var(--studio-body));
+  border-style: solid;
+}
+
+.chat-knowledge-status[data-knowledge-state='failed'] {
+  color: var(--studio-warning);
+  border-style: solid;
+}
+
 .chat-send-button:disabled {
   opacity: 0.35;
   cursor: not-allowed;

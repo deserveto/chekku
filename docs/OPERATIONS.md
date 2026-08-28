@@ -102,6 +102,21 @@ The weekly workflow creates posts in the `DRAFT` status with canonical content o
 
 Legacy `DRAFT` posts drafted before the two-stage split: a post whose `post.md` still embeds both the canonical unit and a legacy caption block goes through the normal flow — "Approve Canonical" regenerates a fresh caption into `caption.md` (the embedded legacy caption is ignored, not migrated). A pre-canonical-contract caption-only `DRAFT` (no canonical delimiter at all) can never enter the caption stage; its detail page shows an explanatory legacy notice instead of an approve button.
 
+#### Knowledge Base (Qdrant + embeddings)
+
+The per-user Knowledge Base indexes uploaded documents for semantic retrieval. Server-owned configuration in `agent/.env`:
+
+```dotenv
+LLM_EMBEDDING_MODEL=
+QDRANT_URL=
+QDRANT_API_KEY=
+QDRANT_COLLECTION=chekku_knowledge
+```
+
+`LLM_EMBEDDING_MODEL` is the fixed embedding model invoked by Knowledge Base ingestion and query embedding through the existing `LLM_BASE_URL` + `LLM_API_KEY` (`POST {LLM_BASE_URL}/embeddings`); it never comes from tool or model input. `QDRANT_URL` points at the local Qdrant container (`http://127.0.0.1:6333` in dev, `http://qdrant:6333` in compose prod); `QDRANT_API_KEY` is optional and only needed for Qdrant deployments with auth. Empty/unset `LLM_EMBEDDING_MODEL` or `QDRANT_URL` keeps every Knowledge tool and workflow failing closed with a fixed configuration error without preventing other agent features from starting.
+
+Changing the embedding model changes the vector dimension. The ingestion pipeline validates the configured collection before writing and refuses with an actionable error when the dimension differs — restore the previous model, or delete the Qdrant volume/collection to reindex from scratch (raw documents stay in Garage, so reindexing is a per-document retry).
+
 ### `client/.env.local`
 
 Mirrors `client/.env.example`; `npm run setup` generates `BETTER_AUTH_SECRET` and
@@ -327,9 +342,30 @@ Completed Markdown sections are:
 ## Sources
 ```
 
+
 If minimum evidence cannot be met within budget, PM Agent returns `Incomplete Competitive Analysis: <anchor product>`, identifies missing evidence and suggested user action, and does not save or emit `Saved analysisId:`. Complete work saves once. Save failure does not discard completed analysis; response adds one short safe failure line.
 
 Chat retrieval phrases should explicitly distinguish domains, for example `list saved competitive analyses` or `view pca_...`. Generic `list saved reports` remains weekly for compatibility. `pca_...` selects competitive detail; `pmr_...` selects weekly detail.
+
+## Knowledge Base
+
+The Knowledge Base lets users upload text files and PDFs in chat; Chekku persists the raw document, parses and chunks the text, embeds it, and indexes it into Qdrant so the Main Agent can retrieve it later through `search_knowledge_base`. The `/knowledge` page lists the user's documents with status (`Processing`, `Ready`, `Failed`), indexed chunk counts, and actions (Open original, Retry indexing for failed/stale documents, Delete).
+
+Local setup: `npm run dev:sh` starts the `qdrant` Compose service (pinned `qdrant/qdrant` image, persistent `qdrant-data` volume, loopback port `127.0.0.1:6333`, container health check over TCP) and `scripts/setup-env.sh` writes `QDRANT_URL=http://127.0.0.1:6333` into `agent/.env.development`. In compose prod the agent resolves `http://qdrant:6333` on the internal network; Qdrant is never exposed beyond loopback or the internal Compose network, and the browser never talks to it. Set `LLM_EMBEDDING_MODEL` in `agent/.env` to enable ingestion and retrieval; both fail closed when unset.
+
+Supported documents: text formats `txt`, `md`, `csv`, `tsv`, `json`, `log`, `xml`, `yml`, `yaml` (raw cap 2 MiB) and `application/pdf` (raw cap 20 MiB). Images are never indexed — they keep flowing through the multimodal chat path. PDFs are extracted server-side with pdfjs-dist; scanned image-only PDFs fail with `No extractable text found in this document.`
+
+Lifecycle and consistency:
+
+1. Upload (`POST /api/storage/knowledge/documents`) writes `original.<ext>` then `metadata.json` (status `processing`) to `kb/users/<resourceId>/documents/<documentId>/` and fires the `knowledge-document-ingestion` workflow. The chat run is never blocked or waited on.
+2. Ingestion extracts, chunks (1,100-char target, 150-char overlap, ≤1,000 chunks), embeds all chunks, deletes any prior vectors for the document, upserts, then flips the record to `ready` with the chunk count. Any failure purges partial vectors and records `failed` with a fixed bounded reason; the raw document is always preserved.
+3. Retry (`POST .../retry`) is allowed for `failed` documents and for `processing` records older than 15 minutes (abandoned runs, e.g. an agent-server restart).
+4. Delete (`DELETE .../[documentId]`) fires `knowledge-document-deletion`: Qdrant vectors first (retrieval stops immediately), then Garage objects, then the metadata record last — the document leaves `/knowledge` only once it can no longer be retrieved. Steps are idempotent; retry a failed deletion from the page.
+
+Ownership is structural: every registry key is scoped under the session user's id, every list/read/delete validates that id, and every Qdrant search or delete carries a mandatory `resourceId` payload filter backed by a keyword index. The retrieval tool derives the tenant from the run context, never from model input.
+
+No-config smoke: start the server without `QDRANT_URL`/`LLM_EMBEDDING_MODEL`, upload a document, and confirm the Knowledge page shows it as `Failed` with `Knowledge indexing is not configured…` (or `...could not be started`) rather than hanging in `Processing`. Deterministic tests require no live Qdrant or embedding endpoint.
+
 
 ## Chat slash-command picker
 
@@ -578,6 +614,23 @@ For local development, ensure the `reader` Compose service is up (`docker compos
 ### Web Reader is unavailable or times out
 
 Reader is a self-hosted container. Confirm `docker compose ps reader` shows it healthy and `WEB_READER_BASE_URL` points at the right host:port. Inspect container logs (`docker compose logs reader`) for outbound fetcher errors. Request deadline stays fixed at 30 seconds. Do not add configurable timeout, retries, anonymous fallback, or raw provider diagnostics.
+
+
+### Knowledge indexing is not configured
+
+`/knowledge` shows a document as `Failed` with `Knowledge indexing is not configured…`. Confirm the `qdrant` Compose service is up (`docker compose ps qdrant`) and `QDRANT_URL` resolves to it, and set `LLM_EMBEDDING_MODEL` in `agent/.env` to an embeddings-capable model on the configured gateway. Restart the agent after changing env; then use Retry indexing on the document. The chat composer keeps working — only ingestion and `search_knowledge_base` fail closed.
+
+### Knowledge document is stuck in Processing
+
+`Processing` older than 15 minutes means the ingestion run died (typically an agent-server restart). Use Retry indexing on the document; the pipeline deletes any partial vectors before re-upserting, so the retry never duplicates chunks. Verify the agent server is running, since ingestion executes there as a workflow, not in the Next.js process.
+
+### Knowledge deletion does not finish
+
+Deletion runs as a fire-and-forget workflow: vectors first, Garage objects next, metadata last. If the record still appears after a refresh, reopen `/knowledge` and press Delete again — every step is idempotent and tolerates missing objects. A persistent failure usually means Qdrant or Garage is unreachable; fix the backing service first.
+
+### Knowledge retrieval returns nothing for an uploaded document
+
+Confirm the document shows `Ready` on `/knowledge` (a `Failed` record is not searchable), that the question is asked to the Main Agent (the only agent with `search_knowledge_base`), and that the document belongs to the signed-in account — records are tenant-isolated by the session user id and are never cross-account visible.
 
 ### Garage MCP reports missing identity
 

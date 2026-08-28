@@ -7,6 +7,7 @@ export const AGENT_ICON_IDS = [
   'pen',
   'compass',
   'image',
+  'book',
 ] as const;
 
 export type AgentIconId = (typeof AGENT_ICON_IDS)[number];
@@ -52,5 +53,6 @@ export function labelForAgentIcon(icon: AgentIconId): string {
     pen: 'Writer',
     compass: 'Strategy',
     image: 'Visual',
+    book: 'Knowledge',
   }[icon];
 }

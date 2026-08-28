@@ -4,6 +4,7 @@ import {
   ClipboardEvent,
   DragEvent,
   FormEvent,
+  Fragment,
   KeyboardEvent,
   useCallback,
   useEffect,
@@ -43,6 +44,10 @@ import {
   type PreparedAttachment,
 } from '@/lib/chat-attachments';
 import { browserImageDeps, browserPdfDeps } from '@/lib/chat-attachments-browser';
+import {
+  classifyKnowledgeFile,
+  uploadKnowledgeDocument,
+} from '@/lib/knowledge';
 import { buildChatHref } from '@/lib/chat-route';
 import {
   listAgentThreads,
@@ -157,6 +162,13 @@ function messageFromMemory(value: StudioMemoryMessage): ChatMessage {
   };
 }
 
+type KnowledgeUploadState = 'indexing' | 'added' | 'failed';
+
+type KnowledgeUploadStatus = {
+  state: KnowledgeUploadState;
+  detail?: string;
+};
+
 type PendingUpload = {
   id: string;
   filename: string;
@@ -164,6 +176,8 @@ type PendingUpload = {
   status: 'preparing' | 'ready' | 'error';
   error?: string;
   prepared?: PreparedAttachment;
+  /** Original file handle, kept only for the fire-and-forget Knowledge upload. */
+  raw?: File;
 };
 
 function TypingIndicator() {
@@ -269,6 +283,7 @@ export function ChatStudio({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [uploads, setUploads] = useState<PendingUpload[]>([]);
+  const [knowledgeStatus, setKnowledgeStatus] = useState<Record<string, KnowledgeUploadStatus>>({});
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [commandOpen, setCommandOpen] = useState(false);
@@ -886,7 +901,7 @@ export function ChatStudio({
       setUploads((current) =>
         current.map((upload) =>
           upload.id === id
-            ? { ...upload, status: 'ready', prepared }
+            ? { ...upload, status: 'ready', prepared, raw: file }
             : upload,
         ),
       );
@@ -964,6 +979,29 @@ export function ChatStudio({
     const userMessageId = crypto.randomUUID();
     const assistantId = crypto.randomUUID();
     const sentInput = input;
+
+    // Knowledge Base ingestion (additive, fire-and-forget): raw text/PDF
+    // files are persisted and indexed server-side in parallel with the chat
+    // run — this never blocks or waits on the conversation. Images stay
+    // multimodal-only and are never indexed.
+    for (const upload of uploads) {
+      if (upload.status !== 'ready' || upload.kind === 'image' || !upload.raw) continue;
+      if (classifyKnowledgeFile({ name: upload.filename, type: upload.raw.type }) === 'unsupported') {
+        continue;
+      }
+      setKnowledgeStatus((current) => ({ ...current, [upload.id]: { state: 'indexing' } }));
+      const uploadId = upload.id;
+      void uploadKnowledgeDocument({ file: upload.raw, sourceThreadId: threadId }).then((result) => {
+        setKnowledgeStatus((current) => ({
+          ...current,
+          [uploadId]: result.ok
+            ? result.document.status === 'failed'
+              ? { state: 'failed', detail: result.document.error ?? 'Knowledge indexing failed.' }
+              : { state: 'added' }
+            : { state: 'failed', detail: result.message },
+        }));
+      });
+    }
 
     setMessages((current) => [
       ...current,
@@ -1489,34 +1527,49 @@ export function ChatStudio({
                           role="list"
                           aria-label="Attached files"
                         >
-                          {message.attachments.map((attachment, index) =>
-                            attachment.dataUrl ? (
-                              // Data-URL thumbnails cannot use next/image without
-                              // per-origin configuration; a plain img is correct here.
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img
-                                key={attachment.id || `${message.id}-att-${index}`}
-                                className="chat-attachment-thumb"
-                                src={attachment.dataUrl}
-                                alt={
-                                  attachment.filename ||
-                                  `Attached image ${index + 1}`
-                                }
-                                loading="lazy"
-                              />
-                            ) : (
-                              <span
-                                className="chat-attachment-file"
-                                key={attachment.id || `${message.id}-att-${index}`}
-                                role="listitem"
-                              >
-                                ≡ {attachment.filename}
-                                {attachment.pageCount
-                                  ? ` (${attachment.pageCount} pages)`
-                                  : ''}
-                              </span>
-                            ),
-                          )}
+                          {message.attachments.map((attachment, index) => (
+                            <Fragment
+                              key={attachment.id || `${message.id}-att-${index}`}
+                            >
+                              {attachment.dataUrl ? (
+                                // Data-URL thumbnails cannot use next/image without
+                                // per-origin configuration; a plain img is correct here.
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                  className="chat-attachment-thumb"
+                                  src={attachment.dataUrl}
+                                  alt={
+                                    attachment.filename ||
+                                    `Attached image ${index + 1}`
+                                  }
+                                  loading="lazy"
+                                />
+                              ) : (
+                                <span
+                                  className="chat-attachment-file"
+                                  role="listitem"
+                                >
+                                  ≡ {attachment.filename}
+                                  {attachment.pageCount
+                                    ? ` (${attachment.pageCount} pages)`
+                                    : ''}
+                                </span>
+                              )}
+                              {message.role === 'user'
+                                && knowledgeStatus[attachment.id] !== undefined && (
+                                <small
+                                  className="chat-knowledge-status"
+                                  data-knowledge-state={knowledgeStatus[attachment.id].state}
+                                >
+                                  {knowledgeStatus[attachment.id].state === 'indexing'
+                                    ? 'Indexing knowledge…'
+                                    : knowledgeStatus[attachment.id].state === 'added'
+                                      ? 'Added to Knowledge'
+                                      : knowledgeStatus[attachment.id].detail ?? 'Knowledge indexing failed'}
+                                </small>
+                              )}
+                            </Fragment>
+                          ))}
                         </div>
                       )}
 
@@ -1596,6 +1649,19 @@ export function ChatStudio({
                       </span>
                       {upload.status === 'preparing' && (
                         <small>processing…</small>
+                      )}
+                      {upload.status === 'ready' && upload.kind !== 'image'
+                        && knowledgeStatus[upload.id] !== undefined && (
+                        <small
+                          className="chat-knowledge-status"
+                          data-knowledge-state={knowledgeStatus[upload.id].state}
+                        >
+                          {knowledgeStatus[upload.id].state === 'indexing'
+                            ? 'Indexing knowledge…'
+                            : knowledgeStatus[upload.id].state === 'added'
+                              ? 'Added to Knowledge'
+                              : knowledgeStatus[upload.id].detail ?? 'Knowledge indexing failed'}
+                        </small>
                       )}
                       {upload.status === 'error' && upload.error && (
                         <small>{upload.error}</small>

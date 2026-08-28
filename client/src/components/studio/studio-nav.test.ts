@@ -46,7 +46,7 @@ it('renders accessible report navigation with current-page state', () => {
 it('uses relevant shared icons for each primary destination', () => {
   const markup = renderToStaticMarkup(createElement(StudioNav, { resourceId: 'user-1' }));
 
-  expect(markup.match(/class="studio-agent-icon"/g)).toHaveLength(3);
+  expect(markup.match(/class="studio-agent-icon"/g)).toHaveLength(4);
   expect(markup).not.toContain('>◫<');
   expect(markup).not.toContain('>▤<');
   expect(markup).not.toContain('>▦<');

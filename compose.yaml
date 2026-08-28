@@ -72,6 +72,28 @@ services:
       retries: 30
       start_period: 10s
 
+  qdrant:
+    # Local vector index for the per-user Knowledge Base. The agent server is
+    # the only Chekku process that talks to it; the browser never does. The
+    # image ships no curl/wget, so the healthcheck probes the TCP port through
+    # bash's /dev/tcp (the pattern recommended upstream for this image).
+    image: docker.io/qdrant/qdrant:v1.15.1
+    restart: unless-stopped
+    ports:
+      # Loopback publish for scripts/dev.sh (agent/.env.development pins
+      # QDRANT_URL to 127.0.0.1:6333). Host port overridable; containers
+      # always talk to http://qdrant:6333. The gRPC port (6334) stays
+      # internal — Chekku uses the REST client only.
+      - "127.0.0.1:${CHEKKU_QDRANT_HOST_PORT:-6333}:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+
   postgres:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
@@ -117,6 +139,8 @@ services:
         condition: service_healthy
       reader:
         condition: service_healthy
+      qdrant:
+        condition: service_healthy
     environment:
       NODE_ENV: production
       HOST: 0.0.0.0
@@ -149,6 +173,13 @@ services:
       # Self-hosted Jina Reader (OSS image); fixed to the in-container service
       # HTTP/1.1 endpoint. No API key — the local Reader is unauthenticated.
       WEB_READER_BASE_URL: http://reader:8081
+      # Knowledge Base vector index (Qdrant). Fixed to the in-container
+      # service name. LLM_EMBEDDING_MODEL must be set for ingestion and
+      # retrieval to work; empty keeps every KB tool failing closed.
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-chekku_knowledge}
+      LLM_EMBEDDING_MODEL: ${LLM_EMBEDDING_MODEL:-}
       PUBLIC_HOLIDAY_API_BASE_URL: ${PUBLIC_HOLIDAY_API_BASE_URL:-https://api-hari-libur.vercel.app/api}
       CHEKKU_DEFAULT_AGENT_ID: ${CHEKKU_DEFAULT_AGENT_ID:-main-agent}
       CHEKKU_LOCAL_USER_ID: ${CHEKKU_LOCAL_USER_ID:-local-user}
@@ -245,3 +276,4 @@ volumes:
   garage-data:
   searxng-cache:
   postgres-data:
+  qdrant-data:

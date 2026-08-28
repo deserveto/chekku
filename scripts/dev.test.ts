@@ -158,12 +158,23 @@ if [[ "$1" == compose ]]; then
     if [[ "\${POSTGRES_RUNNING:-1}" == 1 ]]; then printf 'postgres-id\\n'; fi
     exit 0
   fi
+  if [[ "$*" == *" ps -q qdrant" ]]; then
+    if [[ "\${QDRANT_RUNNING:-1}" == 1 ]]; then printf 'qdrant-id\\n'; fi
+    exit 0
+  fi
   if [[ "$*" == *" up "* ]]; then
     touch "$MOCK_LOG/start-\${*: -1}"
     exit 0
   fi
 fi
 if [[ "$1" == inspect ]]; then
+  case "\${*: -1}" in
+    garage-id) docker_service=garage ;;
+    searxng-id) docker_service=searxng ;;
+    reader-id) docker_service=reader ;;
+    postgres-id) docker_service=postgres ;;
+    qdrant-id) docker_service=qdrant ;;
+  esac
   health_name="\${docker_service^^}_DOCKER_HEALTH"
   health="\${!health_name:-\${DOCKER_HEALTH:-healthy}}"
   second_name="\${docker_service^^}_HEALTH_ON_SECOND"
@@ -791,21 +802,26 @@ describe('development launcher', () => {
       .filter((line) => line.includes(' up '));
 
     expect(starts[0]).toContain('up -d --force-recreate garage');
+    expect(starts[0]).toContain('--force-recreate');
     expect(starts[1]).toContain('up -d searxng');
     expect(starts[1]).not.toContain('--force-recreate');
     expect(starts[2]).toContain('up -d reader');
     expect(starts[2]).not.toContain('--force-recreate');
     expect(starts[3]).toContain('up -d postgres');
     expect(starts[3]).not.toContain('--force-recreate');
-    expect(starts[4]).toContain('up -d garage');
+    expect(starts[4]).toContain('up -d qdrant');
     expect(starts[4]).not.toContain('--force-recreate');
-    expect(starts[5]).toContain('up -d searxng');
-    expect(starts[6]).toContain('up -d reader');
-    expect(starts[7]).toContain('up -d postgres');
-    expect(starts[8]).toContain('up -d --force-recreate garage');
-    expect(starts[9]).toContain('up -d searxng');
-    expect(starts[10]).toContain('up -d reader');
-    expect(starts[11]).toContain('up -d postgres');
+    expect(starts[5]).toContain('up -d garage');
+    expect(starts[5]).not.toContain('--force-recreate');
+    expect(starts[6]).toContain('up -d searxng');
+    expect(starts[7]).toContain('up -d reader');
+    expect(starts[8]).toContain('up -d postgres');
+    expect(starts[9]).toContain('up -d qdrant');
+    expect(starts[10]).toContain('up -d --force-recreate garage');
+    expect(starts[11]).toContain('up -d searxng');
+    expect(starts[12]).toContain('up -d reader');
+    expect(starts[13]).toContain('up -d postgres');
+    expect(starts[14]).toContain('up -d qdrant');
   }, 30_000);
 
   it('removes partially-created tmux session after pane failure', () => {
@@ -1154,6 +1170,7 @@ describe('setup-env.sh', () => {
       expect(values.SEARXNG_BASE_URL).toBe('http://127.0.0.1:8888');
       expect(values.SEARXNG_API_KEY).toBe('');
       expect(values.WEB_READER_BASE_URL).toBe('http://127.0.0.1:8081');
+      expect(values.QDRANT_URL).toBe('http://127.0.0.1:6333');
       expect(values.DATABASE_URL).toBe(
         `postgresql://chekku:${storageValues.POSTGRES_PASSWORD}@127.0.0.1:5432/chekku_agent`,
       );

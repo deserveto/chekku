@@ -11,6 +11,7 @@ const paths: Record<AgentIconId, ReactNode> = {
   pen: <><path d="m4 20 4.7-1 10.8-10.8a2.1 2.1 0 0 0-3-3L5.7 16 4 20Z" /><path d="m14.8 6.9 3 3M4 22h16" /></>,
   compass: <><circle cx="12" cy="12" r="9" /><path d="m15.5 8.5-2 5-5 2 2-5 5-2Z" /></>,
   image: <><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="9" r="1.5" /><path d="m4 17 5-5 3 3 2-2 6 6" /></>,
+  book: <><path d="M4 19.5V5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2Z" /><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H19" /><path d="M9 7h6" /></>,
 };
 
 export function AgentIcon({ icon }: { icon?: AgentIconId }) {

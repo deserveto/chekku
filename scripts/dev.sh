@@ -178,7 +178,7 @@ ensure_service_ready() {
     postgres) required_port=5432 ;;
     searxng) required_port=8888 ;;
     reader) required_port=8081 ;;
-    *) echo "Unsupported development service." >&2; exit 1 ;;
+    qdrant) required_port=6333 ;;
   esac
 
   set +e
@@ -282,6 +282,10 @@ printf 'Reader ready\n  base URL: http://127.0.0.1:%s\n' "${CHEKKU_READER_HOST_P
 ensure_service_ready postgres Postgres "${CHEKKU_POSTGRES_PORTS:-5432}"
 
 printf 'Postgres ready\n  database: chekku_agent\n'
+
+ensure_service_ready qdrant Qdrant "${CHEKKU_QDRANT_PORTS:-6333}"
+
+printf 'Qdrant ready\n  base URL: http://127.0.0.1:%s\n' "${CHEKKU_QDRANT_HOST_PORT:-6333}"
 
 garage_app_cleanup='for garage_name in ${!GARAGE_@}; do case "$garage_name" in GARAGE_ENDPOINT|GARAGE_REGION|GARAGE_BUCKET|GARAGE_ACCESS_KEY_ID|GARAGE_SECRET_ACCESS_KEY) ;; *) unset "$garage_name" ;; esac; done'
 searxng_agent_cleanup='for searxng_name in ${!SEARXNG_@}; do case "$searxng_name" in SEARXNG_BASE_URL|SEARXNG_API_KEY) ;; *) unset "$searxng_name" ;; esac; done'
