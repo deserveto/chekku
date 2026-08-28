@@ -3,14 +3,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useRouter } from 'next/navigation';
+import { AgentIcon } from '@/components/agents/agent-icon';
 import { resolveAgentChatThreadId } from '@/lib/agent-chat-entry';
 import { listAllAgents } from '@/lib/stored-agents';
 import { buildChatHref } from '@/lib/chat-route';
+import type { AgentIconId } from '@/lib/agent-icons';
 import type { ChekkuAgentSummary } from '@/lib/types';
 
 interface PaletteCommand {
   id: string;
-  glyph: string;
+  icon: AgentIconId;
   label: string;
   hint: string;
   run: () => Promise<void> | void;
@@ -76,7 +78,7 @@ export function CommandPalette({ resourceId }: { resourceId: string }) {
   const commands = useMemo<PaletteCommand[]>(() => {
     const agentCommands: PaletteCommand[] = agents.map((agent) => ({
       id: `agent-${agent.id}`,
-      glyph: '▶',
+      icon: agent.iconKey ?? 'spark',
       label: `Open chat — ${agent.name}`,
       hint: 'Agent',
       run: async () => {
@@ -94,35 +96,35 @@ export function CommandPalette({ resourceId }: { resourceId: string }) {
     const navigation: PaletteCommand[] = [
       {
         id: 'nav-agents',
-        glyph: '◇',
+        icon: 'network',
         label: 'Agent catalog',
         hint: 'Go to',
         run: () => router.push('/agents'),
       },
       {
         id: 'nav-new-agent',
-        glyph: '＋',
+        icon: 'spark',
         label: 'New agent',
         hint: 'Go to',
         run: () => router.push('/agents/new'),
       },
       {
         id: 'nav-reports',
-        glyph: '≡',
+        icon: 'chart',
         label: 'Reports',
         hint: 'Go to',
         run: () => router.push('/reports'),
       },
       {
         id: 'nav-social-posts',
-        glyph: '✎',
+        icon: 'pen',
         label: 'Social posts',
         hint: 'Go to',
         run: () => router.push('/social-posts'),
       },
       {
         id: 'nav-settings',
-        glyph: '⚙',
+        icon: 'settings',
         label: 'Settings',
         hint: 'Go to',
         run: () => router.push('/settings'),
@@ -229,7 +231,7 @@ export function CommandPalette({ resourceId }: { resourceId: string }) {
               disabled={busyId === command.id}
             >
               <span className="cmd-palette-glyph" aria-hidden="true">
-                {command.glyph}
+                <AgentIcon icon={command.icon} />
               </span>
               <span className="cmd-palette-label">{command.label}</span>
               {busyId === command.id ? (

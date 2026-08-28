@@ -20,6 +20,32 @@
 
 * {
   box-sizing: border-box;
+  scrollbar-color: var(--hairline) var(--canvas-deep);
+  scrollbar-width: thin;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--canvas-deep);
+}
+
+*::-webkit-scrollbar-thumb {
+  min-height: 28px;
+  border: 3px solid var(--canvas-deep);
+  border-radius: 4px;
+  background: var(--hairline);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+
+*::-webkit-scrollbar-corner {
+  background: var(--canvas-deep);
 }
 
 html,
@@ -87,15 +113,15 @@ a:focus-visible {
 }
 
 .markdown h1 {
-  font-size: 18px;
+  font-size: 20px;
 }
 
 .markdown h2 {
-  font-size: 16px;
+  font-size: 17px;
 }
 
 .markdown h3 {
-  font-size: 14px;
+  font-size: 15px;
 }
 
 .markdown a {
@@ -109,7 +135,7 @@ a:focus-visible {
   border: 1px solid var(--hairline);
   border-radius: 3px;
   background: var(--canvas-deep);
-  font: 11px/18px var(--font-dm-mono);
+  font: 12.5px/19px var(--font-dm-mono);
 }
 
 .code-block {
@@ -150,7 +176,7 @@ a:focus-visible {
   width: 100%;
   min-width: 600px;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .markdown-table-wrap th,
@@ -164,7 +190,7 @@ a:focus-visible {
 
 .markdown-table-wrap th {
   color: var(--mute);
-  font: 10px var(--font-dm-mono);
+  font: 11px var(--font-dm-mono);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }

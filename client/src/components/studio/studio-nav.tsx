@@ -135,7 +135,7 @@ export function StudioNav({ resourceId }: { resourceId: string }) {
               <span className="studio-sidebar-copy">Agents</span>
             </Link>
             <Link
-              href="/reports"
+              href="/reports/weekly"
               className={pathname.startsWith('/reports') ? 'active' : ''}
               aria-current={pathname.startsWith('/reports') ? 'page' : undefined}
               aria-label="Reports"

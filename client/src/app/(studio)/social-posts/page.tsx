@@ -1,19 +1,14 @@
-import Link from 'next/link';
-
-import { StudioNav } from '@/components/studio/studio-nav';
 import { BrandMark } from '@/components/ui/brand-mark';
-import { requireUserId } from '@/server/auth';
-import { formatSocialPostCreatedAt } from '@/server/social-post-format';
 import {
   listSocialPostsForUser,
   SocialPostServiceError,
 } from '@/server/social-posts';
 import RunWeeklyDraftsButton from './RunWeeklyDraftsButton';
+import SocialPostGrid from './social-post-grid';
 
 export const dynamic = 'force-dynamic';
 
 export default async function SocialPostsPage() {
-  const resourceId = await requireUserId();
   let posts: Awaited<ReturnType<typeof listSocialPostsForUser>> = [];
   let errorMessage: string | undefined;
 
@@ -26,9 +21,7 @@ export default async function SocialPostsPage() {
   }
 
   return (
-    <div className="studio-shell">
-      <StudioNav resourceId={resourceId} />
-      <main className="studio-main">
+    <>
         <header className="studio-page-header">
           <div>
             <p className="studio-eyebrow">Garage storage</p>
@@ -44,7 +37,7 @@ export default async function SocialPostsPage() {
               {errorMessage}
             </div>
           ) : posts.length === 0 ? (
-            <div className="studio-empty-state">
+            <div className="studio-empty-state studio-registry-empty">
               <BrandMark />
               <h3>No saved drafts</h3>
               <p>
@@ -56,42 +49,9 @@ export default async function SocialPostsPage() {
               ) : null}
             </div>
           ) : (
-            <div
-              className="studio-report-table-wrap studio-panel"
-              tabIndex={0}
-              role="region"
-              aria-label="Saved social posts"
-            >
-              <table className="studio-report-table">
-                <thead>
-                  <tr>
-                    <th>Post id</th>
-                    <th>Created</th>
-                    <th>Topic</th>
-                    <th>Special day</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {posts.map((post) => (
-                    <tr key={post.postId}>
-                      <td>
-                        <Link href={`/social-posts/${encodeURIComponent(post.postId)}`}>
-                          {post.postId}
-                        </Link>
-                      </td>
-                      <td>{formatSocialPostCreatedAt(post.createdAt)}</td>
-                      <td>{post.topic}</td>
-                      <td>{post.specialDay ?? '—'}</td>
-                      <td>{post.status}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <SocialPostGrid posts={posts} />
           )}
         </section>
-      </main>
-    </div>
+    </>
   );
 }

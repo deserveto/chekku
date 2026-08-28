@@ -100,6 +100,12 @@ import {
 
 const TOOL_DISPLAY_LIMIT = 8_192;
 
+/**
+ * Distance (px) from the conversation's bottom within which auto-follow
+ * stays attached while the agent streams.
+ */
+const CHAT_PIN_THRESHOLD_PX = 120;
+
 /** localStorage key for the collapsed-dock UI preference (never task data). */
 const TASK_DOCK_COLLAPSED_KEY = 'chekku-task-dock-collapsed';
 
@@ -198,7 +204,13 @@ function TypingIndicator() {
   );
 }
 
-function ToolCallCard({ tool }: { tool: ToolAssistantPart }) {
+function ToolCallCard({
+  tool,
+  collapseByDefault = false,
+}: {
+  tool: ToolAssistantPart;
+  collapseByDefault?: boolean;
+}) {
   const extracted =
     tool.result !== undefined ? extractImageUrl(tool.result) : null;
   // Same scheme allowlist as the markdown renderer — tool results are
@@ -209,16 +221,12 @@ function ToolCallCard({ tool }: { tool: ToolAssistantPart }) {
   return (
     <details
       className={`chat-tool-card ${tool.status}`}
-      // Auto-expand cards that carry an image preview so the generated
-      // visual is visible without an extra click; leave text/JSON results
-      // collapsed.
-      open={Boolean(imageUrl) || undefined}
+      open={collapseByDefault ? undefined : Boolean(imageUrl) || undefined}
     >
-      <summary>
-        <span />
+      <summary className="chat-tool-summary-v1">
+        <span className="chat-tool-summary-marker" />
         <strong>{tool.toolName.replaceAll('_', ' ')}</strong>
-        <small>{tool.status}</small>
-        <i>⌄</i>
+        <i aria-hidden="true" />
       </summary>
 
       {imageUrl && (
@@ -264,7 +272,7 @@ export function ChatStudio({
   const router = useRouter();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const workspaceHeadingRef = useRef<HTMLHeadingElement>(null);
-  const endRef = useRef<HTMLDivElement>(null);
+  const conversationRef = useRef<HTMLElement>(null);
   // The dialog's confirm button only disables on the next render, so a fast
   // double-click can fire onConfirm twice. A ref closes that window
   // synchronously; `deletingThreadId` below is for rendering only.
@@ -283,6 +291,13 @@ export function ChatStudio({
   // thread (the startRun round-trip) compare against this ref to avoid
   // installing a stale thread's run into the newly viewed thread.
   const threadRef = useRef(initialThreadId);
+  // ChatGPT-style pinned-to-bottom scrolling: streamed content only scrolls
+  // the conversation while the user is already near its bottom. Scrolling up
+  // detaches the follow (freely reading history is never interrupted) and
+  // returning near the bottom re-attaches it. The ref is authoritative for
+  // effects; the state only drives the jump-to-latest button.
+  const isPinnedRef = useRef(true);
+  const [isPinned, setIsPinned] = useState(true);
 
   const [agents, setAgents] = useState<ChekkuAgentSummary[]>([]);
   const [threads, setThreads] = useState<StudioThread[]>([]);
@@ -621,6 +636,45 @@ export function ChatStudio({
     threadRef.current = threadId;
   }, [threadId]);
 
+  const scrollToConversationBottom = useCallback(
+    (behavior: ScrollBehavior) => {
+      const element = conversationRef.current;
+      if (!element) return;
+      element.scrollTo({ top: element.scrollHeight, behavior });
+    },
+    [],
+  );
+
+  const setPinned = useCallback((pinned: boolean) => {
+    isPinnedRef.current = pinned;
+    setIsPinned(pinned);
+  }, []);
+
+  const handleConversationScroll = useCallback(() => {
+    const element = conversationRef.current;
+    if (!element) return;
+    const distanceFromBottom =
+      element.scrollHeight - element.scrollTop - element.clientHeight;
+    setPinned(distanceFromBottom <= CHAT_PIN_THRESHOLD_PX);
+  }, [setPinned]);
+
+  // Streaming follows the output only while the user is pinned to the
+  // bottom; an unpinned user reading history is never scrolled (each delta
+  // re-renders `messages`, so gating the effect here is what stops the old
+  // forced-scroll behavior). Instant (`auto`) following keeps high-frequency
+  // deltas from stacking competing smooth scroll animations — the source of
+  // the earlier stutter.
+  useEffect(() => {
+    if (!isPinnedRef.current) return;
+    scrollToConversationBottom('auto');
+  }, [messages, scrollToConversationBottom]);
+
+  // A thread switch (or first load) always lands at the latest message.
+  useEffect(() => {
+    setPinned(true);
+    scrollToConversationBottom('auto');
+  }, [threadId, scrollToConversationBottom, setPinned]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -734,10 +788,6 @@ export function ChatStudio({
       hasTaskSnapshotRef.current = false;
     };
   }, [agentId, attachToRun, refreshThreads, resourceId, threadId]);
-
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
 
   useEffect(() => {
     let cancelled = false;
@@ -986,6 +1036,9 @@ export function ChatStudio({
     const assistantId = crypto.randomUUID();
     const sentInput = input;
 
+    // Sending a message is an explicit "show me the reply" intent: re-attach
+    // the follow even if the user had scrolled up while reading.
+    setPinned(true);
     setMessages((current) => [
       ...current,
       {
@@ -1405,6 +1458,8 @@ export function ChatStudio({
         </header>
 
         <section
+          ref={conversationRef}
+          onScroll={handleConversationScroll}
           className={`chat-conversation ${
             messages.length ? 'has-messages' : ''
           }`}
@@ -1500,7 +1555,11 @@ export function ChatStudio({
                             key={`tools-${group.parts[0]?.id}`}
                           >
                             {group.parts.map((tool) => (
-                              <ToolCallCard key={tool.id} tool={tool} />
+                              <ToolCallCard
+                                key={tool.id}
+                                tool={tool}
+                                collapseByDefault={agentId === QA_WEB_AGENT_ID}
+                              />
                             ))}
                           </div>
                         ) : (
@@ -1593,7 +1652,19 @@ export function ChatStudio({
                   </article>
                 );
               })}
-              <div ref={endRef} />
+              {!isPinned && (
+                <button
+                  type="button"
+                  className="chat-jump-latest"
+                  onClick={() => {
+                    setPinned(true);
+                    scrollToConversationBottom('smooth');
+                  }}
+                  aria-label="Jump to latest message"
+                >
+                  ↓
+                </button>
+              )}
             </div>
           )}
         </section>
@@ -1601,174 +1672,30 @@ export function ChatStudio({
           {runActive ? 'Assistant is responding…' : 'Assistant is idle'}
         </p>
 
-        <div className="chat-composer-wrap">
-          {error && (
-            <div className="studio-alert studio-alert-error">
-              {error}
-            </div>
-          )}
-          {!modelReady && !loading && (
-            <div className="studio-alert studio-alert-error">
-              The agent server returned no models. Set{' '}
-              <code>LLM_BASE_URL</code>, <code>LLM_API_KEY</code>, and{' '}
-              <code>LLM_DEFAULT_MODEL</code> in <code>agent/.env</code>, then
-              restart the agent server.
-            </div>
-          )}
-
-          <form
-            className={`chat-composer${dragOver ? ' drag-over' : ''}`}
-            onSubmit={submit}
-            onDragOver={dragOverForm}
-            onDragEnter={dragEnterForm}
-            onDragLeave={dragLeaveForm}
-            onDrop={dropForm}
-          >
-            <div className="chat-composer__input">
-              {uploads.length > 0 && (
-                <div
-                  className="chat-upload-row"
-                  role="list"
-                  aria-label="Pending attachments"
-                >
-                  {uploads.map((upload) => (
-                    <span
-                      className={`chat-upload-chip ${upload.status}`}
-                      key={upload.id}
-                      role="listitem"
-                    >
-                      <span aria-hidden="true">
-                        {upload.kind === 'image'
-                          ? '▣'
-                          : upload.kind === 'pdf'
-                            ? '⎘'
-                            : '≡'}
-                      </span>
-                      <span className="chat-upload-name">
-                        {upload.filename}
-                        {upload.prepared?.kind === 'pdf'
-                          ? ` (${upload.prepared.pages.length} pages)`
-                          : ''}
-                      </span>
-                      {upload.status === 'preparing' && (
-                        <small>processing…</small>
-                      )}
-                      {upload.status === 'error' && upload.error && (
-                        <small>{upload.error}</small>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => removeUpload(upload.id)}
-                        aria-label={`Remove ${upload.filename}`}
-                      >
-                        ×
-                      </button>
-                    </span>
-                  ))}
+          <div className="chat-composer-wrap">
+              {error && <div className="studio-alert studio-alert-error">{error}</div>}
+              {!modelReady && !loading && <div className="studio-alert studio-alert-error">The agent server returned no models. Set <code>LLM_BASE_URL</code>, <code>LLM_API_KEY</code>, and <code>LLM_DEFAULT_MODEL</code> in <code>agent/.env</code>, then restart the agent server.</div>}
+              <form className={`chat-composer${dragOver ? ' drag-over' : ''}`} onSubmit={submit} onDragOver={dragOverForm} onDragEnter={dragEnterForm} onDragLeave={dragLeaveForm} onDrop={dropForm}>
+                <div className="chat-composer__input">
+                  {uploads.length > 0 && <div className="chat-upload-row" role="list" aria-label="Pending attachments">{uploads.map((upload) => <span className={`chat-upload-chip ${upload.status}`} key={upload.id} role="listitem"><span aria-hidden="true">{upload.kind === 'image' ? '▣' : upload.kind === 'pdf' ? '⎘' : '≡'}</span><span className="chat-upload-name">{upload.filename}{upload.prepared?.kind === 'pdf' ? ` (${upload.prepared.pages.length} pages)` : ''}</span>{upload.status === 'preparing' && <small>processing…</small>}{upload.status === 'error' && upload.error && <small>{upload.error}</small>}<button type="button" onClick={() => removeUpload(upload.id)} aria-label={`Remove ${upload.filename}`}>×</button></span>)}</div>}
+                  {commandOpen && filteredSkills.length > 0 ? <CommandMenu commands={filteredSkills} activeIndex={commandIndex} onSelect={applySelection} /> : null}
+                  <textarea ref={textareaRef} value={input} onChange={(event) => { const value = event.target.value; setInput(value); const isCommand = isCommandInput(value); setCommandOpen(isCommand); if (isCommand) setCommandIndex(0); }} onKeyDown={keyDown} onPaste={paste} role="combobox" aria-expanded={commandOpen && filteredSkills.length > 0} aria-controls={commandOpen && filteredSkills.length > 0 ? 'chat-command-menu' : undefined} aria-autocomplete="list" placeholder={modelReady ? `Message ${currentAgent?.name || agentId}…` : 'Configure the server model first…'} disabled={!modelReady || runActive} rows={1} />
                 </div>
-              )}
-              {commandOpen && filteredSkills.length > 0 ? (
-                <CommandMenu
-                  commands={filteredSkills}
-                  activeIndex={commandIndex}
-                  onSelect={applySelection}
-                />
-              ) : null}
-              <textarea
-                ref={textareaRef}
-                value={input}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  setInput(value);
-                  const isCommand = isCommandInput(value);
-                  setCommandOpen(isCommand);
-                  if (isCommand) setCommandIndex(0);
-                }}
-                onKeyDown={keyDown}
-                onPaste={paste}
-                role="combobox"
-                aria-expanded={commandOpen && filteredSkills.length > 0}
-                aria-controls={
-                  commandOpen && filteredSkills.length > 0
-                    ? 'chat-command-menu'
-                    : undefined
-                }
-                aria-autocomplete="list"
-                placeholder={
-                  modelReady
-                    ? `Message ${currentAgent?.name || agentId}…`
-                    : 'Configure the server model first…'
-                }
-                disabled={!modelReady || runActive}
-                rows={1}
-              />
-            </div>
-
-            <footer>
-              <div>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  multiple
-                  hidden
-                  accept={ATTACHMENT_ACCEPT_ATTR}
-                  onChange={(event) => {
-                    addFiles(Array.from(event.target.files ?? []));
-                    event.target.value = '';
-                  }}
-                />
-                <button
-                  className="chat-attach-button"
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={!modelReady || runActive}
-                  aria-label="Attach files"
-                  title="Attach files"
-                >
-                  ＋ Attach
-                </button>
-                <span className="chat-memory-chip">◇ Memory</span>
-                {agentId === QA_WEB_AGENT_ID && (
-                  <span className="chat-memory-chip">◎ Browser</span>
-                )}
-                {agentId === QA_ANDROID_AGENT_ID && (
-                  <span className="chat-memory-chip">▷ Maestro</span>
-                )}
-              </div>
-
-              <div>
-                {runActive && subscriptionState !== 'connected' ? (
-                  <small>Connecting to the running conversation…</small>
-                ) : (
-                  <small>Shift + Enter for new line</small>
-                )}
-                {runActive ? (
-                  <button
-                    className="chat-stop-button"
-                    type="button"
-                    onClick={() => void stop()}
-                    aria-label="Stop generation"
-                  >
-                    ■
-                  </button>
-                ) : (
-                  <button
-                    className="chat-send-button"
-                    type="submit"
-                    disabled={
-                      (!input.trim() && readyUploads.length === 0) ||
-                      preparingUploads ||
-                      !modelReady
-                    }
-                    aria-label="Send message"
-                  >
-                    ↑
-                  </button>
-                )}
-              </div>
-            </footer>
-          </form>
-        </div>
+                <footer>
+                  <div>
+                    <input ref={fileInputRef} type="file" multiple hidden accept={ATTACHMENT_ACCEPT_ATTR} onChange={(event) => { addFiles(Array.from(event.target.files ?? [])); event.target.value = ''; }} />
+                    <button className="chat-attach-button" type="button" onClick={() => fileInputRef.current?.click()} disabled={!modelReady || runActive} aria-label="Attach files" title="Attach files">＋ Attach</button>
+                    <span className="chat-memory-chip">◇ Memory</span>
+                    {agentId === QA_WEB_AGENT_ID && <span className="chat-memory-chip">◎ Browser</span>}
+                    {agentId === QA_ANDROID_AGENT_ID && <span className="chat-memory-chip">▷ Maestro</span>}
+                  </div>
+                  <div>
+                    {runActive && subscriptionState !== 'connected' ? <small>Connecting to the running conversation…</small> : <small>Shift + Enter for new line</small>}
+                    {runActive ? <button className="chat-stop-button" type="button" onClick={() => void stop()} aria-label="Stop generation">■</button> : <button className="chat-send-button" type="submit" disabled={(!input.trim() && readyUploads.length === 0) || preparingUploads || !modelReady} aria-label="Send message">↑</button>}
+                  </div>
+                </footer>
+              </form>
+          </div>
       </main>
       {taskDockOpen && threadTasks && threadTasks.tasks.length > 0 && (
         <TaskDock

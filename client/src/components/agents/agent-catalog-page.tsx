@@ -3,7 +3,6 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { StudioNav } from '@/components/studio/studio-nav';
 import { AgentIcon } from '@/components/agents/agent-icon';
 import { BrandMark } from '@/components/ui/brand-mark';
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
@@ -82,6 +81,10 @@ export function AgentCatalogPage({
     };
   }, []);
 
+  const [activeFilter, setActiveFilter] = useState<'all' | 'code' | 'stored'>(
+    'all',
+  );
+
   const [runningAgentIds, setRunningAgentIds] = useState<ReadonlySet<string>>(
     () => new Set<string>(),
   );
@@ -102,16 +105,26 @@ export function AgentCatalogPage({
     };
   }, []);
 
+  const counts = useMemo(() => {
+    let code = 0;
+    let stored = 0;
+    for (const a of agents) {
+      if (a.source === 'stored') stored += 1;
+      else code += 1;
+    }
+    return { all: agents.length, code, stored };
+  }, [agents]);
+
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    if (!needle) return agents;
-
-    return agents.filter((agent) =>
-      [agent.name, agent.id, agent.description, modelLabel(agent)]
+    return agents.filter((agent) => {
+      if (activeFilter !== 'all' && agent.source !== activeFilter) return false;
+      if (!needle) return true;
+      return [agent.name, agent.id, agent.description, modelLabel(agent)]
         .filter(Boolean)
-        .some((value) => value!.toLowerCase().includes(needle)),
-    );
-  }, [agents, query]);
+        .some((value) => value!.toLowerCase().includes(needle));
+    });
+  }, [agents, query, activeFilter]);
 
   const startChat = async (target: ChekkuAgentSummary) => {
     setBusyId(target.id);
@@ -162,40 +175,100 @@ export function AgentCatalogPage({
   };
 
   return (
-    <div className="studio-shell">
-      <StudioNav resourceId={resourceId} />
+    <>
+      <header className="studio-page-header">
+        <div>
+          <p className="studio-eyebrow">Agent registry</p>
+          <h1>Choose an agent or build your own.</h1>
+          <p>
+            Start a conversation with a ready agent, or create a focused
+            agent with the model, tools, memory, and delegate it needs.
+          </p>
+        </div>
 
-      <main className="studio-main">
-        <header className="studio-page-header">
-          <div>
-            <p className="studio-eyebrow">Agent registry</p>
-            <h1>Choose an agent or build your own.</h1>
-            <p>
-              Start a conversation with a ready agent, or create a focused
-              agent with the model, tools, memory, and delegate it needs.
-            </p>
+        <Link className="studio-button studio-button-primary" href="/agents/new">
+          ＋ New agent
+        </Link>
+      </header>
+
+      <section className="studio-section studio-registry-section">
+        <div className="studio-registry-header">
+          <div className="studio-registry-title">
+            <h2 ref={registryHeadingRef} tabIndex={-1}>
+              Available agents
+            </h2>
           </div>
 
-          <Link className="studio-button studio-button-primary" href="/agents/new">
-            ＋ New agent
-          </Link>
-        </header>
+            <div className="studio-registry-controls">
+              <div
+                role="tablist"
+                aria-label="Filter agents by source"
+                className="studio-registry-tabs"
+              >
+                <button
+                  role="tab"
+                  type="button"
+                  aria-selected={activeFilter === 'all'}
+                  className={activeFilter === 'all' ? 'active' : ''}
+                  onClick={() => setActiveFilter('all')}
+                >
+                  All <span className="studio-tab-count">{counts.all}</span>
+                </button>
+                <button
+                  role="tab"
+                  type="button"
+                  aria-selected={activeFilter === 'code'}
+                  className={activeFilter === 'code' ? 'active' : ''}
+                  onClick={() => setActiveFilter('code')}
+                >
+                  Built-in <span className="studio-tab-count">{counts.code}</span>
+                </button>
+                <button
+                  role="tab"
+                  type="button"
+                  aria-selected={activeFilter === 'stored'}
+                  className={activeFilter === 'stored' ? 'active' : ''}
+                  onClick={() => setActiveFilter('stored')}
+                >
+                  Custom <span className="studio-tab-count">{counts.stored}</span>
+                </button>
+              </div>
 
-        <section className="studio-section">
-          <div className="studio-section-heading">
-            <div>
-              <p className="studio-eyebrow">Registry</p>
-              <h2 ref={registryHeadingRef} tabIndex={-1}>Available agents</h2>
+              <label className="studio-search studio-registry-search">
+                <span aria-hidden="true" className="studio-search-icon">
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <circle cx="7" cy="7" r="5" />
+                    <path d="M11 11 L14 14" />
+                  </svg>
+                </span>
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Search names, ids, or models"
+                  aria-label="Search agents"
+                />
+                {query && (
+                  <button
+                    type="button"
+                    className="studio-search-clear"
+                    aria-label="Clear search"
+                    onClick={() => setQuery('')}
+                  >
+                    ×
+                  </button>
+                )}
+              </label>
             </div>
-
-            <label className="studio-search">
-              <span aria-hidden="true">⌕</span>
-              <input
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search agents, ids, or models"
-              />
-            </label>
           </div>
 
           {error && (
@@ -208,63 +281,78 @@ export function AgentCatalogPage({
           )}
 
           {loading ? (
-            <div className="studio-empty-state">
+            <div className="studio-empty-state studio-registry-empty">
               <BrandMark />
               <p>Loading the Mastra registry…</p>
             </div>
           ) : filtered.length === 0 ? (
-            <div className="studio-empty-state">
+            <div className="studio-empty-state studio-registry-empty">
               <BrandMark />
               <h3>No matching agents</h3>
-              <p>Change the search term or create a stored agent.</p>
+              <p>
+                {query || activeFilter !== 'all'
+                  ? 'No agents match your filters. Clear search or switch tabs.'
+                  : 'Change the search term or create a stored agent.'}
+              </p>
+              {(query || activeFilter !== 'all') && (
+                <button
+                  type="button"
+                  className="studio-button"
+                  onClick={() => {
+                    setQuery('');
+                    setActiveFilter('all');
+                  }}
+                >
+                  Clear filters
+                </button>
+              )}
             </div>
           ) : (
             <div className="studio-agent-grid">
               {filtered.map((agent) => {
                 const canEdit = agent.source === 'stored';
-                const canDelete =
-                  canEdit && !RESERVED_AGENT_IDS.has(agent.id);
+                const canDelete = canEdit && !RESERVED_AGENT_IDS.has(agent.id);
+                const isRunning = runningAgentIds.has(agent.id);
 
                 return (
-                  <article className="studio-agent-card" key={agent.id}>
+                  <article
+                    className={`studio-agent-card${isRunning ? ' is-running' : ''}`}
+                    key={agent.id}
+                  >
                     <div className="studio-agent-card-top">
-                      <span className="studio-agent-glyph">
+                      <span className="studio-agent-glyph" aria-hidden="true">
                         <AgentIcon icon={agent.iconKey} />
                       </span>
-                      <span
-                        className={`studio-source-badge ${agent.source}`}
-                      >
-                        {agent.source}
-                      </span>
+                      <div className="studio-agent-card-badges">
+                        {isRunning && (
+                          <span className="studio-running-chip">
+                            Running
+                          </span>
+                        )}
+                        <span
+                          className={`studio-source-badge ${agent.source}`}
+                          title={
+                            agent.source === 'stored'
+                              ? 'Custom stored agent'
+                              : 'Code-defined built-in'
+                          }
+                        >
+                          {agent.source === 'stored' ? 'Custom' : 'Built-in'}
+                        </span>
+                      </div>
                     </div>
 
-                    <div>
+                    <div className="studio-agent-card-body">
                       <h3>{agent.name}</h3>
                       <code>{agent.id}</code>
                     </div>
 
-                    <p>
+                    <p className="studio-agent-card-desc">
                       {agent.description ||
                         'No description has been provided for this agent.'}
                     </p>
 
-                    <dl className="studio-agent-meta">
-                      <div>
-                        <dt>Model</dt>
-                        <dd>{modelLabel(agent)}</dd>
-                      </div>
-                      <div>
-                        <dt>Status</dt>
-                        <dd>{agent.status || 'ready'}</dd>
-                      </div>
-                    </dl>
-
                     <div className="studio-card-actions">
-                      {runningAgentIds.has(agent.id) && (
-                        <span className="studio-running-chip">
-                          <span aria-hidden="true">●</span> Running
-                        </span>
-                      )}
                       <button
                         className="studio-button studio-button-primary"
                         type="button"
@@ -276,7 +364,7 @@ export function AgentCatalogPage({
 
                       {canEdit && (
                         <Link
-                          className="studio-button"
+                          className="studio-button studio-button-ghost"
                           href={`/agents/${encodeURIComponent(agent.id)}/edit`}
                         >
                           Edit
@@ -299,10 +387,27 @@ export function AgentCatalogPage({
                   </article>
                 );
               })}
+
+              {!query.trim() && (
+                <Link
+                  className="studio-agent-card studio-agent-create-card"
+                  href="/agents/new"
+                  aria-label="Build your own agent"
+                >
+                  <span
+                    className="studio-agent-create-glyph"
+                    aria-hidden="true"
+                  >
+                    +
+                  </span>
+                  <span className="studio-agent-create-label">
+                    Build your own agent
+                  </span>
+                </Link>
+              )}
             </div>
-          )}
+              )}
         </section>
-      </main>
       <ConfirmationDialog
         open={Boolean(pendingDelete)}
         title={pendingDelete ? `Delete ${pendingDelete.name}?` : 'Delete agent?'}
@@ -312,6 +417,6 @@ export function AgentCatalogPage({
         onCancel={() => setPendingDelete(undefined)}
         onConfirm={() => void remove()}
       />
-    </div>
+    </>
   );
 }

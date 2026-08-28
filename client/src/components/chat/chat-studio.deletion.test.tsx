@@ -236,7 +236,7 @@ beforeEach(async () => {
   HTMLDialogElement.prototype.close = function close() {
     this.open = false;
   };
-  HTMLElement.prototype.scrollIntoView = vi.fn();
+  HTMLElement.prototype.scrollTo = vi.fn();
 
   act(() => {
     root!.render(

@@ -1,16 +1,11 @@
 import { DefaultAgentField } from '@/components/settings/default-agent-field';
-import { StudioNav } from '@/components/studio/studio-nav';
-import { requireUserId } from '@/server/auth';
 
 export const dynamic = 'force-dynamic';
 
 export default async function SettingsPage() {
-  const resourceId = await requireUserId();
 
   return (
-    <div className="studio-shell">
-      <StudioNav resourceId={resourceId} />
-      <main className="studio-main">
+    <>
         <header className="studio-page-header">
           <div>
             <p className="studio-eyebrow">Personal workspace</p>
@@ -43,7 +38,6 @@ export default async function SettingsPage() {
             <DefaultAgentField />
           </article>
         </section>
-      </main>
-    </div>
+    </>
   );
 }
