@@ -18,9 +18,9 @@ import {
   socialMediaContentWriter,
   registerSocialSlashCommands,
 } from '../agents/social-media-content-writer.js';
-import { socialMediaStrategistAgent } from '../agents/social-media-strategist-agent.js';
-import { socialMediaSupervisorAgent } from '../agents/social-media-supervisor-agent.js';
-import { visualContentAgent } from '../agents/visual-content-agent.js';
+import { durableSocialMediaStrategistAgent } from '../agents/social-media-strategist-agent.js';
+import { durableSocialMediaSupervisorAgent } from '../agents/social-media-supervisor-agent.js';
+import { durableVisualContentAgent } from '../agents/visual-content-agent.js';
 import { OpenAICompatibleGateway } from './gateways/openai-compatible.js';
 import { garageMcpServer } from './mcp/garage-mcp-server.js';
 import { searxngMcpServer } from './mcp/searxng-mcp-server.js';
@@ -66,21 +66,21 @@ if (!storage.stores?.threadState) {
 if (storage.stores) wireThreadStateEviction(storage.stores);
 export const mastra = new Mastra({
   agents: {
-    // Durable execution (N8_4 pilot + Task D rollout): main, pm, and
-    // qa-web run through `createDurableAgent` — composition keys and public
-    // ids are unchanged, so `getAgentById` and the `/runs` surface are
-    // unaffected. Excluded by design: social-media-content-writer (the
-    // wrapper does not carry Telegram channels), qa-android-agent (not
-    // production-ready), and stored agents (hydration owned by
-    // MastraEditor).
+    // Durable execution (N8_4 pilot + Task D rollout Fase 1 & 2): main, pm,
+    // qa-web, and the social cluster (strategist, supervisor, visual) run
+    // through `createDurableAgent` — composition keys and public ids are
+    // unchanged, so `getAgentById` and the `/runs` surface are unaffected.
+    // Excluded by design: social-media-content-writer (the wrapper does not
+    // carry Telegram channels), qa-android-agent (not production-ready),
+    // and stored agents (hydration owned by MastraEditor).
     mainAgent: durableMainAgent,
     pmAgent: durablePmAgent,
     qaWebAgent: durableQaWebAgent,
     qaAndroidAgent,
     socialMediaContentWriter,
-    socialMediaStrategistAgent,
-    socialMediaSupervisorAgent,
-    visualContentAgent,
+    socialMediaStrategistAgent: durableSocialMediaStrategistAgent,
+    socialMediaSupervisorAgent: durableSocialMediaSupervisorAgent,
+    visualContentAgent: durableVisualContentAgent,
   },
   workflows: { weeklySocialDrafts, repurposeSocialPost, generateSocialPostVisual },
   mcpServers: {

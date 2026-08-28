@@ -1,4 +1,5 @@
 import { Agent, type AgentConfig, type ToolsInput } from '@mastra/core/agent';
+import { createDurableAgent } from '@mastra/core/agent/durable';
 
 import { gatewayCompatibilityProcessor } from '../mastra/processors/gateway-compatibility.js';
 import { createAgentContextLimiter, createAgentMemory, createCharBudgetGuard } from '../mastra/processors/context-limit.js';
@@ -351,3 +352,19 @@ Reporting preview results clearly (critical):
 }
 
 export const visualContentAgent = new Agent(visualContentAgentConfig);
+
+/**
+ * Durable rollout (Task D, Fase 2): the Visual Content Agent has two
+ * callers, both now routed through this wrapper — the supervisor's
+ * delegation field (ad-hoc chat visuals after concept approval) and the
+ * approval-driven `generate-social-post-visual` workflow (`.generate()`).
+ * Same contract as `durablePmAgent` (in-process PubSub, no Redis, public
+ * id `visual-content-agent` unchanged, crash recovery unavailable in the
+ * pinned `@mastra/core` 1.50.1). Known engine limitation: an abort does
+ * not interrupt an in-flight image generation — it runs to completion and
+ * the abort lands at the next LLM step. The plain instance stays exported
+ * for tests.
+ */
+export const durableVisualContentAgent = createDurableAgent({
+  agent: visualContentAgent as Agent<string, ToolsInput, undefined>,
+});

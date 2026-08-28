@@ -1,4 +1,5 @@
 import { Agent, type AgentConfig, type ToolsInput } from '@mastra/core/agent';
+import { createDurableAgent } from '@mastra/core/agent/durable';
 
 import { gatewayCompatibilityProcessor } from '../mastra/processors/gateway-compatibility.js';
 import { createAgentContextLimiter, createAgentMemory, createCharBudgetGuard } from '../mastra/processors/context-limit.js';
@@ -9,8 +10,8 @@ import { readWebPageTool } from '../mastra/tools/web-reader.js';
 import { getServerModel } from '../providers/model.js';
 import { providerContextSchema, type ProviderContext } from './context.js';
 import { socialMediaContentWriter } from './social-media-content-writer.js';
-import { socialMediaStrategistAgent } from './social-media-strategist-agent.js';
-import { visualContentAgent } from './visual-content-agent.js';
+import { durableSocialMediaStrategistAgent, socialMediaStrategistAgent } from './social-media-strategist-agent.js';
+import { durableVisualContentAgent, visualContentAgent } from './visual-content-agent.js';
 
 /**
  * Social Media Supervisor
@@ -145,13 +146,38 @@ const socialMediaSupervisorAgentConfig: AgentConfig<string, ToolsInput, undefine
   // boundary is the one deliberate exception: the supervisor stops there to
   // ask the user for conversational approval before generating a visual.
   defaultOptions: { maxSteps: 15 },
+  // Task D Fase 2: the Strategist and the Visual Content Agent delegate as
+  // durable wrappers (each delegated turn is its own durable run); the
+  // Content Writer stays plain because the durable wrapper does not carry
+  // its Telegram channels. The casts mirror pm-agent.ts: the wrapper's
+  // requestContext generic stays `unknown` while the delegation field
+  // expects the sub-agent's zod-context type — the runtime shapes are
+  // identical and every method delegates to the wrapped instance.
   agents: {
     socialMediaContentWriter,
-    socialMediaStrategistAgent,
-    visualContentAgent,
+    socialMediaStrategistAgent: durableSocialMediaStrategistAgent as unknown as typeof socialMediaStrategistAgent,
+    visualContentAgent: durableVisualContentAgent as unknown as typeof visualContentAgent,
   },
   inputProcessors: [createAgentContextLimiter(), gatewayCompatibilityProcessor, createTaskNudgeProcessor(), createCharBudgetGuard()],
   instructions: buildSupervisorInstructions(),
 };
 
 export const socialMediaSupervisorAgent = new Agent(socialMediaSupervisorAgentConfig);
+
+/**
+ * Durable rollout (Task D, Fase 2): the supervisor's own network loop runs
+ * as a durable run. Its two callers both route through this wrapper — the
+ * chat run surface (`/runs`) and the scheduled `weekly-social-drafts`
+ * workflow, which calls `.generate()` with the
+ * `[weekly-social-drafts]` requestContext fast-path (requestContext is
+ * carried by `DurableAgentStreamOptions`). Same contract as
+ * `durablePmAgent` (in-process PubSub, no Redis, public id
+ * `social-media-supervisor-agent` and composition key
+ * `socialMediaSupervisorAgent` unchanged, crash recovery unavailable in
+ * the pinned `@mastra/core` 1.50.1). Known engine limitation: a stop on
+ * the supervisor does not interrupt an in-flight delegated sub-agent turn
+ * — it runs to completion and the abort lands at the next LLM step.
+ */
+export const durableSocialMediaSupervisorAgent = createDurableAgent({
+  agent: socialMediaSupervisorAgent as Agent<string, ToolsInput, undefined>,
+});

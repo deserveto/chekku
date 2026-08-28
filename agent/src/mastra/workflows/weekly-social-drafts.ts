@@ -11,7 +11,7 @@ import {
   createSocialDraftRequestContext,
   socialMediaContentWriter,
 } from '../../agents/social-media-content-writer.js';
-import { socialMediaSupervisorAgent } from '../../agents/social-media-supervisor-agent.js';
+import { durableSocialMediaSupervisorAgent } from '../../agents/social-media-supervisor-agent.js';
 import { env } from '../../config/env.js';
 import {
   createPublicHolidayClient,
@@ -625,7 +625,7 @@ export interface WeeklySocialDraftsDeps {
  * `SOCIAL_DRAFT_MODE_KEY` in `social-media-content-writer.ts`.
  */
 export const defaultGenerateCanonical: CanonicalGenerateFn = (prompt) =>
-  socialMediaSupervisorAgent
+  durableSocialMediaSupervisorAgent
     .generate(prompt, { requestContext: createSocialDraftRequestContext('canonical') })
     .then((result) => result.text);
 

@@ -4,6 +4,7 @@ import { mastra } from '../../mastra/index.js';
 import {
   VISUAL_CONTENT_AGENT_ID,
   buildInstructions,
+  durableVisualContentAgent,
   visualContentAgent,
 } from '../visual-content-agent.js';
 
@@ -36,7 +37,9 @@ describe('visual-content-agent (registration and identity)', () => {
   it('is registered in the Mastra agents map as a top-level agent', () => {
     const agents = mastra.listAgents();
     expect(Object.keys(agents)).toContain('visualContentAgent');
-    expect(agents.visualContentAgent).toBe(visualContentAgent);
+    // Task D Fase 2: the composition root registers the durable wrapper;
+    // the plain instance stays exported for direct tests like this one.
+    expect(agents.visualContentAgent).toBe(durableVisualContentAgent);
   });
 });
 

@@ -5,9 +5,9 @@ import { durablePmAgent, pmAgent } from '../pm-agent.js';
 import { durableQaWebAgent, qaWebAgent } from '../qa-web-agent.js';
 import { qaAndroidAgent } from '../qa-android-agent.js';
 import { socialMediaContentWriter } from '../social-media-content-writer.js';
-import { socialMediaStrategistAgent } from '../social-media-strategist-agent.js';
-import { socialMediaSupervisorAgent } from '../social-media-supervisor-agent.js';
-import { visualContentAgent } from '../visual-content-agent.js';
+import { durableSocialMediaStrategistAgent, socialMediaStrategistAgent } from '../social-media-strategist-agent.js';
+import { durableSocialMediaSupervisorAgent, socialMediaSupervisorAgent } from '../social-media-supervisor-agent.js';
+import { durableVisualContentAgent, visualContentAgent } from '../visual-content-agent.js';
 
 describe('main-agent (general Chekku Assistant)', () => {
   it('has id main-agent', () => {
@@ -159,13 +159,46 @@ describe('durable rollout (Task D, Fase 1: qa-web + main)', () => {
   it('keeps the excluded agents on plain instances', () => {
     const agents = mastra.listAgents();
     // social-media-content-writer: the wrapper does not carry Telegram
-    // channels; qa-android-agent: not production-ready; the social cluster
-    // and stored agents stay plain until Fase 2 / later review.
+    // channels; qa-android-agent: not production-ready; stored agents:
+    // hydration owned by MastraEditor.
     expect(agents.socialMediaContentWriter).toBe(socialMediaContentWriter);
-    expect(agents.socialMediaSupervisorAgent).toBe(socialMediaSupervisorAgent);
-    expect(agents.visualContentAgent).toBe(visualContentAgent);
-    expect(agents.socialMediaStrategistAgent).toBe(socialMediaStrategistAgent);
     expect(agents.qaAndroidAgent).toBe(qaAndroidAgent);
+  });
+});
+
+describe('durable rollout (Task D, Fase 2: social cluster)', () => {
+  it('wraps the social trio and keeps their public identities', () => {
+    expect(durableSocialMediaSupervisorAgent.id).toBe('social-media-supervisor-agent');
+    expect(durableSocialMediaSupervisorAgent.name).toBe('Social Media Supervisor');
+    expect(durableVisualContentAgent.id).toBe('visual-content-agent');
+    expect(durableVisualContentAgent.name).toBe('Visual Content Agent');
+    expect(durableSocialMediaStrategistAgent.id).toBe('social-media-strategist-agent');
+  });
+
+  it('registers the durable social instances in the composition root', () => {
+    const agents = mastra.listAgents();
+    expect(agents.socialMediaSupervisorAgent).toBe(durableSocialMediaSupervisorAgent);
+    expect(agents.socialMediaSupervisorAgent).not.toBe(socialMediaSupervisorAgent);
+    expect(agents.visualContentAgent).toBe(durableVisualContentAgent);
+    expect(agents.visualContentAgent).not.toBe(visualContentAgent);
+    expect(agents.socialMediaStrategistAgent).toBe(durableSocialMediaStrategistAgent);
+    expect(agents.socialMediaStrategistAgent).not.toBe(socialMediaStrategistAgent);
+    expect(mastra.getAgentById('social-media-supervisor-agent')).toBe(durableSocialMediaSupervisorAgent);
+    expect(mastra.getAgentById('visual-content-agent')).toBe(durableVisualContentAgent);
+    expect(mastra.getAgentById('social-media-strategist-agent')).toBe(durableSocialMediaStrategistAgent);
+  });
+
+  it('delegates strategy and visual delegation targets to the durable wrappers', () => {
+    // The supervisor's `agents` field is the delegation surface; the
+    // Content Writer stays plain there because the durable wrapper does
+    // not carry its Telegram channels.
+    const supervisor = socialMediaSupervisorAgent as unknown as {
+      __getStaticAgents?: () => Record<string, unknown>;
+    };
+    const subAgents = supervisor.__getStaticAgents?.() ?? {};
+    expect(subAgents.socialMediaContentWriter).toBe(socialMediaContentWriter);
+    expect(subAgents.socialMediaStrategistAgent).toBe(durableSocialMediaStrategistAgent);
+    expect(subAgents.visualContentAgent).toBe(durableVisualContentAgent);
   });
 });
 
@@ -269,7 +302,10 @@ describe('social-media-supervisor-agent (three sub-agents and routing)', () => {
       'socialMediaStrategistAgent',
       'visualContentAgent',
     ]);
-    expect(subAgents.visualContentAgent).toBe(visualContentAgent);
+    // Task D Fase 2: the strategist and visual delegations run through the
+    // durable wrappers (identity assertions live in the Fase 2 describe
+    // block above); the Content Writer stays plain.
+    expect(subAgents.visualContentAgent).toBe(durableVisualContentAgent);
   });
 
   it('binds exactly the two research tools plus task tracking and nothing else', async () => {
