@@ -94,6 +94,10 @@ export default function ApproveButton({
     ? 'Generating caption…'
     : 'Generating image…';
 
+  const consequence = nextStatus === 'CANONICAL_APPROVED'
+    ? 'Approving starts caption generation in the background.'
+    : 'Approving starts visual generation in the background.';
+
   return (
     <div className="studio-approve">
       <button
@@ -104,6 +108,9 @@ export default function ApproveButton({
       >
         {pending ? workingLabel : label}
       </button>
+      {!pending && !timedOut && !error ? (
+        <small className="studio-approve-hint">{consequence}</small>
+      ) : null}
       {timedOut ? (
         <span className="studio-alert studio-alert-error" role="alert">{TIMEOUT_MESSAGE}</span>
       ) : null}

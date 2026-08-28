@@ -4,10 +4,16 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { AgentIcon } from '@/components/agents/agent-icon';
+import { CommandPalette } from '@/components/studio/command-palette';
 import { ResizableSidebar } from '@/components/studio/resizable-sidebar';
 import { BrandMark } from '@/components/ui/brand-mark';
+import {
+  clearDefaultAgentId,
+  readDefaultAgentId,
+} from '@/components/settings/default-agent-field';
 import { authClient } from '@/lib/auth-client';
 import { buildChatHref } from '@/lib/chat-route';
+import { listAllAgents } from '@/lib/stored-agents';
 import { createOwnedThreadId } from '@/lib/thread-id';
 import { MAIN_AGENT_ID } from '@/lib/types';
 
@@ -42,9 +48,26 @@ export function StudioNav({ resourceId }: { resourceId: string }) {
     };
   }, [accountOpen]);
 
-  const startChat = () => {
-    const threadId = createOwnedThreadId(MAIN_AGENT_ID, resourceId);
-    router.push(buildChatHref(MAIN_AGENT_ID, threadId));
+  const [creatingChat, setCreatingChat] = useState(false);
+
+  const startChat = async () => {
+    setCreatingChat(true);
+    try {
+      let agentId = MAIN_AGENT_ID;
+      const preferred = readDefaultAgentId();
+      if (preferred) {
+        const agents = await listAllAgents().catch(() => []);
+        if (agents.some((agent) => agent.id === preferred)) {
+          agentId = preferred;
+        } else {
+          clearDefaultAgentId();
+        }
+      }
+      const threadId = createOwnedThreadId(agentId, resourceId);
+      router.push(buildChatHref(agentId, threadId));
+    } finally {
+      setCreatingChat(false);
+    }
   };
 
   const signOut = async () => {
@@ -91,7 +114,8 @@ export function StudioNav({ resourceId }: { resourceId: string }) {
           <button
             className="studio-primary-action"
             type="button"
-            onClick={startChat}
+            onClick={() => void startChat()}
+            disabled={creatingChat}
             aria-label="New chat"
             title={collapsed ? 'New chat' : undefined}
           >
@@ -111,7 +135,7 @@ export function StudioNav({ resourceId }: { resourceId: string }) {
               <span className="studio-sidebar-copy">Agents</span>
             </Link>
             <Link
-              href="/reports"
+              href="/reports/weekly"
               className={pathname.startsWith('/reports') ? 'active' : ''}
               aria-current={pathname.startsWith('/reports') ? 'page' : undefined}
               aria-label="Reports"
@@ -190,6 +214,7 @@ export function StudioNav({ resourceId }: { resourceId: string }) {
               </div>
             </div>
           ) : null}
+          <CommandPalette resourceId={resourceId} />
         </>
       )}
     </ResizableSidebar>

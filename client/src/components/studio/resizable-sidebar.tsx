@@ -58,6 +58,7 @@ export function ResizableSidebar({
 }) {
   const [width, setWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
   const [collapsed, setCollapsed] = useState(false);
+  const [ready, setReady] = useState(false);
   const lastExpandedWidth = useRef(SIDEBAR_DEFAULT_WIDTH);
   const preferencesReady = useRef(false);
 
@@ -68,6 +69,7 @@ export function ResizableSidebar({
       setWidth(preference.width);
       setCollapsed(preference.collapsed);
       preferencesReady.current = true;
+      setReady(true);
     });
 
     return () => window.cancelAnimationFrame(frame);
@@ -149,8 +151,8 @@ export function ResizableSidebar({
     <aside
       id={id}
       className={`${className} studio-resizable-sidebar ${
-        collapsed ? 'is-collapsed' : ''
-      }`}
+        ready ? 'is-ready' : ''
+      } ${collapsed ? 'is-collapsed' : ''}`}
       style={style}
       aria-label={label}
     >

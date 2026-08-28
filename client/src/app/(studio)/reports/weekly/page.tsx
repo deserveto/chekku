@@ -1,8 +1,6 @@
 import Link from 'next/link';
 
-import { StudioNav } from '@/components/studio/studio-nav';
 import { ReportTabs } from '@/components/reports/report-tabs';
-import { requireUserId } from '@/server/auth';
 import { formatPmReportCreatedAt } from '@/server/pm-report-format';
 import {
   listPmReportsForUser,
@@ -12,7 +10,6 @@ import {
 export const dynamic = 'force-dynamic';
 
 export default async function WeeklyReportsPage() {
-  const resourceId = await requireUserId();
   let reports: Awaited<ReturnType<typeof listPmReportsForUser>> = [];
   let errorMessage: string | undefined;
 
@@ -25,9 +22,7 @@ export default async function WeeklyReportsPage() {
   }
 
   return (
-    <div className="studio-shell">
-      <StudioNav resourceId={resourceId} />
-      <main className="studio-main">
+    <>
         <header className="studio-page-header">
           <div>
             <p className="studio-eyebrow">Garage storage</p>
@@ -36,14 +31,22 @@ export default async function WeeklyReportsPage() {
           </div>
         </header>
 
-        <section className="studio-section">
-          <ReportTabs active="weekly" />
+        <section className="studio-section studio-registry-section">
+          <div className="studio-registry-header">
+            <div className="studio-registry-title">
+              <h2>
+                Weekly reviews <span className="studio-registry-count">{reports.length}</span>
+              </h2>
+              <p className="studio-registry-subtitle">Risk ratings and original weekly input — newest first.</p>
+            </div>
+            <ReportTabs active="weekly" />
+          </div>
           {errorMessage ? (
             <div className="studio-alert studio-alert-error" role="alert">
               {errorMessage}
             </div>
           ) : reports.length === 0 ? (
-            <div className="studio-empty-state">
+            <div className="studio-empty-state studio-registry-empty">
               <h3>No saved reports</h3>
               <p>PM Agent reports will appear here after they are stored.</p>
             </div>
@@ -87,9 +90,8 @@ export default async function WeeklyReportsPage() {
                 </article>
               ))}
             </div>
-          )}
-        </section>
-      </main>
-    </div>
+              )}
+          </section>
+    </>
   );
 }

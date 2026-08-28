@@ -48,12 +48,12 @@ vi.mock('@/server/competitive-analyses', () => {
     CompetitiveAnalysisServiceError,
   };
 });
-vi.mock('@/server/pm-report-format', async () => import('../../../server/pm-report-format'));
+vi.mock('@/server/pm-report-format', async () => import('../../../../server/pm-report-format'));
 
 import { CompetitiveAnalysisServiceError } from '@/server/competitive-analyses';
 
 import CompetitiveAnalysisDetailPage from './[analysisId]/page';
-import CompetitiveSlidesPage from './[analysisId]/slides/page';
+import CompetitiveSlidesPage from '../../../reports/competitive/[analysisId]/slides/page';
 import CompetitiveAnalysesPage from './page';
 
 const analysisId = 'pca_20260723120000_deadbeef';

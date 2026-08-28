@@ -18,6 +18,7 @@ export function CommandMenu({ commands, activeIndex, onSelect }: CommandMenuProp
     <div
       className="chat-command-menu"
       role="listbox"
+      id="chat-command-menu"
       aria-label="Skill commands"
       aria-activedescendant={
         total === 0 ? undefined : `cmd-${rows[activeWrapped]!.name}`

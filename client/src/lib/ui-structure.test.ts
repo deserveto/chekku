@@ -1,9 +1,13 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const css = readFileSync(new URL('../app/studio.css', import.meta.url), 'utf8');
 const resizableSidebar = readFileSync(
   new URL('../components/studio/resizable-sidebar.tsx', import.meta.url),
+  'utf8',
+);
+const brandMark = readFileSync(
+  new URL('../components/ui/brand-mark.tsx', import.meta.url),
   'utf8',
 );
 const studioNav = readFileSync(
@@ -40,12 +44,22 @@ function readOptionalSource(path: string): string {
     return '';
   }
 }
-const reportLandingPage = readOptionalSource('../app/reports/page.tsx');
-const reportListPage = readOptionalSource('../app/reports/weekly/page.tsx');
-const reportDetailPage = readOptionalSource('../app/reports/[reportId]/page.tsx');
-const competitiveAnalysisListPage = readOptionalSource('../app/reports/competitive/page.tsx');
-const competitiveAnalysisDetailPage = readOptionalSource('../app/reports/competitive/[analysisId]/page.tsx');
-const competitiveAnalysisSlidesPage = readOptionalSource('../app/reports/competitive/[analysisId]/slides/page.tsx');
+function readStudioSource(path: string): string {
+  return (
+    readOptionalSource(path) ||
+    readOptionalSource(path.replace('../app/', '../app/(studio)/'))
+  );
+}
+const reportLandingPage = readStudioSource('../app/reports/page.tsx');
+const reportListPage = readStudioSource('../app/reports/weekly/page.tsx');
+const reportDetailPage = readStudioSource('../app/reports/[reportId]/page.tsx');
+const reportTabs = readFileSync(
+  new URL('../components/reports/report-tabs.tsx', import.meta.url),
+  'utf8',
+);
+const competitiveAnalysisListPage = readStudioSource('../app/reports/competitive/page.tsx');
+const competitiveAnalysisDetailPage = readStudioSource('../app/reports/competitive/[analysisId]/page.tsx');
+const competitiveAnalysisSlidesPage = readOptionalSource('../app/reports/competitive/[analysisId]/slides/page.tsx') || readOptionalSource('../app/(studio)/reports/competitive/[analysisId]/slides/page.tsx');
 const publicSlidesPage = readOptionalSource('../app/public/slides/[analysisId]/page.tsx');
 
 describe('requested UI structure', () => {
@@ -76,6 +90,57 @@ describe('requested UI structure', () => {
     expect(css).toMatch(
       /@media \(hover: none\) and \(min-width: 761px\)[\s\S]*?\.is-collapsed \.studio-sidebar-collapse\s*\{[^}]*opacity:\s*1[^}]*pointer-events:\s*auto/s,
     );
+  });
+
+  it('suppresses the sidebar width transition until stored preferences are applied', () => {
+    // The (studio) layout now persists the sidebar across routes, but the
+    // first paint still suppresses width and descendant transitions until
+    // localStorage state lands.
+    expect(resizableSidebar).toContain("ready ? 'is-ready' : ''");
+    const gate = css.match(
+      /\.studio-resizable-sidebar:not\(\.is-ready\)[^{]*\{([^}]*)\}/,
+    )?.[1];
+    expect(gate).toContain('transition: none');
+  });
+
+  it('centers the collapsed expand control within the sidebar', () => {
+    const rule = css.match(
+      /\.studio-resizable-sidebar\.is-collapsed \.studio-brand-row\s*\{([^}]*)\}/,
+    )?.[1];
+    expect(rule).toContain('margin-inline: auto');
+  });
+
+  it('renders the Chekku mark from the docs logo geometry', () => {
+    const docsLogo = readFileSync(
+      new URL('../../../docs/chekku-logo.svg', import.meta.url),
+      'utf8',
+    );
+    const docsPaths = [...docsLogo.matchAll(/ d="([^"]+)"/g)].map(
+      (match) => match[1],
+    );
+    expect(docsPaths.length).toBeGreaterThan(0);
+    for (const path of docsPaths) {
+      expect(brandMark).toContain(path);
+    }
+  });
+
+  it('uses the docs logo as the app favicon instead of the framework template', () => {
+    const iconPath = new URL('../app/icon.svg', import.meta.url);
+    expect(existsSync(iconPath)).toBe(true);
+    expect(readFileSync(iconPath, 'utf8')).toContain(
+      'M5 8.5 16 3l11 5.5v15L16 29 5 23.5z',
+    );
+    expect(existsSync(new URL('../app/favicon.ico', import.meta.url))).toBe(
+      false,
+    );
+  });
+
+  it('spends the accent on the primary sidebar action and primary buttons', () => {
+    const primaryAction = css.match(/\.studio-primary-action\s*\{([^}]*)\}/)?.[1];
+    expect(primaryAction).toContain('background: var(--studio-accent)');
+    expect(primaryAction).toContain('color: var(--studio-canvas)');
+    const primaryButton = css.match(/\.studio-button-primary\s*\{([^}]*)\}/)?.[1];
+    expect(primaryButton).toContain('background: var(--studio-accent)');
   });
 
   it('moves account actions into a profile-triggered popover', () => {
@@ -158,8 +223,10 @@ describe('requested UI structure', () => {
 
   it('groups weekly and competitive report routes without changing weekly detail URLs', () => {
     expect(reportLandingPage).toContain("export const dynamic = 'force-dynamic'");
-    expect(reportLandingPage).toContain('href="/reports/weekly"');
-    expect(reportLandingPage).toContain('href="/reports/competitive"');
+    // The landing route collapsed into a pure server redirect; the
+    // competitive view is reached through the tabs on each list page.
+    expect(reportLandingPage).toContain("redirect('/reports/weekly')");
+    expect(reportTabs).toContain("href: '/reports/competitive'");
     expect(reportListPage).toContain('href={`/reports/${encodeURIComponent(report.reportId)}`}');
     expect(competitiveAnalysisListPage).toContain(
       'href={`/reports/competitive/${encodeURIComponent(analysis.analysisId)}`}',
@@ -223,6 +290,14 @@ describe('requested UI structure', () => {
     expect(agentCatalogSource).toContain('<AgentIcon icon={agent.iconKey} />');
     expect(agentBuilder).toContain('AGENT_ICON_IDS.map');
     expect(agentBuilder).toContain('aria-label={`Use ${labelForAgentIcon(iconKey)} icon`}');
+  });
+
+  it('keeps catalog cards compact and exposes the create-agent card', () => {
+    expect(agentCatalogSource).not.toContain('<dt>Model</dt>');
+    expect(agentCatalogSource).not.toContain('<dt>Status</dt>');
+    expect(agentCatalogSource).toContain('studio-agent-create-card');
+    expect(agentCatalogSource).toContain('href="/agents/new"');
+    expect(css).toMatch(/\.studio-agent-card\s*\{[\s\S]*min-height:\s*214px/);
   });
 
   it('routes destructive UI actions through the shared confirmation dialog', () => {

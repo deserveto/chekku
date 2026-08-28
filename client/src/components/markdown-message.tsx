@@ -1,9 +1,16 @@
+import { memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 import { isSafeImageSrc } from '@/lib/safe-image-src';
 
-export function MarkdownMessage({ content }: { content: string }) {
+// Memoized: chat streams update `messages` many times per second, and an
+// unmemoized render re-parses every historical message's markdown per delta.
+export const MarkdownMessage = memo(function MarkdownMessage({
+  content,
+}: {
+  content: string;
+}) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
@@ -50,4 +57,4 @@ export function MarkdownMessage({ content }: { content: string }) {
       {content}
     </ReactMarkdown>
   );
-}
+});
