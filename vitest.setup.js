@@ -38,7 +38,14 @@ vi.mock('@mastra/pg', async () => {
   return {
     PostgresStore: class {
       constructor(opts) {
-        return new InMemoryStore({ id: opts?.id });
+        const store = new InMemoryStore({ id: opts?.id });
+        // Real @mastra/pg 1.15.0 does not implement the threadState
+        // domain, but InMemoryStore does natively. Drop it so the mock
+        // mirrors production and the composition root's backfill is
+        // load-bearing: removing the backfill from index.ts must fail the
+        // wiring tests instead of silently passing on the mock's domain.
+        if (store.stores) delete store.stores.threadState;
+        return store;
       }
     },
   };

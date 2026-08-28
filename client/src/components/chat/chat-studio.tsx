@@ -299,6 +299,9 @@ export function ChatStudio({
   // thread has no task list. Canonical state stays server-side (Mastra task
   // store + run events); this only mirrors the newest snapshot.
   const [threadTasks, setThreadTasks] = useState<ThreadTaskState | null>(null);
+  // Bounded last task-tool failure surfaced inside the dock; cleared by
+  // the next snapshot and on thread switches.
+  const [taskNotice, setTaskNotice] = useState<string | null>(null);
   const [taskDockOpen, setTaskDockOpen] = useState(false);
 
   const agentId = initialAgentId;
@@ -332,22 +335,47 @@ export function ChatStudio({
     if (event.type === 'task-list') {
       // Snapshots are authoritative and replace the previous list, so
       // replayed and live snapshots resolve to the latest state without
-      // duplicating rows. Malformed snapshots are ignored.
+      // duplicating rows. An empty snapshot clears the list; malformed
+      // snapshots are ignored.
       const tasks = parseTaskListPayload(event.payload);
       if (tasks) {
         const hadNoSnapshot = !hasTaskSnapshotRef.current;
-        hasTaskSnapshotRef.current = true;
+        hasTaskSnapshotRef.current = tasks.length > 0;
+        setTaskNotice(null);
         setThreadTasks((current) =>
           applyTaskSnapshot(current, tasks, event.createdAt),
         );
-        // First snapshot expands the dock on wide screens unless the user
-        // collapsed it before; their preference wins over auto-open.
-        if (hadNoSnapshot && !readTaskDockCollapsedPreference()) {
+        // A fresh (non-empty) snapshot expands the dock on wide screens
+        // unless the user collapsed it before; their preference wins over
+        // auto-open.
+        if (
+          hadNoSnapshot &&
+          tasks.length > 0 &&
+          !readTaskDockCollapsedPreference()
+        ) {
           setTaskDockOpen(
             typeof window === 'undefined' || window.innerWidth > 1080,
           );
         }
       }
+      return;
+    }
+
+    if (
+      event.type === 'tool-error' &&
+      isTaskToolName(event.payload.toolName as string | undefined)
+    ) {
+      // A failed task call never renders as a timeline card, but it must
+      // not be invisible either: surface a bounded notice in the dock so
+      // the operator can see why the list stopped updating.
+      const detail = event.payload.error;
+      const text =
+        typeof detail === 'string'
+          ? detail
+          : detail instanceof Error
+            ? detail.message
+            : 'Task tool failed';
+      setTaskNotice(text.slice(0, 300));
       return;
     }
 
@@ -387,9 +415,10 @@ export function ChatStudio({
       event.type === 'tool-result' ||
       event.type === 'tool-error'
     ) {
-      // The server already reroutes task tools into `task-list` snapshots;
-      // skipping them here keeps a stray legacy event from rendering a
-      // task_write JSON card in the timeline.
+      // The server reroutes task tools into `task-list` snapshots and
+      // bounded task `tool-error` notices (handled above); skipping them
+      // here keeps a stray legacy event from rendering a task_write JSON
+      // card in the timeline.
       if (isTaskToolName(event.payload.toolName as string | undefined)) {
         return;
       }
@@ -679,6 +708,7 @@ export function ChatStudio({
       setSubscriptionState('idle');
       lastTerminalRef.current = null;
       setThreadTasks(null);
+      setTaskNotice(null);
       setTaskDockOpen(false);
       hasTaskSnapshotRef.current = false;
     };
@@ -1168,7 +1198,11 @@ export function ChatStudio({
   return (
     <div
       className={`chat-studio-shell${
-        taskDockOpen && threadTasks ? ' has-task-dock' : ''
+        taskDockOpen &&
+        threadTasks &&
+        threadTasks.tasks.length > 0
+          ? ' has-task-dock'
+          : ''
       }`}
     >
       <ResizableSidebar
@@ -1321,14 +1355,31 @@ export function ChatStudio({
             {agentId === QA_ANDROID_AGENT_ID && (
               <span className="chat-browser-badge">▷ Android Agent</span>
             )}
-            {threadTasks && !taskDockOpen && (
+            {threadTasks && threadTasks.tasks.length > 0 && !taskDockOpen && (
               <TaskDock
                 tasks={threadTasks.tasks}
                 updatedAt={threadTasks.updatedAt}
+                notice={taskNotice ?? undefined}
                 open={false}
                 onToggle={toggleTaskDock}
               />
             )}
+            {/* Task tool failures must stay visible even when no dock body
+                exists to host them: a rejected first task_write leaves no
+                snapshot, and the collapsed pill hides the dock body. */}
+            {taskNotice &&
+              !(
+                taskDockOpen &&
+                threadTasks &&
+                threadTasks.tasks.length > 0
+              ) && (
+                <p
+                  className="chat-task-notice-topbar"
+                  role="status"
+                >
+                  <span aria-hidden="true">⚠</span> {taskNotice}
+                </p>
+              )}
           </div>
         </header>
 
@@ -1655,10 +1706,11 @@ export function ChatStudio({
           </form>
         </div>
       </main>
-      {taskDockOpen && threadTasks && (
+      {taskDockOpen && threadTasks && threadTasks.tasks.length > 0 && (
         <TaskDock
           tasks={threadTasks.tasks}
           updatedAt={threadTasks.updatedAt}
+          notice={taskNotice ?? undefined}
           open
           onToggle={toggleTaskDock}
         />

@@ -29,6 +29,9 @@ export type TaskStreamChunk = {
 /** Defensive caps so a runaway task list cannot flood the run event buffer. */
 const MAX_TASKS = 100;
 const MAX_TASK_TEXT_CHARS = 500;
+/** Ids beyond this are dropped, not clamped: a truncated id breaks
+ *  task_update/task_complete targeting. */
+const MAX_TASK_ID_CHARS = 128;
 
 const TASK_STATUSES: ReadonlySet<string> = new Set([
   'pending',
@@ -54,7 +57,7 @@ function normalizeTask(value: unknown): TaskItem | null {
   const record = value as Record<string, unknown>;
 
   const id = typeof record.id === 'string' ? record.id.trim() : '';
-  if (!id) return null;
+  if (!id || id.length > MAX_TASK_ID_CHARS) return null;
 
   const content = clampText(record.content);
   if (!content) return null;
@@ -102,7 +105,12 @@ export function extractTaskSnapshot(chunk: TaskStreamChunk): TaskItem[] | null {
   if ((result as Record<string, unknown>).isError === true) return null;
 
   const rawTasks = (result as Record<string, unknown>).tasks;
-  if (!Array.isArray(rawTasks) || rawTasks.length === 0) return null;
+  if (!Array.isArray(rawTasks)) return null;
+
+  // An empty list is a first-class "cleared" snapshot: dropping it kept
+  // the pre-clearing state on the dock and resurrected the deleted list
+  // after reload.
+  if (rawTasks.length === 0) return [];
 
   const tasks: TaskItem[] = [];
   for (const entry of rawTasks) {
@@ -111,5 +119,7 @@ export function extractTaskSnapshot(chunk: TaskStreamChunk): TaskItem[] | null {
     if (tasks.length >= MAX_TASKS) break;
   }
 
+  // A non-empty input whose entries are all invalid is malformed, not a
+  // clear: ignore it so garbage never wipes the dock.
   return tasks.length > 0 ? tasks : null;
 }

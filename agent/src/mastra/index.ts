@@ -3,7 +3,10 @@ import { Mastra } from '@mastra/core/mastra';
 import { MastraEditor } from '@mastra/editor';
 import { PostgresStore } from '@mastra/pg';
 import { PinoLogger } from '@mastra/loggers';
-import { InMemoryThreadStateStorage } from '@mastra/core/storage';
+import {
+  BoundedThreadStateStorage,
+  wireThreadStateEviction,
+} from './tasks/task-state-store.js';
 import { env } from '../config/env.js';
 import { requestIdInjector, requestLogger } from '../config/middleware.js';
 import { registerTaskSignalProcessors } from './tasks/task-signals.js';
@@ -51,14 +54,16 @@ const storage = new PostgresStore({
 // requires @mastra/core >= 1.53, so upgrading now would churn the whole
 // pinned Mastra stack). Task state is durable for the process lifetime;
 // across restarts the client rebuilds the latest snapshot from persisted
-// Memory task tool results.
+// Memory task tool results. The bounded store caps retained threads and
+// `Memory#deleteThread` (memory-domain only upstream) is wired to evict
+// the deleted thread's state so it cannot leak for the process lifetime.
 if (!storage.stores?.threadState) {
   storage.stores = {
     ...storage.stores,
-    threadState: new InMemoryThreadStateStorage(),
+    threadState: new BoundedThreadStateStorage(),
   };
 }
-
+if (storage.stores) wireThreadStateEviction(storage.stores);
 export const mastra = new Mastra({
   agents: {
     mainAgent,

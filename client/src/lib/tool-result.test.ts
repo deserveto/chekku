@@ -66,6 +66,22 @@ describe('extractImageUrl', () => {
     );
   });
 
+  it('drops oversized screenshot payloads instead of building a giant data URL', () => {
+    // Long QA runs accumulate multi-megabyte data URLs in message state;
+    // an over-cap base64 must not become a decoded full-size <img> with
+    // an auto-opened card. The JSON card still shows the raw result.
+    const oversized = {
+      base64: 'A'.repeat(2_000_001),
+      url: 'https://example.com/page',
+    };
+    expect(extractImageUrl(oversized)).toBeNull();
+
+    // Just under the cap still renders.
+    expect(
+      extractImageUrl({ base64: 'A'.repeat(2_000_000) }),
+    ).toBe(`data:image/png;base64,${'A'.repeat(2_000_000)}`);
+  });
+
   it('reads a nested browser_screenshot payload through subAgentToolResults', () => {
     const delegationResult = {
       text: 'findings',
