@@ -132,7 +132,7 @@ Local file: `agent/.env`
 | `LLM_MODELS` | No | empty | Comma-separated fallback model IDs. |
 | `LLM_IMAGE_MODEL` | No | empty | Fixed image model invoked by the Visual Content Agent's `generate_image` tool (e.g. `gemini-3.1-flash-image`). Empty/unset → tool fails closed. |
 | `LLM_IMAGE_ENDPOINT_PATH` | No | `/images/generations` | Narrowly-scoped path under `LLM_BASE_URL` for image generation. |
-| `TOKEN_DAILY_LIMIT` | No | `500000` | Per-user daily token quota across all agents (input + output summed per user per UTC day). `0` disables. Counters are in-memory: an agent restart resets them, and the quota resets at midnight UTC. Blocked prompts get a 429 with a fixed message. |
+| `TOKEN_DAILY_LIMIT` | No | `500000` | Per-user daily token quota across all agents (input + output summed per user per UTC day). `0` = unlimited. Counters are in-memory: an agent restart resets them, and the quota resets at midnight UTC. Blocked prompts get a 429 with a fixed message. |
 | `CHEKKU_DEFAULT_AGENT_ID` | No | `main-agent` | Default agent for new sessions. |
 | `BROWSER_HEADLESS` | No | `true` | Run the QA browser without a visible window. |
 | `SEARXNG_BASE_URL` | Conditional | empty | Server-owned SearXNG base URL. `npm run dev:sh` supplies `http://127.0.0.1:8888`; set it explicitly for an external service. |

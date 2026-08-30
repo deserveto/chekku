@@ -51,6 +51,7 @@ export class TokenQuotaStore implements TokenQuotaConsumer {
   private readonly now: () => number;
   private readonly entries = new Map<string, QuotaEntry>();
 
+  // No options -> limit 0 (unlimited); production wiring always passes env.TOKEN_DAILY_LIMIT.
   constructor(options: TokenQuotaStoreOptions = {}) {
     this.limit = Math.max(0, Math.floor(options.limit ?? 0));
     this.now = options.now ?? Date.now;
@@ -150,6 +151,7 @@ export class RunUsageTracker {
     if (total === null || total <= this.recorded) return;
     const delta = total - this.recorded;
     this.recorded = total;
+    this.highestStepTotal = Math.max(this.highestStepTotal, total);
     this.consume(delta);
   }
 

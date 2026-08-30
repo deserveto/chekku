@@ -55,14 +55,17 @@ describe('TokenQuotaStore', () => {
     expect(() => store.assertQuota('user-1')).not.toThrow();
     store.consume('user-1', 1);
     expect(() => store.assertQuota('user-1')).toThrow(TokenQuotaExceededError);
+    let caught: unknown;
     try {
       store.assertQuota('user-1');
     } catch (error) {
-      const quotaError = error as TokenQuotaExceededError;
-      expect(quotaError.used).toBe(100);
-      expect(quotaError.limit).toBe(100);
-      expect(quotaError.message).toBe(quotaExceededMessage(100, 100));
+      caught = error;
     }
+    expect(caught).toBeInstanceOf(TokenQuotaExceededError);
+    const quotaError = caught as TokenQuotaExceededError;
+    expect(quotaError.used).toBe(100);
+    expect(quotaError.limit).toBe(100);
+    expect(quotaError.message).toBe(quotaExceededMessage(100, 100));
   });
 
   it('resets lazily when the UTC day changes', () => {
@@ -117,6 +120,15 @@ describe('RunUsageTracker', () => {
     tracker.recordStepFinish({ totalUsage: { totalTokens: 100 } });
     tracker.recordFinish({ output: { usage: { totalTokens: 400 } } });
     tracker.recordFinish({ output: { usage: { totalTokens: 300 } } });
+    expect(consumed).toEqual([100, 300]);
+    expect(tracker.consumed).toBe(400);
+  });
+
+  it('does not double-count a late step-finish arriving after finish', () => {
+    const { tracker, consumed } = trackerOf();
+    tracker.recordStepFinish({ totalUsage: { totalTokens: 100 } });
+    tracker.recordFinish({ output: { usage: { totalTokens: 400 } } });
+    tracker.recordStepFinish({ totalUsage: { totalTokens: 300 } });
     expect(consumed).toEqual([100, 300]);
     expect(tracker.consumed).toBe(400);
   });

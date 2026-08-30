@@ -253,6 +253,10 @@ describe('TOKEN_DAILY_LIMIT', () => {
     expect(loadEnv({ TOKEN_DAILY_LIMIT: '0' }).TOKEN_DAILY_LIMIT).toBe(0);
   });
 
+  it('treats an empty string as unset (default), not 0/unlimited', () => {
+    expect(loadEnv({ TOKEN_DAILY_LIMIT: '' }).TOKEN_DAILY_LIMIT).toBe(500_000);
+  });
+
   it('rejects negative and non-integer values', () => {
     expect(() => loadEnv({ TOKEN_DAILY_LIMIT: '-1' })).toThrow();
     expect(() => loadEnv({ TOKEN_DAILY_LIMIT: '1.5' })).toThrow();
