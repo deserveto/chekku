@@ -4,6 +4,7 @@ import {
   RunRegistry,
   createRunId,
 } from '../runs/run-registry.js';
+import { TokenQuotaExceededError } from '../runs/token-quota.js';
 import {
   MAX_CONTENT_FILENAME_CHARS,
   MAX_CONTENT_IMAGE_BASE64_CHARS,
@@ -36,8 +37,32 @@ vi.mock('../runs/run-registry.js', async (importOriginal) => {
   };
 });
 
+// Same pattern as the registry: swap the module-level tokenQuotaStore
+// singleton per test so handler-level tests control quota state.
+const quotaState = vi.hoisted(() => ({
+  store: undefined as unknown as {
+    assertQuota: (resourceId: string) => void;
+    consume: (resourceId: string, tokens: number) => void;
+  },
+}));
+
+vi.mock('../runs/token-quota.js', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../runs/token-quota.js')>();
+  return {
+    ...actual,
+    get tokenQuotaStore() {
+      return quotaState.store;
+    },
+  };
+});
+
 beforeEach(() => {
   registryState.registry = new RunRegistry();
+  quotaState.store = {
+    assertQuota: () => undefined,
+    consume: () => undefined,
+  };
 });
 
 const VALID = {
@@ -491,5 +516,83 @@ describe('run events route: heartbeat lifecycle', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('run routes: token quota gate', () => {
+  function blockedQuota() {
+    quotaState.store = {
+      assertQuota: () => {
+        throw new TokenQuotaExceededError(500_000, 500_000);
+      },
+      consume: () => undefined,
+    };
+  }
+
+  function mastraWithAgent() {
+    return {
+      getAgentById: (id: string) => (id === 'main-agent' ? runnableAgent : undefined),
+    };
+  }
+
+  it('returns 429 with the fixed message when the quota is exhausted', async () => {
+    blockedQuota();
+    const res = await startHandler(
+      makeContext({ body: { ...VALID }, mastra: mastraWithAgent() }) as never,
+    );
+    expect(res.status).toBe(429);
+    expect(await res.json()).toEqual({
+      error:
+        'Daily token limit reached (500,000 of 500,000 tokens used). Resets at midnight UTC.',
+    });
+  });
+
+  it('blocks before creating a thread record or a run', async () => {
+    blockedQuota();
+    const memoryCalls: string[] = [];
+    const agentWithMemory = {
+      stream: runnableAgent.stream,
+      getMemory: async () => ({
+        getThreadById: async () => {
+          memoryCalls.push('getThreadById');
+          return null;
+        },
+        createThread: async () => {
+          memoryCalls.push('createThread');
+          return {};
+        },
+      }),
+    };
+    const res = await startHandler(
+      makeContext({
+        body: { ...VALID },
+        mastra: { getAgentById: () => agentWithMemory },
+      }) as never,
+    );
+    expect(res.status).toBe(429);
+    expect(memoryCalls).toEqual([]); // ensureFirstTurnThread never ran
+    expect(registryState.registry.findActiveRun(
+      'main-agent',
+      'main-agent-user-1-uuid-a',
+      'user-1',
+    )).toBeNull();
+  });
+
+  it('still returns 404 for an unknown agent when the quota is exhausted', async () => {
+    blockedQuota();
+    const res = await startHandler(
+      makeContext({
+        body: { ...VALID },
+        mastra: { getAgentById: () => undefined },
+      }) as never,
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it('starts normally while under the quota', async () => {
+    const res = await startHandler(
+      makeContext({ body: { ...VALID }, mastra: mastraWithAgent() }) as never,
+    );
+    expect(res.status).toBe(202);
   });
 });

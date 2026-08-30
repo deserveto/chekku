@@ -20,6 +20,7 @@ import {
   isOwnedThreadId,
   isResourceId,
 } from '../runs/thread-ownership.js';
+import { TokenQuotaExceededError, tokenQuotaStore } from '../runs/token-quota.js';
 
 export const MAX_PROMPT_UTF8_BYTES = 65_536;
 
@@ -213,6 +214,19 @@ export const startRunRoute = registerApiRoute('/runs', {
       return c.json({ error: 'Unknown agent' }, 404);
     }
 
+    // Token quota gate: a blocked user gets a fixed 429 before any thread
+    // record or run registry state is created. The limit is the global
+    // server default (TOKEN_DAILY_LIMIT); counters are in-memory and die
+    // with the process, so a restart gives the user a fresh daily quota.
+    try {
+      tokenQuotaStore.assertQuota(resourceId);
+    } catch (error) {
+      if (error instanceof TokenQuotaExceededError) {
+        return c.json({ error: error.message }, 429);
+      }
+      throw error;
+    }
+
     // First turn: create the Memory thread record (untitled — Mastra's
     // generateTitle names the thread at first-turn completion) before
     // execution starts, so the thread is visible in listings the moment the
@@ -245,15 +259,20 @@ export const startRunRoute = registerApiRoute('/runs', {
       return c.json({ error: 'Could not start the run' }, 500);
     }
 
-    void runExecution(agentRunRegistry, agent, {
-      runId,
-      agentId,
-      threadId,
-      resourceId,
-      prompt,
-      ...(content ? { content } : {}),
-      abortSignal: controller.signal,
-    });
+    void runExecution(
+      agentRunRegistry,
+      agent,
+      {
+        runId,
+        agentId,
+        threadId,
+        resourceId,
+        prompt,
+        ...(content ? { content } : {}),
+        abortSignal: controller.signal,
+      },
+      tokenQuotaStore,
+    );
 
     return c.json({ run }, 202);
   },
