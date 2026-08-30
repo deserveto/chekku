@@ -88,6 +88,76 @@ export class TokenQuotaStore implements TokenQuotaConsumer {
   }
 }
 
+type UnknownRecord = Record<string, unknown>;
+
+/** Reads an AI SDK LanguageModelUsage-shaped value into a token total. */
+function usageTotalTokens(usage: unknown): number | null {
+  if (!usage || typeof usage !== 'object') return null;
+  const record = usage as UnknownRecord;
+  const total = record.totalTokens;
+  if (typeof total === 'number' && Number.isFinite(total) && total >= 0) {
+    return Math.floor(total);
+  }
+  const input = record.inputTokens;
+  const output = record.outputTokens;
+  if (
+    typeof input === 'number' &&
+    Number.isFinite(input) &&
+    input >= 0 &&
+    typeof output === 'number' &&
+    Number.isFinite(output) &&
+    output >= 0
+  ) {
+    return Math.floor(input + output);
+  }
+  return null;
+}
+
+/**
+ * Records one run's token usage into a quota consumer, delta-only so nothing
+ * is double-counted. Mastra's `step-finish` payload carries `totalUsage` —
+ * cumulative usage across steps so far (AI SDK contract) — so each event
+ * consumes only growth over the highest cumulative total seen. A gateway
+ * variant that reports non-cumulatively (or not at all) is caught by
+ * `recordFinish`, which reconciles against the whole-run total in
+ * `output.usage` and consumes only the shortfall.
+ */
+export class RunUsageTracker {
+  private readonly consume: (tokens: number) => void;
+  private highestStepTotal = 0;
+  private recorded = 0;
+
+  constructor(consume: (tokens: number) => void) {
+    this.consume = consume;
+  }
+
+  recordStepFinish(payload: UnknownRecord): void {
+    const total = usageTotalTokens(payload.totalUsage);
+    if (total === null || total <= this.highestStepTotal) return;
+    const delta = total - this.highestStepTotal;
+    this.highestStepTotal = total;
+    this.recorded += delta;
+    this.consume(delta);
+  }
+
+  recordFinish(payload: UnknownRecord): void {
+    const output = payload.output;
+    const usage =
+      output && typeof output === 'object'
+        ? (output as UnknownRecord).usage
+        : undefined;
+    const total = usageTotalTokens(usage);
+    if (total === null || total <= this.recorded) return;
+    const delta = total - this.recorded;
+    this.recorded = total;
+    this.consume(delta);
+  }
+
+  get consumed(): number {
+    return this.recorded;
+  }
+}
+
 /** Server-wide singleton; process lifetime, single-instance invariant. */
 export const tokenQuotaStore = new TokenQuotaStore({
   limit: env.TOKEN_DAILY_LIMIT,
