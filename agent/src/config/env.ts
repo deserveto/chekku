@@ -113,6 +113,10 @@ const envSchema = z.object({
   PUBLIC_HOLIDAY_CACHE_DIR: z.string().default('src/mastra/calendar/.cache'),
 
   CHEKKU_DEFAULT_AGENT_ID: z.string().default('main-agent'),
+  // Per-user daily token quota (input + output tokens summed per resourceId
+  // per UTC day) enforced at run start. 0 disables enforcement. Counters are
+  // in-memory; an agent server restart gives users a fresh daily quota.
+  TOKEN_DAILY_LIMIT: z.coerce.number().int().min(0).default(500_000),
   BROWSER_HEADLESS: z.enum(['true', 'false']).default('true'),
   // Absolute path to a system browser binary. playwright-core resolves its own
   // downloaded browser unless it is handed an explicit executablePath, and it
