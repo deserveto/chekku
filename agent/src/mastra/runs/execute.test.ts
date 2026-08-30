@@ -687,3 +687,124 @@ describe('runExecution', () => {
     expect(final?.error).toBe('connection refused to model host');
   });
 });
+
+describe('runExecution token usage recording', () => {
+  function quotaSpy() {
+    const calls: Array<{ resourceId: string; tokens: number }> = [];
+    const quota = {
+      consume: (resourceId: string, tokens: number) => {
+        calls.push({ resourceId, tokens });
+      },
+    };
+    return { quota, calls };
+  }
+
+  it('consumes step deltas and the finish reconciliation against the quota', async () => {
+    const registry = new RunRegistry();
+    const { memory } = makeMemory(true);
+    const { agent } = makeAgent(
+      [
+        { type: 'text-delta', payload: { text: 'hi' } },
+        { type: 'step-finish', payload: { totalUsage: { totalTokens: 120 } } },
+        { type: 'step-finish', payload: { totalUsage: { totalTokens: 300 } } },
+        {
+          type: 'finish',
+          payload: { output: { usage: { totalTokens: 350 } } },
+        },
+      ],
+      memory,
+    );
+    const run = registry.createRun({
+      id: createRunId(),
+      ...TUPLE,
+      prompt: 'spend tokens',
+      requestAbort: () => undefined,
+    });
+    const { quota, calls } = quotaSpy();
+
+    await runExecution(registry, agent, {
+      runId: run.id,
+      ...TUPLE,
+      prompt: 'spend tokens',
+      abortSignal: new AbortController().signal,
+    }, quota);
+
+    // Deltas 120 + 180 from steps, then the 50-token finish shortfall.
+    expect(calls).toEqual([
+      { resourceId: TUPLE.resourceId, tokens: 120 },
+      { resourceId: TUPLE.resourceId, tokens: 180 },
+      { resourceId: TUPLE.resourceId, tokens: 50 },
+    ]);
+    expect(registry.getRun(run.id)?.status).toBe('completed');
+  });
+
+  it('keeps consumption when the stream fails mid-run', async () => {
+    const registry = new RunRegistry();
+    const failing: RunnableAgent = {
+      stream: async () => ({
+        fullStream: new ReadableStream<Chunk>({
+          async start(controller) {
+            controller.enqueue({
+              type: 'step-finish',
+              payload: { totalUsage: { totalTokens: 90 } },
+            });
+            // Erroring synchronously would discard the queued chunk
+            // (controller.error resets the stream's queue), so yield
+            // control first: the loop reads the step-finish, then the
+            // next read rejects mid-run.
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            controller.error(new Error('gateway dropped'));
+          },
+        }),
+      }),
+      getMemory: async () => undefined,
+    };
+    const run = registry.createRun({
+      id: createRunId(),
+      ...TUPLE,
+      prompt: 'boom mid-stream',
+      requestAbort: () => undefined,
+    });
+    const { quota, calls } = quotaSpy();
+
+    await runExecution(registry, failing, {
+      runId: run.id,
+      ...TUPLE,
+      prompt: 'boom mid-stream',
+      abortSignal: new AbortController().signal,
+    }, quota);
+
+    expect(calls).toEqual([
+      { resourceId: TUPLE.resourceId, tokens: 90 },
+    ]);
+    expect(registry.getRun(run.id)?.status).toBe('failed');
+  });
+
+  it('runs without a quota consumer and emits no usage events either way', async () => {
+    const registry = new RunRegistry();
+    const { agent } = makeAgent([
+      { type: 'step-finish', payload: { totalUsage: { totalTokens: 10 } } },
+      { type: 'finish', payload: { output: { usage: { totalTokens: 10 } } } },
+    ]);
+
+    const run = registry.createRun({
+      id: createRunId(),
+      ...TUPLE,
+      prompt: 'no quota',
+      requestAbort: () => undefined,
+    });
+
+    await expect(
+      runExecution(registry, agent, {
+        runId: run.id,
+        ...TUPLE,
+        prompt: 'no quota',
+        abortSignal: new AbortController().signal,
+      }),
+    ).resolves.toBeUndefined();
+
+    const events: string[] = [];
+    registry.subscribeFrom(run.id, 0, (event) => events.push(event.type));
+    expect(events).toEqual(['finish']); // usage chunks never become events
+  });
+});
