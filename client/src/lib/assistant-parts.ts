@@ -189,6 +189,14 @@ function flatString(value: unknown): string | undefined {
 }
 
 function restoredToolStatus(invocation: Record<string, unknown>): ToolEventStatus {
+  // The abort-persistence bridge stamps synthetic interrupted outcomes with
+  // `interrupted: true` inside the tool invocation: the run was stopped
+  // while the tool was in flight, so the card must not render as an error
+  // even though the persisted state is `output-error` (that state carries
+  // the errorText result the next provider request needs for validity).
+  if (invocation.interrupted === true) {
+    return 'interrupted';
+  }
   if (typeof invocation.errorText === 'string' && invocation.errorText) {
     return 'error';
   }
@@ -314,8 +322,9 @@ export function restoreAssistantParts(
       }
 
       // The abort-persistence bridge stamps synthetic results with
-      // `interrupted: true`: the tool did not fail, the run was stopped
-      // while it was in flight, so the restored card must say interrupted.
+      // `interrupted: true` (legacy raw parts carried the flag on the part
+      // itself): the tool did not fail, the run was stopped while it was in
+      // flight, so the restored card must say interrupted.
       const { value, error } = unwrapToolOutput(part.output ?? part.result);
       parts = upsertToolPart(parts, {
         toolCallId,

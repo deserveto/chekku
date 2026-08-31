@@ -392,6 +392,65 @@ describe('restoreAssistantParts', () => {
     expect(byId.get('tc-3')).toMatchObject({ status: 'error' });
   });
 
+  it('renders tool-invocation interrupted markers as interrupted, not errors', () => {
+    // The abort persistence bridge persists cancelled-turn tools as
+    // `tool-invocation` parts: an unresolved call carries `state:
+    // 'output-error'` with a synthetic `errorText` (provider-request
+    // validity) plus `interrupted: true` inside the invocation — the marker
+    // must win over the error state after a page refresh.
+    const restored = restoreAssistantParts(
+      {
+        format: 2,
+        parts: [
+          {
+            type: 'tool-invocation',
+            toolInvocation: {
+              toolCallId: 'tc-done',
+              toolName: 'search_web',
+              args: { query: 'x' },
+              state: 'result',
+              result: 'evidence',
+            },
+          },
+          {
+            type: 'tool-invocation',
+            toolInvocation: {
+              toolCallId: 'tc-stopped',
+              toolName: 'read_web_page',
+              args: { url: 'https://x' },
+              state: 'output-error',
+              errorText:
+                'Tool call was interrupted before completing (run stopped by the user).',
+              interrupted: true,
+            },
+          },
+          {
+            type: 'tool-invocation',
+            toolInvocation: {
+              toolCallId: 'tc-failed',
+              toolName: 'browser_click',
+              state: 'output-error',
+              errorText: 'selector not found',
+            },
+          },
+        ],
+      },
+      'msg-invocation',
+    );
+
+    const byId = new Map(
+      restored!.parts
+        .filter((part) => part.type === 'tool')
+        .map((part) => [part.toolCallId, part]),
+    );
+    expect(byId.get('tc-done')).toMatchObject({
+      status: 'complete',
+      result: 'evidence',
+    });
+    expect(byId.get('tc-stopped')).toMatchObject({ status: 'interrupted' });
+    expect(byId.get('tc-failed')).toMatchObject({ status: 'error' });
+  });
+
   it('skips reasoning, step-start, and other non-timeline parts', () => {
     const restored = restoreAssistantParts(
       {

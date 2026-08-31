@@ -214,11 +214,17 @@ export const startRunRoute = registerApiRoute('/runs', {
       return c.json({ error: 'Unknown agent' }, 404);
     }
 
-    // First turn: create the Memory thread record (untitled — Mastra's
-    // generateTitle names the thread at first-turn completion) before
-    // execution starts, so the thread is visible in listings the moment the
-    // run starts, not when Mastra persists the first completed turn.
-    await ensureFirstTurnThread(agent, { threadId, resourceId, prompt });
+    // First turn: create the Memory thread record untitled before execution
+    // starts, so the thread is visible in listings the moment the run
+    // starts, not when the first completed turn persists. The title is
+    // generated at first-turn completion — natively for plain agents, and
+    // driver-side by runExecution for durable agents (the durable finish
+    // path never runs Mastra's generateTitle hook).
+    const firstTurn = await ensureFirstTurnThread(agent, {
+      threadId,
+      resourceId,
+      prompt,
+    });
 
     const runId = createRunId();
     const controller = new AbortController();
@@ -253,6 +259,7 @@ export const startRunRoute = registerApiRoute('/runs', {
       resourceId,
       prompt,
       ...(content ? { content } : {}),
+      ...(firstTurn ? { firstTurn } : {}),
       abortSignal: controller.signal,
     });
 
@@ -435,24 +442,26 @@ export const cancelRunRoute = registerApiRoute('/runs/:runId/cancel', {
     if (!run) return c.json({ error: 'Run not found' }, 404);
 
     // A durable tool step can take up to its own bounded timeout to observe
-    // the abort signal. Persist the snapshot and release this thread's run
-    // lock now, rather than making the user wait for that unrelated drain
-    // before they can continue the conversation. Late events are ignored by
-    // the terminal registry record; runExecution may safely save the same
-    // IDs again when its stream finally unwinds (saveMessages is an upsert).
+    // the abort signal. Release this thread's run lock NOW, rather than
+    // making the user wait for that unrelated drain (or a slow Postgres
+    // write) before they can continue the conversation. The snapshot persist
+    // is fire-and-forget: runExecution saves the same IDs again when its
+    // stream finally unwinds (saveMessages is an upsert), so the early
+    // snapshot is an optimization, never a correctness requirement.
     if (run.status === 'running') {
+      const finished = agentRunRegistry.finishRun(runId, 'cancelled');
       const agent = resolveAgent(c, run.agentId);
       if (agent) {
-        await persistCancelledTurn(agentRunRegistry, agent, {
+        void persistCancelledTurn(agentRunRegistry, agent, {
           runId: run.id,
           agentId: run.agentId,
           threadId: run.threadId,
           resourceId: run.resourceId,
           prompt: run.prompt,
           abortSignal: new AbortController().signal,
-        });
+        }).catch(() => undefined);
       }
-      return c.json({ run: agentRunRegistry.finishRun(runId, 'cancelled') });
+      return c.json({ run: finished });
     }
 
     return c.json({ run });
