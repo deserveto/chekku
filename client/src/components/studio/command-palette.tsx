@@ -10,6 +10,12 @@ import { buildChatHref } from '@/lib/chat-route';
 import type { AgentIconId } from '@/lib/agent-icons';
 import type { ChekkuAgentSummary } from '@/lib/types';
 
+/**
+ * Optional dirty-state gate for pages with unsaved work: return false to
+ * block the navigation this component is about to perform.
+ */
+export type NavigationGuard = (href: string) => boolean;
+
 interface PaletteCommand {
   id: string;
   icon: AgentIconId;
@@ -23,7 +29,13 @@ interface PaletteCommand {
  * semantics, same entry path as the catalog) or navigate the studio.
  * Navigation-only by design — no state mutation from the palette.
  */
-export function CommandPalette({ resourceId }: { resourceId: string }) {
+export function CommandPalette({
+  resourceId,
+  guard,
+}: {
+  resourceId: string;
+  guard?: NavigationGuard;
+}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -75,6 +87,13 @@ export function CommandPalette({ resourceId }: { resourceId: string }) {
   }, [open]);
 
 
+  const guardedPush = useCallback(
+    (href: string) => {
+      if (guard && !guard(href)) return;
+      router.push(href);
+    },
+    [guard, router],
+  );
   const commands = useMemo<PaletteCommand[]>(() => {
     const agentCommands: PaletteCommand[] = agents.map((agent) => ({
       id: `agent-${agent.id}`,
@@ -86,7 +105,12 @@ export function CommandPalette({ resourceId }: { resourceId: string }) {
         setErrorText(null);
         try {
           const threadId = await resolveAgentChatThreadId(resourceId, agent);
-          router.push(buildChatHref(agent.id, threadId));
+          const href = buildChatHref(agent.id, threadId);
+          if (guard && !guard(href)) {
+            setBusyId(null);
+            return;
+          }
+          router.push(href);
         } catch {
           setErrorText('Could not open the chat. Check the agent registry.');
           setBusyId(null);
@@ -99,39 +123,40 @@ export function CommandPalette({ resourceId }: { resourceId: string }) {
         icon: 'network',
         label: 'Agent catalog',
         hint: 'Go to',
-        run: () => router.push('/agents'),
+        run: () => guardedPush('/agents'),
       },
       {
         id: 'nav-new-agent',
         icon: 'spark',
         label: 'New agent',
         hint: 'Go to',
-        run: () => router.push('/agents/new'),
+        run: () => guardedPush('/agents/new'),
       },
       {
         id: 'nav-reports',
         icon: 'chart',
         label: 'Reports',
         hint: 'Go to',
-        run: () => router.push('/reports'),
+        run: () => guardedPush('/reports'),
       },
       {
         id: 'nav-social-posts',
         icon: 'pen',
         label: 'Social posts',
         hint: 'Go to',
-        run: () => router.push('/social-posts'),
+        run: () => guardedPush('/social-posts'),
       },
       {
         id: 'nav-settings',
         icon: 'settings',
         label: 'Settings',
         hint: 'Go to',
-        run: () => router.push('/settings'),
+        run: () => guardedPush('/settings'),
       },
     ];
     return [...agentCommands, ...navigation];
-  }, [agents, resourceId, router]);
+  }, [agents, guardedPush, resourceId]);
+
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();

@@ -89,19 +89,29 @@ export function AgentCatalogPage({
     () => new Set<string>(),
   );
 
+  // Run chips must track live run state: runs start and finish outside this
+  // page's control, so poll the active-run surface while mounted (skipped
+  // while the tab is hidden).
   useEffect(() => {
     let cancelled = false;
-    void listActiveRuns()
-      .then((runs) => {
-        if (!cancelled) {
-          setRunningAgentIds(new Set(runs.map((run) => run.agentId)));
-        }
-      })
-      .catch(() => {
-        // Without the run surface the catalog simply shows no run chips.
-      });
+    const refresh = () => {
+      void listActiveRuns()
+        .then((runs) => {
+          if (!cancelled) {
+            setRunningAgentIds(new Set(runs.map((run) => run.agentId)));
+          }
+        })
+        .catch(() => {
+          // Without the run surface the catalog simply shows no run chips.
+        });
+    };
+    refresh();
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') refresh();
+    }, 15_000);
     return () => {
       cancelled = true;
+      window.clearInterval(interval);
     };
   }, []);
 

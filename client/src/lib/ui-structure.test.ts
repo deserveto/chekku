@@ -225,7 +225,7 @@ describe('requested UI structure', () => {
     expect(reportLandingPage).toContain("export const dynamic = 'force-dynamic'");
     // The landing route collapsed into a pure server redirect; the
     // competitive view is reached through the tabs on each list page.
-    expect(reportLandingPage).toContain("redirect('/reports/weekly')");
+    expect(reportLandingPage).toContain("permanentRedirect('/reports/weekly')");
     expect(reportTabs).toContain("href: '/reports/competitive'");
     expect(reportListPage).toContain('href={`/reports/${encodeURIComponent(report.reportId)}`}');
     expect(competitiveAnalysisListPage).toContain(

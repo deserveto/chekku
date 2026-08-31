@@ -22,6 +22,11 @@ vi.mock('next/navigation', () => ({
     (err as unknown as { digest: string }).digest = `NEXT_REDIRECT;${url}`;
     throw err;
   }),
+  permanentRedirect: vi.fn((url: string) => {
+    const err = new Error(`NEXT_REDIRECT:${url}`) as Error & { digest?: string };
+    (err as unknown as { digest: string }).digest = `NEXT_REDIRECT;${url};308`;
+    throw err;
+  }),
 }));
 vi.mock('@/components/markdown-message', () => ({
   MarkdownMessage: ({ content }: { content: string }) => content,
@@ -105,8 +110,6 @@ describe('reports landing page', () => {
     expect(headerRule).toContain('align-items: flex-start');
     // Registry header remains left-aligned (reverted); weekly header should not be centered
     expect(css).not.toContain('.studio-registry-header.is-centered');
-    const mobileRules = css.match(/@media \(max-width: 760px\) \{([\s\S]*)$/)?.[1] ?? '';
-    expect(mobileRules).toMatch(/\.studio-report-choice-grid[\s\S]*grid-template-columns:\s*1fr/);
   });
 });
 

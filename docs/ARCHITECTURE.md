@@ -501,7 +501,7 @@ Chat report links use URL-encoded relative `/reports/<reportId>` or `/reports/co
 - `/agents/[id]/edit` edits a stored agent.
 - `/chat` opens the canonical query-based chat route.
 - `/chat/[threadId]` redirects legacy thread URLs to the canonical route.
-- `/reports` groups Weekly Reports and Competitive Analyses.
+- `/reports` redirects permanently to `/reports/weekly` (the overview choice page was removed).
 - `/reports/weekly` lists weekly PM reports newest first.
 - `/reports/[reportId]` preserves weekly analysis, metadata, and original-input details.
 - `/reports/competitive` lists competitive analyses newest first.
