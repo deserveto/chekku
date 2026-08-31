@@ -179,6 +179,7 @@ ensure_service_ready() {
     searxng) required_port=8888 ;;
     reader) required_port=8081 ;;
     qdrant) required_port=6333 ;;
+    *) echo "Unsupported development service." >&2; exit 1 ;;
   esac
 
   set +e

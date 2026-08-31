@@ -69,6 +69,10 @@ export interface KnowledgeDocumentMetadata {
   embeddingModel?: string;
   /** Fixed, bounded failure reason for the UI when status is `failed`. */
   error?: string;
+  /** When the last accepted ingestion run claimed this document; absent
+   * until a run passes `beginKnowledgeDocumentIngestion`. Drives the
+   * mutual-exclusion freshness check. */
+  ingestionStartedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -106,6 +110,20 @@ const RFC3339_RE = /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.(\d+
 
 /** Hard cap on stored filenames (already sanitized upstream; defense in depth). */
 const MAX_FILENAME_CHARS = 200;
+
+/**
+ * Maximum documents one user may hold. Uploads are auto-created by every
+ * chat text/PDF send, so an unbounded user could otherwise wedge listing
+ * (each document costs multiple list + metadata reads) forever.
+ */
+export const MAX_KNOWLEDGE_DOCUMENTS_PER_USER = 500;
+
+/** Listing window for one user's document keys (well past the cap above). */
+const MAX_KNOWLEDGE_LISTING_KEYS = 10_000;
+
+/** Concurrent metadata reads during listing — bounded, never one-per-key. */
+const LISTING_CONCURRENCY = 8;
+
 /** Hard cap on the persisted failure reason so metadata stays bounded. */
 const MAX_ERROR_CHARS = 500;
 const MAX_MIME_CHARS = 100;
@@ -261,6 +279,11 @@ function parseKnowledgeDocumentMetadata(
   if (raw.sourceThreadId !== undefined && sourceThreadId === undefined) return undefined;
   const error = optionalBoundedString(raw.error, MAX_ERROR_CHARS);
   if (raw.error !== undefined && error === undefined) return undefined;
+  const ingestionStartedAt = raw.ingestionStartedAt;
+  if (ingestionStartedAt !== undefined
+    && (typeof ingestionStartedAt !== 'string' || parseRfc3339Timestamp(ingestionStartedAt) === undefined)) {
+    return undefined;
+  }
 
   return {
     id,
@@ -276,6 +299,7 @@ function parseKnowledgeDocumentMetadata(
     ...(sourceThreadId !== undefined ? { sourceThreadId } : {}),
     ...(embeddingModel !== undefined ? { embeddingModel } : {}),
     ...(error !== undefined ? { error } : {}),
+    ...(ingestionStartedAt !== undefined ? { ingestionStartedAt } : {}),
     createdAt,
     updatedAt,
   };
@@ -288,7 +312,13 @@ function parseKnowledgeDocumentMetadata(
  */
 export function buildKnowledgeDocument(input: KnowledgeDocumentInput, bytes: Uint8Array): BuiltKnowledgeDocument {
   validateKnowledgeResourceId(input.resourceId);
-  if (typeof input.filename !== 'string' || input.filename.trim().length === 0 || input.filename.length > MAX_FILENAME_CHARS) {
+  // Same convention as the client's sanitizeAttachmentFilename: control
+  // characters (including newlines) never belong in metadata, Qdrant
+  // payloads, or tool output. Idempotent — already-clean names pass through.
+  const filename = typeof input.filename === 'string'
+    ? input.filename.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim()
+    : input.filename;
+  if (typeof filename !== 'string' || filename.length === 0 || filename.length > MAX_FILENAME_CHARS) {
     throw new Error('Knowledge document filename must be 1-200 characters.');
   }
   if (typeof input.mimeType !== 'string' || input.mimeType.length === 0 || input.mimeType.length > MAX_MIME_CHARS) {
@@ -303,12 +333,12 @@ export function buildKnowledgeDocument(input: KnowledgeDocumentInput, bytes: Uin
   const createdAt = (input.now?.() ?? new Date()).toISOString();
   const documentId = input.documentId ?? createKnowledgeDocumentId(new Date(createdAt));
   const keys = knowledgeDocumentKeys(input.resourceId, documentId);
-  const ext = extensionForKnowledgeDocument(input.kind, input.filename);
+  const ext = extensionForKnowledgeDocument(input.kind, filename);
   const originalObjectKey = `${keys.originalObjectKey}.${ext}`;
   const metadata: KnowledgeDocumentMetadata = {
     id: documentId,
     resourceId: input.resourceId,
-    filename: input.filename,
+    filename,
     mimeType: input.mimeType,
     kind: input.kind,
     sizeBytes: bytes.byteLength,
@@ -345,6 +375,33 @@ export async function saveKnowledgeDocument(
   return built.metadata;
 }
 
+/** Read + validate one listed metadata object. Returns undefined for corrupt,
+ * noncanonical, or vanished entries — a listing never fails on one bad key. */
+async function readListedDocument(
+  store: ObjectStorage,
+  key: string,
+  prefix: string,
+  resourceId: string,
+): Promise<KnowledgeDocumentMetadata | undefined> {
+  try {
+    const metadataText = await store.getText(key);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(metadataText);
+    } catch {
+      return undefined;
+    }
+    const documentId = key.slice(prefix.length, -'/metadata.json'.length);
+    const record = parseKnowledgeDocumentMetadata(parsed, { resourceId, documentId });
+    if (record === undefined) return undefined;
+    const canonical = knowledgeDocumentKeys(resourceId, documentId);
+    return canonical.metadataObjectKey === key ? record : undefined;
+  } catch (error) {
+    if (error instanceof ObjectStorageError && error.code === 'not-found') return undefined;
+    throw error;
+  }
+}
+
 /**
  * List one user's knowledge documents, newest first. The listing prefix is
  * scoped to the resource id, and every parsed record must still re-declare
@@ -357,7 +414,7 @@ export async function listKnowledgeDocuments(
 ): Promise<KnowledgeDocumentMetadata[]> {
   validateKnowledgeResourceId(resourceId);
   const prefix = `${KNOWLEDGE_STORAGE_ROOT}/${resourceId}/documents/`;
-  const result = await store.listKeys(prefix);
+  const result = await store.listKeys(prefix, { limit: MAX_KNOWLEDGE_LISTING_KEYS });
   if (result.truncated) {
     throw new ObjectStorageError(
       'unavailable',
@@ -365,25 +422,19 @@ export async function listKnowledgeDocuments(
     );
   }
   const metadataKeys = result.keys.filter((key) => key.endsWith('/metadata.json'));
-  const entries = await Promise.all(metadataKeys.map(async (key) => {
-    try {
-      const metadataText = await store.getText(key);
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(metadataText);
-      } catch {
-        return undefined;
+  // Bounded-concurrency map: never one in-flight read per document.
+  const entries: Array<KnowledgeDocumentMetadata | undefined> = new Array(metadataKeys.length);
+  let cursor = 0;
+  const workers = Array.from(
+    { length: Math.min(LISTING_CONCURRENCY, metadataKeys.length) },
+    async () => {
+      while (cursor < metadataKeys.length) {
+        const index = cursor++;
+        entries[index] = await readListedDocument(store, metadataKeys[index], prefix, resourceId);
       }
-      const documentId = key.slice(prefix.length, -'/metadata.json'.length);
-      const record = parseKnowledgeDocumentMetadata(parsed, { resourceId, documentId });
-      if (record === undefined) return undefined;
-      const canonical = knowledgeDocumentKeys(resourceId, documentId);
-      return canonical.metadataObjectKey === key ? record : undefined;
-    } catch (error) {
-      if (error instanceof ObjectStorageError && error.code === 'not-found') return undefined;
-      throw error;
-    }
-  }));
+    },
+  );
+  await Promise.all(workers);
   const documents = entries.filter((entry): entry is KnowledgeDocumentMetadata => entry !== undefined);
   return documents
     .map((doc, index) => ({ doc, index, timestamp: parseKnowledgeDocumentTimestamp(doc.id) }))
@@ -394,6 +445,21 @@ export async function listKnowledgeDocuments(
       return b.timestamp - a.timestamp || a.index - b.index;
     })
     .map(({ doc }) => doc);
+}
+
+/**
+ * Count one user's documents (metadata keys under their prefix). Used to
+ * enforce {@link MAX_KNOWLEDGE_DOCUMENTS_PER_USER} before a save; key listing
+ * only, so it stays cheap even at the cap.
+ */
+export async function countKnowledgeDocuments(
+  store: ObjectStorage,
+  resourceId: string,
+): Promise<number> {
+  validateKnowledgeResourceId(resourceId);
+  const prefix = `${KNOWLEDGE_STORAGE_ROOT}/${resourceId}/documents/`;
+  const result = await store.listKeys(prefix, { limit: MAX_KNOWLEDGE_LISTING_KEYS });
+  return result.keys.filter((key) => key.endsWith('/metadata.json')).length;
 }
 
 /**
@@ -468,8 +534,12 @@ async function writeMetadataRecord(
 
 /**
  * Transition a document into `processing` for (re-)ingestion. Allowed from
- * `processing` (fresh retry after a crash) and `failed`; a run started from
- * `ready` is rejected so accidental re-fires never wipe healthy indexes.
+ * `failed` and from a `processing` record whose claim is older than the
+ * stale window (a dead run's crash recovery); a run started from `ready` —
+ * or from a `processing` record another live run still owns — is rejected
+ * so concurrent or accidental re-fires can never interleave index writes or
+ * wipe healthy indexes. Callers treat the thrown `already-exists` as
+ * "someone else owns this document right now" and must not clean up after it.
  */
 export async function beginKnowledgeDocumentIngestion(
   store: ObjectStorage,
@@ -479,13 +549,27 @@ export async function beginKnowledgeDocumentIngestion(
 ): Promise<KnowledgeDocumentMetadata> {
   return serializeMetadataWrite(resourceId, documentId, async () => {
     const record = await readMetadataRecord(store, resourceId, documentId);
+    const nowMs = (options.now?.() ?? new Date()).getTime();
     if (record.status === 'ready') {
       throw new ObjectStorageError('already-exists', 'Knowledge document is already indexed.');
     }
-    const updatedAt = (options.now?.() ?? new Date()).toISOString();
+    if (record.status === 'processing') {
+      // Freshness is judged on the claim timestamp (`ingestionStartedAt`),
+      // not `updatedAt`: a fresh upload is also `processing` but no run has
+      // claimed it yet, so its first ingestion must be accepted.
+      const startedAtMs = parseRfc3339Timestamp(record.ingestionStartedAt ?? '');
+      if (startedAtMs !== undefined && nowMs - startedAtMs < KNOWLEDGE_STALE_PROCESSING_MS) {
+        throw new ObjectStorageError(
+          'already-exists',
+          'Knowledge document ingestion is already in progress.',
+        );
+      }
+    }
+    const updatedAt = new Date(nowMs).toISOString();
     const updated: KnowledgeDocumentMetadata = {
       ...record,
       status: 'processing',
+      ingestionStartedAt: updatedAt,
       error: undefined,
       updatedAt,
     };
@@ -526,7 +610,13 @@ export async function completeKnowledgeDocumentIngestion(
   });
 }
 
-/** Mark ingestion failed with a fixed bounded reason. */
+/**
+ * Mark ingestion failed with a fixed bounded reason. Refuses to overwrite
+ * `ready`: a completion that lands after a racing run's failure must win, so
+ * a healthy indexed document can never be flipped to `failed` by a stale
+ * loser. Callers treat the thrown `already-exists` as "the document is
+ * indexed" and must not retry the failure transition.
+ */
 export async function failKnowledgeDocumentIngestion(
   store: ObjectStorage,
   resourceId: string,
@@ -537,6 +627,12 @@ export async function failKnowledgeDocumentIngestion(
   const boundedError = error.length > MAX_ERROR_CHARS ? `${error.slice(0, MAX_ERROR_CHARS - 1)}…` : error;
   return serializeMetadataWrite(resourceId, documentId, async () => {
     const record = await readMetadataRecord(store, resourceId, documentId);
+    if (record.status === 'ready') {
+      throw new ObjectStorageError(
+        'already-exists',
+        'Knowledge document is already indexed; refusing to mark it failed.',
+      );
+    }
     const updatedAt = (options.now?.() ?? new Date()).toISOString();
     const updated: KnowledgeDocumentMetadata = {
       ...record,

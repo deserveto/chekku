@@ -20,9 +20,16 @@ const KNOWLEDGE_TEXT_EXTENSION_ALLOWED: Record<string, true> = {
   yaml: true,
 };
 
-/** Raw-binary caps for persisted Knowledge documents (chat inline caps are separate). */
+/**
+ * Raw-binary caps for persisted Knowledge documents (chat inline caps are
+ * separate). The 16 MiB PDF cap MUST stay ≤ the Garage adapter's
+ * `MAX_BINARY_BODY_BYTES` (storage/src/garage.ts) — a larger upload would
+ * persist and then fail every ingestion read, permanently stuck. The
+ * production nginx `client_max_body_size` (ops/nginx/chekku.conf) must stay
+ * above the larger of these caps plus multipart overhead.
+ */
 export const MAX_KNOWLEDGE_TEXT_BYTES = 2 * 1024 * 1024;
-export const MAX_KNOWLEDGE_PDF_BYTES = 20 * 1024 * 1024;
+export const MAX_KNOWLEDGE_PDF_BYTES = 16 * 1024 * 1024;
 
 export type KnowledgeFileKind = 'text' | 'pdf';
 

@@ -3,6 +3,8 @@ import 'server-only';
 import {
   KNOWLEDGE_DOCUMENT_ID_RE,
   KNOWLEDGE_STALE_PROCESSING_MS,
+  MAX_KNOWLEDGE_DOCUMENTS_PER_USER,
+  countKnowledgeDocuments,
   createLazyGarageObjectStorage,
   failKnowledgeDocumentIngestion,
   getKnowledgeDocument,
@@ -16,13 +18,13 @@ import {
   type ObjectStorage,
 } from '@chekku/storage';
 
-import { getUserId as getServerUserId } from './auth';
+import { sanitizeAttachmentFilename } from '@/lib/chat-attachments';
 import {
   classifyKnowledgeFile,
   knowledgeByteCap,
 } from '@/lib/knowledge';
 
-
+import { getUserId as getServerUserId } from './auth';
 /**
  * Server-only Knowledge Base boundary. Every function resolves the tenant
  * from the Better Auth session (never from route input), scopes all storage
@@ -40,6 +42,7 @@ export class KnowledgeServiceError extends Error {
       | 'forbidden'
       | 'invalid-document-id'
       | 'invalid-document'
+      | 'document-limit'
       | 'not-found'
       | 'retry-not-allowed'
       | 'workflow-trigger-failed'
@@ -161,7 +164,11 @@ export async function uploadKnowledgeDocumentForUser(
 ): Promise<KnowledgeDocumentMetadata> {
   const userId = await requireIdentity(dependencies.getServerUserId ?? getServerUserId);
 
-  if (input.sourceThreadId !== undefined && input.sourceThreadId.length > 256) {
+  // Thread ids follow the canonical `{agentId}-{resourceId}-{uuid}` shape
+  // everywhere else in the repo; this annotation flows into persisted
+  // metadata and model-visible tool output, so enforce the shape here too.
+  const SOURCE_THREAD_ID_RE = /^[A-Za-z0-9_.:@-]{1,231}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  if (input.sourceThreadId !== undefined && !SOURCE_THREAD_ID_RE.test(input.sourceThreadId)) {
     throw new KnowledgeServiceError('invalid-document', 400, 'Invalid source thread reference.');
   }
   const kind = classifyKnowledgeFile({ name: input.file.name, type: input.file.type });
@@ -178,10 +185,26 @@ export async function uploadKnowledgeDocumentForUser(
   if (input.file.bytes.byteLength > knowledgeByteCap(kind)) {
     throw new KnowledgeServiceError('invalid-document', 413, 'This file is too large for Knowledge.');
   }
-  // The storage module re-validates and re-sanitizes the filename; this cap
-  // check just fails fast with the bounded 400 the route wants.
-  if (input.file.name.length === 0 || input.file.name.length > 200) {
+  // Filenames are attacker-controllable: apply the repo's own
+  // sanitizeAttachmentFilename convention before anything persists.
+  const filename = sanitizeAttachmentFilename(input.file.name);
+  if (filename.length === 0) {
     throw new KnowledgeServiceError('invalid-document', 400, 'Invalid file name.');
+  }
+  // Uploads are auto-created by every chat send; keep one user's registry
+  // bounded (storage listing + UI stay fast at the cap).
+  let existingCount: number;
+  try {
+    existingCount = await countKnowledgeDocuments(knowledgeStore(dependencies), userId);
+  } catch (error) {
+    mapStorageError(error);
+  }
+  if (existingCount >= MAX_KNOWLEDGE_DOCUMENTS_PER_USER) {
+    throw new KnowledgeServiceError(
+      'document-limit',
+      400,
+      `Your Knowledge is full (${MAX_KNOWLEDGE_DOCUMENTS_PER_USER} documents). Delete some documents first.`,
+    );
   }
 
   const store = knowledgeStore(dependencies);
@@ -191,7 +214,7 @@ export async function uploadKnowledgeDocumentForUser(
       store,
       {
         resourceId: userId,
-        filename: input.file.name,
+        filename,
         mimeType: input.file.type || (kind === 'pdf' ? 'application/pdf' : 'text/plain'),
         kind,
         ...(input.sourceThreadId !== undefined ? { sourceThreadId: input.sourceThreadId } : {}),

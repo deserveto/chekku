@@ -1042,7 +1042,14 @@ export function ChatStudio({
       return;
     }
 
-    const attachmentViews = readyUploads.map(toAttachmentView);
+    // Attachment views carry the PendingUpload id (not the PreparedAttachment's
+    // own uuid) so the knowledge-status chips written under `upload.id` below
+    // render against these same views after the composer clears.
+    const attachmentViews = uploads.flatMap((upload) =>
+      upload.status === 'ready' && upload.prepared
+        ? [{ ...toAttachmentView(upload.prepared), id: upload.id }]
+        : [],
+    );
     const runPrompt =
       prompt || attachmentViews[0]?.filename || 'Attachment';
     const runContent = buildUserMessageContent(prompt, readyUploads);

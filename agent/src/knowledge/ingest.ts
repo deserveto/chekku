@@ -54,6 +54,7 @@ export interface KnowledgeIngestionDeps {
 /** Fixed, bounded failure reasons safe to show in the UI. */
 const FIXED_ERRORS = {
   notFound: 'This document no longer exists in your Knowledge.',
+  storageUnavailable: 'Knowledge storage is currently unavailable. Try again shortly.',
   unconfigured: 'Knowledge indexing is not configured on this server. Set QDRANT_URL and LLM_EMBEDDING_MODEL.',
   empty: 'No extractable text found in this document.',
   tooLarge: 'This document is too large to index.',
@@ -93,12 +94,21 @@ export async function runKnowledgeIngestion(
 ): Promise<KnowledgeIngestionResult> {
   const store = (deps.storeFactory ?? createLazyGarageObjectStorage)();
   const now = deps.now;
-
   // existence + ownership gate: a wrong pair collapses to not-found here.
+  // Any other storage error is an outage, not a missing document — report it
+  // as such and leave the record untouched (a retry is expected to work).
   let document;
   try {
     document = (await getKnowledgeDocument(store, input.resourceId, input.documentId)).metadata;
-  } catch {
+  } catch (error) {
+    if (error instanceof ObjectStorageError && error.code !== 'not-found') {
+      return {
+        ok: false,
+        documentId: input.documentId,
+        resourceId: input.resourceId,
+        error: FIXED_ERRORS.storageUnavailable,
+      };
+    }
     return {
       ok: false,
       documentId: input.documentId,
@@ -118,16 +128,31 @@ export async function runKnowledgeIngestion(
     return { ok: false, documentId: input.documentId, resourceId: input.resourceId, error: reason };
   }
 
+  // Fixed-code logging: error objects can carry provider messages, so only
+  // their bounded class/code reaches the log line.
+  const logCode = (error: unknown): string => {
+    if (error instanceof KnowledgeIndexError) return error.code;
+    if (error instanceof ObjectStorageError) return error.code;
+    if (error instanceof Error) return error.name;
+    return 'unknown';
+  };
+
   const cleanupVectors = async (): Promise<void> => {
     try {
       await index.deleteDocumentPoints(input.resourceId, input.documentId);
     } catch (cleanupError) {
-      console.error('[knowledge-ingestion] vector cleanup failed:', cleanupError);
+      console.error('[knowledge-ingestion] vector cleanup failed:', logCode(cleanupError));
     }
   };
 
+  // `begin` is the mutual-exclusion gate: when it throws, another run owns
+  // the document (fresh `processing`, or `ready` already indexed). The loser
+  // must leave quietly — no vector cleanup, no status overwrite — or it
+  // would destroy the winner's healthy index (review P1).
+  let begun = false;
   try {
     await beginKnowledgeDocumentIngestion(store, input.resourceId, input.documentId, { now });
+    begun = true;
 
     const original = await readKnowledgeDocumentOriginalBytes(store, input.resourceId, input.documentId);
     const extracted = await (deps.extract ?? extractDocumentText)({
@@ -202,12 +227,22 @@ export async function runKnowledgeIngestion(
       chunkCount: metadata.chunkCount,
     };
   } catch (error) {
+    if (!begun) {
+      // Lost the begin race (or the record vanished): the winner — or
+      // nobody — owns the document. Never touch its vectors or status.
+      return {
+        ok: false,
+        documentId: input.documentId,
+        resourceId: input.resourceId,
+        error: fixedReason(error),
+      };
+    }
     await cleanupVectors();
     const reason = fixedReason(error);
     try {
       await failKnowledgeDocumentIngestion(store, input.resourceId, input.documentId, reason, { now });
     } catch (metadataError) {
-      console.error('[knowledge-ingestion] could not persist failure state:', metadataError);
+      console.error('[knowledge-ingestion] could not persist failure state:', logCode(metadataError));
     }
     return { ok: false, documentId: input.documentId, resourceId: input.resourceId, error: reason };
   }

@@ -17,6 +17,14 @@ import type { KnowledgeDocumentKind } from '@chekku/storage';
 /** Hard cap on normalized extraction output; larger documents are truncated. */
 export const MAX_EXTRACTED_CHARS = 2_000_000;
 
+/**
+ * Hard cap on parsed pages. A crafted PDF with tens of thousands of page
+ * objects drives unbounded parse CPU/memory — the output cap bounds text but
+ * never the per-page work. Generous for legitimate documents; pages beyond
+ * the cap are dropped with `truncated: true`.
+ */
+export const MAX_PDF_PAGES = 200;
+
 export interface ExtractedDocument {
   text: string;
   /** True when content beyond {@link MAX_EXTRACTED_CHARS} was dropped. */
@@ -45,10 +53,13 @@ interface PdfTextItem {
   hasEOL?: boolean;
 }
 
-async function extractPdfText(bytes: Uint8Array): Promise<ExtractedDocument> {
+export async function extractPdfText(
+  bytes: Uint8Array,
+  load: typeof getDocument = getDocument,
+): Promise<ExtractedDocument> {
   // pdfjs may detach the passed buffer; hand it a private copy. The legacy
   // build runs on plain Node (no DOM, no worker) for text-only extraction.
-  const loadingTask = getDocument({
+  const loadingTask = load({
     data: new Uint8Array(bytes),
     useSystemFonts: false,
     disableFontFace: true,
@@ -59,30 +70,41 @@ async function extractPdfText(bytes: Uint8Array): Promise<ExtractedDocument> {
   const pageTexts: string[] = [];
   let totalChars = 0;
   let truncated = false;
-  for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber++) {
-    const page = await doc.getPage(pageNumber);
-    const content = await page.getTextContent();
-    let pageText = '';
-    for (const item of content.items) {
-      const textItem = item as PdfTextItem;
-      if (typeof textItem.str !== 'string') continue;
-      pageText += textItem.str;
-      if (textItem.hasEOL === true) pageText += '\n';
+  try {
+    const pageCount = Math.min(doc.numPages, MAX_PDF_PAGES);
+    truncated = doc.numPages > MAX_PDF_PAGES;
+    for (let pageNumber = 1; pageNumber <= pageCount; pageNumber++) {
+      const page = await doc.getPage(pageNumber);
+      const content = await page.getTextContent();
+      let pageText = '';
+      for (const item of content.items) {
+        const textItem = item as PdfTextItem;
+        if (typeof textItem.str !== 'string') continue;
+        pageText += textItem.str;
+        if (textItem.hasEOL === true) pageText += '\n';
+      }
+      page.cleanup();
+      pageText = pageText.trim();
+      if (pageText.length === 0) continue;
+      if (totalChars + pageText.length > MAX_EXTRACTED_CHARS) {
+        pageTexts.push(pageText.slice(0, MAX_EXTRACTED_CHARS - totalChars));
+        totalChars = MAX_EXTRACTED_CHARS;
+        truncated = true;
+        break;
+      }
+      pageTexts.push(pageText);
+      totalChars += pageText.length;
     }
-    page.cleanup();
-    pageText = pageText.trim();
-    if (pageText.length === 0) continue;
-    if (totalChars + pageText.length > MAX_EXTRACTED_CHARS) {
-      pageTexts.push(pageText.slice(0, MAX_EXTRACTED_CHARS - totalChars));
-      totalChars = MAX_EXTRACTED_CHARS;
-      truncated = true;
-      break;
+  } finally {
+    // Aborts the worker and frees the parsed document — must also run when
+    // getPage/getTextContent throws on a corrupt or encrypted PDF, or every
+    // failed upload leaks the parsed doc in this long-lived process.
+    try {
+      await loadingTask.destroy();
+    } catch {
+      // Cleanup is best-effort; never mask the extraction error.
     }
-    pageTexts.push(pageText);
-    totalChars += pageText.length;
   }
-  // Aborts the worker and frees the parsed document.
-  await loadingTask.destroy();
 
   const text = pageTexts.join('\n\n');
   if (text.trim().length === 0) {

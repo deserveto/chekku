@@ -9,6 +9,7 @@ import {
   beginKnowledgeDocumentIngestion,
   buildKnowledgeDocument,
   completeKnowledgeDocumentIngestion,
+  countKnowledgeDocuments,
   createKnowledgeDocumentId,
   deleteKnowledgeDocumentObjects,
   extensionForKnowledgeDocument,
@@ -155,7 +156,7 @@ describe('knowledge document persistence', () => {
 
   it('lists newest first and enforces tenant isolation', async () => {
     const store = createMemoryStorage();
-    await saveKnowledgeDocument(store, uploadInput(), new Uint8Array([1]));
+    await saveKnowledgeDocument(store, uploadInput({ now: () => new Date('2026-08-28T00:00:00Z') }), new Uint8Array([1]));
     await saveKnowledgeDocument(store, uploadInput({ now: () => new Date('2026-08-29T00:00:00Z') }), new Uint8Array([2]));
     await saveKnowledgeDocument(store, { ...uploadInput(), resourceId: USER_B }, new Uint8Array([3]));
 
@@ -195,14 +196,36 @@ describe('knowledge document persistence', () => {
       ObjectStorageError,
     );
 
-    const failed = await failKnowledgeDocumentIngestion(store, USER_A, metadata.id, 'boom');
+    // A racing failure must never flip a healthy indexed document to `failed`.
+    await expect(failKnowledgeDocumentIngestion(store, USER_A, metadata.id, 'boom')).rejects.toThrow(
+      ObjectStorageError,
+    );
+
+    // A processing record can still fail and re-enter ingestion cleanly.
+    const second = await saveKnowledgeDocument(store, uploadInput(), new Uint8Array([2]));
+    await beginKnowledgeDocumentIngestion(store, USER_A, second.id);
+    const failed = await failKnowledgeDocumentIngestion(store, USER_A, second.id, 'boom');
     expect(failed.status).toBe('failed');
     expect(failed.error).toBe('boom');
-
-    // Failed documents re-enter processing cleanly.
-    const restarted = await beginKnowledgeDocumentIngestion(store, USER_A, metadata.id);
+    const restarted = await beginKnowledgeDocumentIngestion(store, USER_A, second.id);
     expect(restarted.status).toBe('processing');
     expect(restarted.error).toBeUndefined();
+  });
+
+  it('refuses to re-begin ingestion while a processing run is fresh', async () => {
+    const store = createMemoryStorage();
+    const metadata = await saveKnowledgeDocument(store, uploadInput(), new Uint8Array([1]));
+    await beginKnowledgeDocumentIngestion(store, USER_A, metadata.id);
+
+    // Fresh processing: another run may not take over.
+    await expect(beginKnowledgeDocumentIngestion(store, USER_A, metadata.id)).rejects.toMatchObject({
+      code: 'already-exists',
+    } satisfies Partial<ObjectStorageError>);
+
+    // Past the stale window: crash recovery may take over.
+    const late = new Date(Date.now() + KNOWLEDGE_STALE_PROCESSING_MS + 1);
+    const restarted = await beginKnowledgeDocumentIngestion(store, USER_A, metadata.id, { now: () => late });
+    expect(restarted.status).toBe('processing');
   });
 
   it('bounds the persisted failure reason', async () => {
@@ -210,6 +233,22 @@ describe('knowledge document persistence', () => {
     const metadata = await saveKnowledgeDocument(store, uploadInput(), new Uint8Array([1]));
     const failed = await failKnowledgeDocumentIngestion(store, USER_A, metadata.id, 'x'.repeat(900));
     expect((failed.error as string).length).toBeLessThanOrEqual(500);
+  });
+
+  it('collapses control characters in filenames before persisting', () => {
+    const built = buildKnowledgeDocument(
+      { resourceId: USER_A, filename: 'notes\u0000\u001f draft\t.md', mimeType: 'text/markdown', kind: 'text' },
+      new Uint8Array([1]),
+    );
+    expect(built.metadata.filename).toBe('notes draft .md');
+  });
+
+  it('counts documents for the per-user cap', async () => {
+    const store = createMemoryStorage();
+    await saveKnowledgeDocument(store, uploadInput(), new Uint8Array([1]));
+    await saveKnowledgeDocument(store, uploadInput(), new Uint8Array([2]));
+    await expect(countKnowledgeDocuments(store, USER_A)).resolves.toBe(2);
+    await expect(countKnowledgeDocuments(store, USER_B)).resolves.toBe(0);
   });
 });
 

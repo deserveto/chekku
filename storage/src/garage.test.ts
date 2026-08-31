@@ -236,6 +236,44 @@ describe('Garage object storage', () => {
     });
   });
 
+  it('follows continuation tokens until the listing is exhausted', async () => {
+    const pages = [
+      { Contents: [{ Key: 'notes/a' }], IsTruncated: true, NextContinuationToken: 'token-1' },
+      { Contents: [{ Key: 'notes/b' }], IsTruncated: true, NextContinuationToken: 'token-2' },
+      { Contents: [{ Key: 'notes/c' }], IsTruncated: false },
+    ];
+    const sentCommands: Array<{ input: unknown }> = [];
+    let page = 0;
+    const store = createGarageObjectStorage(config, {
+      async send(command) {
+        sentCommands.push({ input: (command as { input: unknown }).input });
+        return pages[page++];
+      },
+    });
+
+    await expect(store.listKeys('notes/')).resolves.toEqual({
+      keys: ['notes/a', 'notes/b', 'notes/c'],
+      truncated: false,
+    });
+    expect(sentCommands.map((entry) => entry.input)).toEqual([
+      { Bucket: 'objects', Prefix: 'notes/', MaxKeys: 1000 },
+      { Bucket: 'objects', Prefix: 'notes/', MaxKeys: 999, ContinuationToken: 'token-1' },
+      { Bucket: 'objects', Prefix: 'notes/', MaxKeys: 998, ContinuationToken: 'token-2' },
+    ]);
+  });
+
+  it('stops paginating at the requested limit and reports truncation', async () => {
+    const store = createGarageObjectStorage(config, {
+      async send() {
+        return { Contents: [{ Key: 'a' }, { Key: 'b' }], IsTruncated: true, NextContinuationToken: 't' };
+      },
+    });
+    await expect(store.listKeys('notes/', { limit: 2 })).resolves.toEqual({
+      keys: ['a', 'b'],
+      truncated: true,
+    });
+  });
+
   it('checks existence before deleting and reports missing keys', async () => {
     const missing = createGarageObjectStorage(config, {
       async send() {

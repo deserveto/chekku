@@ -30,6 +30,7 @@ afterEach(() => {
   document.body.innerHTML = '';
   root = null;
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 const doc = (overrides: Partial<KnowledgeDocumentView> = {}): KnowledgeDocumentView => ({
@@ -106,11 +107,16 @@ describe('KnowledgeDocumentList', () => {
     );
   });
 
-  it('deletes through the confirmation dialog and drops the row', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-      ok: true,
-      json: async () => ({ ok: true }),
-    } as Response);
+  it('keeps the row as Deleting… until a poll confirms removal', async () => {
+    vi.useFakeTimers();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith('/documents')) {
+        // Poll response: the purge has completed, the record is gone.
+        return { ok: true, json: async () => ({ documents: [] }) } as Response;
+      }
+      return { ok: true, json: async () => ({ ok: true }) } as Response;
+    });
     const container = render(<KnowledgeDocumentList initialDocuments={[doc()]} />);
 
     const deleteButton = [...container.querySelectorAll('button')]
@@ -130,6 +136,12 @@ describe('KnowledgeDocumentList', () => {
       '/api/storage/knowledge/documents/kbd_20260828120000_deadbeef',
       { method: 'DELETE' },
     );
+    // Optimistic removal would hide a failed purge: the row stays visible
+    // as Deleting… until a poll confirms the record is gone.
+    expect(container.textContent).toContain('handbook.pdf');
+    expect(container.querySelector('[data-knowledge-status="deleting"]')).toBeTruthy();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(4100); });
     expect(container.textContent).toContain('No documents in your Knowledge yet.');
   });
 

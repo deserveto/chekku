@@ -139,6 +139,12 @@ LLM_MODELS
 # image generation only (reuses LLM_BASE_URL + LLM_API_KEY; no second key)
 LLM_IMAGE_MODEL
 LLM_IMAGE_ENDPOINT_PATH
+# Knowledge Base embeddings (reuses LLM_BASE_URL + LLM_API_KEY; no second key)
+LLM_EMBEDDING_MODEL
+# Knowledge Base vector index (agent server only)
+QDRANT_URL
+QDRANT_API_KEY
+QDRANT_COLLECTION
 ```
 
 `LLM_IMAGE_MODEL` and `LLM_IMAGE_ENDPOINT_PATH` are server-only, scoped to the Visual Content Agent's `generate_image` tool; `LLM_IMAGE_MODEL` is empty by default and the tool fails closed when unset (never a silent live call to an unconfigured model).
@@ -344,6 +350,18 @@ LLM_IMAGE_ENDPOINT_PATH
 - Stage 1 topic selection uses the hardcoded fixed-date awareness calendar plus evergreen pillars. Stage 2 augments base-slot topic selection with SearXNG research without changing voice, storage, or notification.
 - Stage 1 only creates objects; it does not replace or delete. Email delivery failure is recorded, not fatal — saved drafts remain readable.
 - Social-post tools must never enter the generic Garage MCP registry.
+
+### Knowledge Base
+
+- The per-user Knowledge Base (PR #48) persists uploads in Garage under `kb/users/<resourceId>/documents/<documentId>/` via `storage/src/knowledge-documents.ts`, and indexes parsed chunks into one shared Qdrant collection. Qdrant is a semantic index only: no binaries, and every query/delete carries a mandatory `resourceId` equality filter built inside `agent/src/knowledge/qdrant-index.ts` (never assembled by callers). `search_knowledge_base` is bound to `main-agent` only, derives the tenant from `context.agent.resourceId` (input schema has no tenant field), and must never enter any MCP or stored-agent registry.
+- Ingestion (`knowledge-document-ingestion` workflow) is serialized per document by `beginKnowledgeDocumentIngestion`: re-begin from `ready` is rejected, and `processing` records fresher than `KNOWLEDGE_STALE_PROCESSING_MS` are refused (the stale window is the crash-recovery path). The pipeline's catch only cleans vectors and writes `failKnowledgeDocumentIngestion` when `begin` succeeded — a begin-race loser must leave the winner's index and status untouched. `fail` refuses to overwrite `ready`.
+- Deletion (`knowledge-document-deletion` workflow) runs vectors → objects → metadata, then one final idempotent vector sweep after the metadata delete so an ingestion racing the deletion cannot leave permanently orphaned searchable chunks.
+- A missing Qdrant collection means "nothing indexed yet": `search` returns zero hits and `deleteDocumentPoints` is a no-op. `ensureCollection` tolerates concurrent first-upload races and re-ensures both payload indexes on every pass so half-created collections self-repair. Every Qdrant call is bounded (`QDRANT_TIMEOUT_MS = 30_000`); the client library default is 300 s and must never be relied on.
+- Upload caps: text 2 MiB, PDF 16 MiB (`client/src/lib/knowledge.ts`). The PDF cap must stay ≤ the Garage adapter's binary read bound (`MAX_BINARY_BODY_BYTES`, 16 MiB), and the production nginx `client_max_body_size` (17m) must stay above every upstream body cap — raise them together. Per-user registry size is capped at `MAX_KNOWLEDGE_DOCUMENTS_PER_USER` (500) with bounded-concurrency listing and paginated Garage `listKeys`.
+- Original uploads are served session-gated by `/api/storage/knowledge/documents/[documentId]/original`. Stored MIME types are client-declared: only exact `application/pdf` is served inline; everything else downloads as `application/octet-stream; attachment` with `X-Content-Type-Options: nosniff`. Do not relax this — it is the stored self-XSS boundary.
+- Filenames are attacker input: the upload service applies `sanitizeAttachmentFilename`, and `buildKnowledgeDocument` collapses control characters as defense in depth. `sourceThreadId` must match the canonical thread-id shape before persisting. Knowledge documents cap at 200 parsed PDF pages (`MAX_PDF_PAGES`) and always `loadingTask.destroy()` in `finally`.
+- Logging for Qdrant/embeddings/storage failures follows the fixed-code convention: error codes or error names only — never raw provider messages, URLs, or upstream body snippets.
+- Dev-stack Qdrant runs keyless (loopback-only publish) holding every tenant's chunks in plaintext; this is an accepted local-first trade-off. Production must set `QDRANT_API_KEY` or front Qdrant with an authenticated proxy.
 
 ### Production containerization
 

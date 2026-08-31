@@ -123,6 +123,10 @@ function requireConfigured(options: ResolvedQdrantOptions): asserts options is R
   }
 }
 
+/** Bound every Qdrant call; the library default is 300 s, which could freeze
+ * tool calls and workflows for minutes on a stalled server. */
+const QDRANT_TIMEOUT_MS = 30_000;
+
 const UPSERT_BATCH_SIZE = 64;
 
 function tenantFilter(resourceId: string, documentId?: string) {
@@ -180,8 +184,53 @@ function collectionVectorSize(collectionInfo: unknown): number | undefined {
 
 function mapIndexError(error: unknown): KnowledgeIndexError {
   if (error instanceof KnowledgeIndexError) return error;
-  console.error('[knowledge] qdrant request failed:', error instanceof Error ? error.message : error);
+  // Fixed-code logging: raw provider errors can embed URLs and bodies, so
+  // only the error name reaches the log line.
+  console.error('[knowledge] qdrant request failed:', error instanceof Error ? error.name : 'unknown');
   return new KnowledgeIndexError('unavailable', 'The knowledge index is currently unavailable.');
+}
+
+/** Read the indexed payload fields from a collection description. Qdrant has
+ * shipped `payload_schema` as both a keyed object and a list across versions;
+ * accept either shape. */
+function indexedPayloadFields(collectionInfo: unknown): Set<string> {
+  const fields = new Set<string>();
+  if (typeof collectionInfo !== 'object' || collectionInfo === null) return fields;
+  if (!('payload_schema' in collectionInfo)) return fields;
+  const schema: unknown = collectionInfo.payload_schema;
+  if (Array.isArray(schema)) {
+    for (const entry of schema) {
+      if (entry !== null && typeof entry === 'object' && 'field_name' in entry) {
+        const name: unknown = entry.field_name;
+        if (typeof name === 'string') fields.add(name);
+      }
+    }
+  } else if (typeof schema === 'object' && schema !== null) {
+    for (const name of Object.keys(schema)) fields.add(name);
+  }
+  return fields;
+}
+
+/**
+ * Create one payload index, tolerating a concurrent creator: after any
+ * failure, only rethrow when the field is still missing from the collection's
+ * payload schema. Makes index (re)creation idempotent.
+ */
+async function ensurePayloadIndex(
+  client: QdrantClientLike,
+  collection: string,
+  fieldName: string,
+): Promise<void> {
+  try {
+    await client.createPayloadIndex(collection, {
+      field_name: fieldName,
+      field_schema: 'keyword',
+      wait: true,
+    });
+  } catch (error) {
+    const info = await client.getCollection(collection);
+    if (!indexedPayloadFields(info).has(fieldName)) throw error;
+  }
 }
 
 /**
@@ -201,6 +250,7 @@ export function createQdrantKnowledgeIndex(explicit?: QdrantKnowledgeIndexOption
       url: options.url,
       ...(options.apiKey ? { apiKey: options.apiKey } : {}),
       checkCompatibility: false,
+      timeout: QDRANT_TIMEOUT_MS,
     } satisfies QdrantClientParams) as unknown as QdrantClientLike;
     return clientHolder.client;
   };
@@ -209,40 +259,44 @@ export function createQdrantKnowledgeIndex(explicit?: QdrantKnowledgeIndexOption
     async ensureCollection(dimension: number): Promise<void> {
       try {
         const client = getClient();
-        const exists = await client.collectionExists(options.collection);
-        if (exists) {
-          const info = await client.getCollection(options.collection);
-          const existing = collectionVectorSize(info);
-          if (existing !== undefined && existing !== dimension) {
-            throw new KnowledgeIndexError(
-              'incompatible',
-              `Knowledge index "${options.collection}" was created for ${existing}-dimension vectors but the configured embedding model produces ${dimension}. Restore the previous LLM_EMBEDDING_MODEL or delete the collection to reindex.`,
-            );
+        if (!(await client.collectionExists(options.collection))) {
+          try {
+            await client.createCollection(options.collection, {
+              vectors: { size: dimension, distance: 'Cosine' },
+            });
+          } catch (error) {
+            // Lost a concurrent first-upload race: the winner's collection
+            // is exactly as good as ours would have been. Only a still-missing
+            // collection is a real failure.
+            if (!(await client.collectionExists(options.collection))) throw error;
           }
-          return;
         }
-        await client.createCollection(options.collection, {
-          vectors: { size: dimension, distance: 'Cosine' },
-        });
-        // Tenant + document filters are the hot path; index both payloads.
-        await client.createPayloadIndex(options.collection, {
-          field_name: 'resourceId',
-          field_schema: 'keyword',
-          wait: true,
-        });
-        await client.createPayloadIndex(options.collection, {
-          field_name: 'documentId',
-          field_schema: 'keyword',
-          wait: true,
-        });
+        const info = await client.getCollection(options.collection);
+        const existing = collectionVectorSize(info);
+        if (existing !== undefined && existing !== dimension) {
+          throw new KnowledgeIndexError(
+            'incompatible',
+            `Knowledge index "${options.collection}" was created for ${existing}-dimension vectors but the configured embedding model produces ${dimension}. Restore the previous LLM_EMBEDDING_MODEL or delete the collection to reindex.`,
+          );
+        }
+        // Tenant + document filters are the hot path; ensure BOTH payload
+        // indexes on every pass so a half-created collection (crash between
+        // createCollection and createPayloadIndex) self-repairs instead of
+        // staying unindexed forever.
+        await ensurePayloadIndex(client, options.collection, 'resourceId');
+        await ensurePayloadIndex(client, options.collection, 'documentId');
       } catch (error) {
         throw mapIndexError(error);
       }
     },
 
+    // A missing collection means "nothing indexed yet": deletion is a no-op
+    // (existence pre-checked because the REST client surfaces 404s only
+    // through error text, not structured status).
     async deleteDocumentPoints(resourceId: string, documentId: string): Promise<void> {
       try {
         const client = getClient();
+        if (!(await client.collectionExists(options.collection))) return;
         await client.delete(options.collection, {
           filter: tenantFilter(resourceId, documentId),
           wait: true,
@@ -271,10 +325,14 @@ export function createQdrantKnowledgeIndex(explicit?: QdrantKnowledgeIndexOption
         throw mapIndexError(error);
       }
     },
-
+    // A missing collection means "nothing indexed yet": zero hits instead of
+    // an availability error (existence pre-checked like deletion), so the
+    // tool reports an empty Knowledge Base rather than failing on a server
+    // where no ingestion has ever succeeded.
     async search(queryVector: number[], resourceId: string, limit: number): Promise<KnowledgeSearchHit[]> {
       try {
         const client = getClient();
+        if (!(await client.collectionExists(options.collection))) return [];
         const response = await client.query(options.collection, {
           query: queryVector,
           limit,

@@ -22,8 +22,13 @@ import { createQdrantKnowledgeIndex, type KnowledgeVectorIndex } from '../../kno
  *      FIRST, so a deleted document can never surface in KB search, not even
  *      briefly.
  *   2. Garage original + extracted objects.
- *   3. `metadata.json` LAST — the record only leaves the UI (and the list
+ *   3. `metadata.json` — the record only leaves the UI (and the list
  *      endpoint) once both payloads are gone.
+ *   4. Final idempotent vector sweep — an ingestion racing this deletion
+ *      can re-create points after step 1 (its success path runs
+ *      delete-before-upsert then completes before our metadata delete
+ *      lands). With the registry record gone nothing else can ever purge
+ *      those points, so this last pass keeps search results honest.
  *
  * Every step is idempotent and tolerates missing objects, so a failed run
  * can simply be retried from the Knowledge page; the document stays visible
@@ -56,6 +61,8 @@ export async function runKnowledgeDocumentDeletion(
   const store = (deps.storeFactory ?? createLazyGarageObjectStorage)();
   const index = deps.indexFactory?.() ?? createQdrantKnowledgeIndex();
 
+  const logCode = (error: unknown): string => (error instanceof Error ? error.name : 'unknown');
+
   // Ownership gate: a foreign pair collapses to not-found before any delete.
   try {
     await getKnowledgeDocument(store, input.resourceId, input.documentId);
@@ -67,7 +74,7 @@ export async function runKnowledgeDocumentDeletion(
   try {
     await index.deleteDocumentPoints(input.resourceId, input.documentId);
   } catch (error) {
-    console.error('[knowledge-deletion] vector purge failed:', error);
+    console.error('[knowledge-deletion] vector purge failed:', logCode(error));
     return { ok: false, documentId: input.documentId, error: 'vector-delete-failed' };
   }
 
@@ -75,8 +82,19 @@ export async function runKnowledgeDocumentDeletion(
   try {
     await deleteKnowledgeDocumentObjects(store, input.resourceId, input.documentId);
   } catch (error) {
-    console.error('[knowledge-deletion] object delete failed:', error);
+    console.error('[knowledge-deletion] object delete failed:', logCode(error));
     return { ok: false, documentId: input.documentId, error: 'object-delete-failed' };
+  }
+
+  // 4. Final idempotent vector sweep (see doc comment): best-effort, retried
+  // a few times so a transient blip cannot orphan searchable chunks forever.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await index.deleteDocumentPoints(input.resourceId, input.documentId);
+      break;
+    } catch (error) {
+      if (attempt === 2) console.error('[knowledge-deletion] final vector sweep failed:', logCode(error));
+    }
   }
 
   return { ok: true, documentId: input.documentId };

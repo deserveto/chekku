@@ -157,17 +157,9 @@ async function embedBatch(
       signal: controller.signal,
     });
     if (!response.ok) {
-      // Bound the diagnostic snippet; never include headers or the URL.
-      let snippet = '';
-      try {
-        const text = await response.text();
-        snippet = text.slice(0, 200).replace(/\s+/g, ' ');
-      } catch {
-        snippet = '';
-      }
-      console.error(
-        `[knowledge] embeddings request failed: status=${response.status}${snippet ? ` body=${snippet}` : ''}`,
-      );
+      // Fixed-code logging: never echo upstream bodies (they can carry
+      // gateway internals); the status is enough to act on.
+      console.error(`[knowledge] embeddings request failed: status=${response.status}`);
       throw new EmbeddingsError(
         'unavailable',
         'The embedding model request failed. Verify the gateway and LLM_EMBEDDING_MODEL.',

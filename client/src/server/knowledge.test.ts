@@ -117,7 +117,7 @@ describe('knowledge service', () => {
   it('persists the raw document and fires the ingestion workflow with the session identity', async () => {
     const { deps, store, workflows } = createDeps(USER_A);
     const metadata = await uploadKnowledgeDocumentForUser(
-      { file: pdfFile, sourceThreadId: 'main-agent-u1-thread' },
+      { file: pdfFile, sourceThreadId: 'main-agent-u1-3f2504e0-4f89-11d3-9a0c-0305e82c3301' },
       deps,
     );
 
@@ -140,10 +140,39 @@ describe('knowledge service', () => {
     ).rejects.toMatchObject({ code: 'invalid-document', status: 400 } satisfies Partial<KnowledgeServiceError>);
     await expect(
       uploadKnowledgeDocumentForUser(
-        { file: { name: 'big.pdf', type: 'application/pdf', bytes: new Uint8Array(21 * 1024 * 1024) } },
+        { file: { name: 'big.pdf', type: 'application/pdf', bytes: new Uint8Array(17 * 1024 * 1024) } },
         deps,
       ),
     ).rejects.toMatchObject({ status: 413 } satisfies Partial<KnowledgeServiceError>);
+  });
+
+  it('rejects source thread references that violate the canonical thread-id shape', async () => {
+    const { deps } = createDeps(USER_A);
+    await expect(
+      uploadKnowledgeDocumentForUser({ file: pdfFile, sourceThreadId: 'main-agent-u1-thread' }, deps),
+    ).rejects.toMatchObject({ code: 'invalid-document', status: 400 } satisfies Partial<KnowledgeServiceError>);
+  });
+
+  it('sanitizes attacker-controlled filenames before persisting', async () => {
+    const { deps } = createDeps(USER_A);
+    const metadata = await uploadKnowledgeDocumentForUser(
+      { file: { name: 'notes\u0000\u001f draft\t.md', type: 'text/markdown', bytes: new Uint8Array([1]) } },
+      deps,
+    );
+    expect(metadata.filename).toBe('notes draft .md');
+  });
+
+  it('rejects uploads once the per-user document cap is reached', async () => {
+    const { deps, store } = createDeps(USER_A);
+    for (let index = 0; index < 500; index++) {
+      await store.createText(
+        `kb/users/${USER_A}/documents/kbd_20260828101112_${index.toString(16).padStart(8, '0')}/metadata.json`,
+        '{}',
+      );
+    }
+    await expect(
+      uploadKnowledgeDocumentForUser({ file: pdfFile }, deps),
+    ).rejects.toMatchObject({ code: 'document-limit', status: 400 } satisfies Partial<KnowledgeServiceError>);
   });
 
   it('marks the document failed when the ingestion trigger cannot start', async () => {

@@ -1,5 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import * as qdrantClientModule from '@qdrant/js-client-rest';
+
+vi.mock('@qdrant/js-client-rest', () => {
+  const constructed: Array<Record<string, unknown>> = [];
+  class QdrantClient {
+    constructor(params: Record<string, unknown>) {
+      constructed.push(params);
+    }
+  }
+  return { QdrantClient, __constructed: constructed };
+});
+
 import {
   KnowledgeIndexError,
   createQdrantKnowledgeIndex,
@@ -7,6 +19,7 @@ import {
 } from './qdrant-index.js';
 
 type FakeConfig = { size: number };
+
 
 function createFakeClient(options: { existingDimension?: number } = {}) {
   const calls: Array<{ method: string; args: Record<string, unknown> }> = [];
@@ -159,5 +172,94 @@ describe('createQdrantKnowledgeIndex', () => {
     void spy;
     const hits = await index.search([1, 0, 0], 'user-a', 5);
     expect(hits).toHaveLength(1);
+  });
+
+  it('treats a missing collection as empty search results and a no-op delete', async () => {
+    const fake = createFakeClient();
+    const index = createQdrantKnowledgeIndex({ client: fake.client, collection: 'c' });
+    await expect(index.search([1, 0, 0], 'user-a', 5)).resolves.toEqual([]);
+    await expect(index.deleteDocumentPoints('user-a', 'kbd_20260828101112_abcd1234')).resolves.toBeUndefined();
+    expect(fake.calls.some((call) => call.method === 'delete')).toBe(false);
+  });
+
+  it('tolerates losing a concurrent collection-creation race', async () => {
+    const calls: Array<{ method: string }> = [];
+    let exists = false;
+    const client = {
+      async collectionExists() {
+        calls.push({ method: 'collectionExists' });
+        // false on the pre-check; the "other" creator wins while our
+        // createCollection is in flight, so the post-failure check sees it.
+        return exists;
+      },
+      async createCollection() {
+        calls.push({ method: 'createCollection' });
+        exists = true;
+        throw new Error('conflict: already exists');
+      },
+      async getCollection() {
+        return { config: { params: { vectors: { size: 8, distance: 'Cosine' } } } };
+      },
+      async createPayloadIndex() {
+        calls.push({ method: 'createPayloadIndex' });
+      },
+      async upsert() {},
+      async delete() {},
+      async query() {
+        return { points: [] };
+      },
+    };
+    const index = createQdrantKnowledgeIndex({ client, collection: 'c' });
+    await expect(index.ensureCollection(8)).resolves.toBeUndefined();
+    expect(calls.some((call) => call.method === 'createCollection')).toBe(true);
+  });
+
+  it('repairs a half-created collection whose payload indexes are missing', async () => {
+    const calls: Array<{ method: string; args?: unknown }> = [];
+    const indexedFields = new Set<string>();
+    const client = {
+      async collectionExists() {
+        return true;
+      },
+      async createCollection() {},
+      async getCollection() {
+        return {
+          config: { params: { vectors: { size: 8, distance: 'Cosine' } } },
+          payload_schema: [...indexedFields].map((field_name) => ({ field_name })),
+        };
+      },
+      async createPayloadIndex(_collection: string, params: { field_name: string }) {
+        calls.push({ method: 'createPayloadIndex', args: params });
+        // First call reports a concurrent creator; the schema then shows the
+        // field, so ensurePayloadIndex must tolerate it.
+        indexedFields.add(params.field_name);
+        if (calls.filter((call) => call.method === 'createPayloadIndex').length === 1) {
+          throw new Error('conflict: payload index already exists');
+        }
+      },
+      async upsert() {},
+      async delete() {},
+      async query() {
+        return { points: [] };
+      },
+    };
+    const index = createQdrantKnowledgeIndex({ client, collection: 'c' });
+    await expect(index.ensureCollection(8)).resolves.toBeUndefined();
+    const ensured = calls.filter((call) => call.method === 'createPayloadIndex');
+    expect(ensured).toHaveLength(2);
+  });
+
+  it('bounds the real Qdrant client with a 30s timeout', async () => {
+    const constructed = (qdrantClientModule as unknown as {
+      __constructed: Array<Record<string, unknown>>;
+    }).__constructed;
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const index = createQdrantKnowledgeIndex({ url: 'http://127.0.0.1:6333', collection: 'c' });
+    await index.search([0], 'user-a', 1).catch(() => undefined);
+    expect(constructed.at(-1)).toMatchObject({
+      url: 'http://127.0.0.1:6333',
+      checkCompatibility: false,
+      timeout: 30_000,
+    });
   });
 });

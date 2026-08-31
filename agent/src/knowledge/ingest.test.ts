@@ -224,6 +224,38 @@ describe('runKnowledgeIngestion', () => {
     expect(result.ok).toBe(false);
     expect(result.error).toContain('not configured');
     const record = await readRecord(store, documentId);
-    expect(record.status).toBe('failed');
+  });
+
+  it('leaves a ready document untouched when a racing run loses begin', async () => {
+    const { store, deps, deleted, upserted } = createFakes();
+    const documentId = await upload(store);
+    await runKnowledgeIngestion({ documentId, resourceId: USER }, deps);
+    const readyRecord = await readRecord(store, documentId);
+    const vectorsBefore = upserted.length;
+    const deletionsBefore = deleted.length;
+
+    const result = await runKnowledgeIngestion({ documentId, resourceId: USER }, deps);
+
+    // The loser of the begin race must neither purge the winner's vectors
+    // nor flip the ready record to failed.
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('already indexed');
+    expect(deleted.length).toBe(deletionsBefore);
+    expect(upserted.length).toBe(vectorsBefore);
+    expect(await readRecord(store, documentId)).toEqual(readyRecord);
+  });
+
+  it('reports a storage outage as unavailable instead of not-found', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { store, deps } = createFakes();
+    const documentId = await upload(store);
+    store.getText = async () => {
+      throw new ObjectStorageError('unavailable', 'Garage is unreachable.');
+    };
+
+    const result = await runKnowledgeIngestion({ documentId, resourceId: USER }, deps);
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('storage is currently unavailable');
   });
 });

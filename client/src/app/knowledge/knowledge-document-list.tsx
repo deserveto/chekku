@@ -7,7 +7,12 @@ import { deleteKnowledgeDocument, retryKnowledgeDocumentIngestion } from '@/lib/
 import type { KnowledgeDocumentView } from '@/lib/knowledge';
 
 const REFRESH_INTERVAL_MS = 4000;
-const REFRESH_LIMIT_MS = 5 * 60 * 1000;
+/** Aligned past the server's 15-minute stale-processing window so a long
+ * ingestion keeps transitioning instead of freezing on "Processing". */
+const REFRESH_LIMIT_MS = 16 * 60 * 1000;
+/** How long a deletion may stay unconfirmed by polling before the row is
+ * released back to its stored status with an error. */
+const DELETE_CONFIRM_WINDOW_MS = 60_000;
 
 function formatBytes(sizeBytes: number): string {
   if (sizeBytes < 1024) return `${sizeBytes} B`;
@@ -42,16 +47,21 @@ export function KnowledgeDocumentList({ initialDocuments }: { initialDocuments: 
   const [pendingDeleteId, setPendingDeleteId] = useState<string | undefined>();
   const [deleting, setDeleting] = useState(false);
   const [retryingId, setRetryingId] = useState<string | undefined>();
+  /** Docs whose deletion is fired but not yet confirmed by a poll. Their rows
+   * stay visible as "Deleting…" — optimistic removal would hide a failed
+   * purge forever, because polling only runs while the list is not settled. */
+  const [deletingIds, setDeletingIds] = useState<ReadonlySet<string>>(new Set());
+  const deleteStartsRef = useRef(new Map<string, number>());
   const mountedRef = useRef(true);
 
   useEffect(() => () => {
     mountedRef.current = false;
   }, []);
 
-  const hasPending = documents.some((doc) => doc.status === 'processing');
+  const shouldPoll = documents.some((doc) => doc.status === 'processing') || deletingIds.size > 0;
 
   useEffect(() => {
-    if (!hasPending) return;
+    if (!shouldPoll) return;
     const startedAt = Date.now();
     const timer = setInterval(async () => {
       if (Date.now() - startedAt > REFRESH_LIMIT_MS) {
@@ -62,33 +72,53 @@ export function KnowledgeDocumentList({ initialDocuments }: { initialDocuments: 
         const response = await fetch('/api/storage/knowledge/documents');
         if (!response.ok) return;
         const payload = (await response.json()) as { documents?: KnowledgeDocumentView[] };
-        if (Array.isArray(payload.documents) && mountedRef.current) {
-          setDocuments(payload.documents);
-        }
+        if (!Array.isArray(payload.documents) || !mountedRef.current) return;
+        setDocuments(payload.documents);
+        const serverIds = new Set(payload.documents.map((doc) => doc.id));
+        const now = Date.now();
+        setDeletingIds((current) => {
+          const next = new Set(current);
+          for (const id of next) {
+            const started = deleteStartsRef.current.get(id) ?? now;
+            if (!serverIds.has(id)) {
+              // Poll confirmed the purge — row is gone, stop tracking.
+              next.delete(id);
+              deleteStartsRef.current.delete(id);
+            } else if (now - started > DELETE_CONFIRM_WINDOW_MS) {
+              // Deletion stalled server-side; release the row so the user
+              // sees its stored status and can retry.
+              next.delete(id);
+              deleteStartsRef.current.delete(id);
+              setActionError('Deletion is taking longer than expected. The document is still listed — try deleting it again.');
+            }
+          }
+          return next;
+        });
       } catch {
         // Transient polling failure: keep showing the current snapshot.
       }
     }, REFRESH_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [hasPending]);
+  }, [shouldPoll]);
 
   const confirmDelete = useCallback(async () => {
     if (pendingDeleteId === undefined) return;
+    const documentId = pendingDeleteId;
     setDeleting(true);
     setActionError(undefined);
-    const result = await deleteKnowledgeDocument(pendingDeleteId);
+    const result = await deleteKnowledgeDocument(documentId);
     if (!mountedRef.current) return;
-    if (!result.ok) {
-      setActionError(result.message);
-      setDeleting(false);
-      setPendingDeleteId(undefined);
-      return;
-    }
-    // Deletion is asynchronous server-side; drop the row optimistically and
-    // let polling reconcile if the purge job reports a failure.
-    setDocuments((current) => current.filter((doc) => doc.id !== pendingDeleteId));
     setDeleting(false);
     setPendingDeleteId(undefined);
+    if (!result.ok) {
+      setActionError(result.message);
+      return;
+    }
+    // Deletion is asynchronous server-side: keep the row as "Deleting…" and
+    // let polling confirm removal. If the purge job fails, the row's stored
+    // status becomes visible again instead of silently never coming back.
+    deleteStartsRef.current.set(documentId, Date.now());
+    setDeletingIds((current) => new Set(current).add(documentId));
   }, [pendingDeleteId]);
 
   const retry = useCallback(async (documentId: string) => {
@@ -155,16 +185,19 @@ export function KnowledgeDocumentList({ initialDocuments }: { initialDocuments: 
                 <td>{formatBytes(doc.sizeBytes)}</td>
                 <td>{formatUploadedAt(doc.createdAt)}</td>
                 <td>
-                  <span
-                    data-knowledge-status={doc.status}
-                    title={doc.error ?? STATUS_LABELS[doc.status]}
-                  >
-                    {STATUS_LABELS[doc.status]}
-                    {doc.status === 'failed' && doc.error ? ': ' : ''}
-                    {doc.status === 'failed' && doc.error ? doc.error : ''}
-                  </span>
+                  {deletingIds.has(doc.id) ? (
+                    <span data-knowledge-status="deleting">Deleting…</span>
+                  ) : (
+                    <span
+                      data-knowledge-status={doc.status}
+                      title={doc.error ?? STATUS_LABELS[doc.status]}
+                    >
+                      {STATUS_LABELS[doc.status]}
+                      {doc.status === 'failed' && doc.error ? ': ' : ''}
+                      {doc.status === 'failed' && doc.error ? doc.error : ''}
+                    </span>
+                  )}
                 </td>
-                <td>{doc.chunkCount ?? '—'}</td>
                 <td>
                   <div className="studio-action-row">
                     <a href={`/api/storage/knowledge/documents/${encodeURIComponent(doc.id)}/original`}>
@@ -183,6 +216,7 @@ export function KnowledgeDocumentList({ initialDocuments }: { initialDocuments: 
                     <button
                       type="button"
                       className="studio-button"
+                      disabled={deletingIds.has(doc.id)}
                       onClick={() => setPendingDeleteId(doc.id)}
                     >
                       Delete

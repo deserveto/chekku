@@ -19,11 +19,18 @@ export async function GET(
     const { documentId } = await params;
     const bytes = await readKnowledgeDocumentOriginalForUser(documentId);
     const safeName = documentId.replace(/[^a-zA-Z0-9_-]/g, '');
+    // Stored content types are client-declared and attacker-controllable.
+    // Only PDF is served inline; everything else downloads as opaque bytes
+    // so attacker-uploaded HTML/SVG can never execute on the app origin
+    // (stored self-XSS hardening, mirroring the visual-asset route's fixed
+    // allowlist pattern).
+    const isPdf = bytes.contentType === 'application/pdf';
     return new NextResponse(new Uint8Array(bytes.value), {
       status: 200,
       headers: {
-        'Content-Type': bytes.contentType || 'application/octet-stream',
-        'Content-Disposition': `inline; filename="${safeName}"`,
+        'Content-Type': isPdf ? 'application/pdf' : 'application/octet-stream',
+        'Content-Disposition': `${isPdf ? 'inline' : 'attachment'}; filename="${safeName}"`,
+        'X-Content-Type-Options': 'nosniff',
         'Cache-Control': 'private, max-age=60',
       },
     });

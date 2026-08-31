@@ -41,6 +41,7 @@ interface ObjectResponse {
 interface ListResponse {
   Contents?: Array<{ Key?: string }>;
   IsTruncated?: boolean;
+  NextContinuationToken?: string;
 }
 
 const SAFE_MESSAGES = {
@@ -239,9 +240,17 @@ function createClient(config: GarageConfig): GarageClient {
   }) as GarageClient;
 }
 
+/**
+ * Hard ceiling on the total keys one paginated listing returns, so a huge
+ * prefix cannot pin the server forever. Callers get `truncated: true` when
+ * more keys exist beyond this cap (or beyond their requested limit).
+ */
+const MAX_LISTED_KEYS = 10_000;
+const LIST_PAGE_SIZE = 1000;
+
 function boundedLimit(limit: number | undefined): number {
   if (limit === undefined || !Number.isFinite(limit)) return 1000;
-  return Math.max(1, Math.min(1000, Math.floor(limit)));
+  return Math.max(1, Math.min(MAX_LISTED_KEYS, Math.floor(limit)));
 }
 
 export function createGarageObjectStorage(
@@ -381,16 +390,31 @@ export function createGarageObjectStorage(
     },
     async listKeys(prefix, options): Promise<ObjectListResult> {
       try {
-        const response = await client.send(new ListObjectsV2Command({
-          Bucket: config.bucket,
-          Prefix: prefix,
-          MaxKeys: boundedLimit(options?.limit),
-        })) as ListResponse;
-        return {
-          keys: (response.Contents ?? [])
+        // Paginate through continuation tokens until the requested limit (or
+        // the hard ceiling) is reached, so listings stay complete instead of
+        // silently stopping at the first 1000-key page.
+        const limit = boundedLimit(options?.limit);
+        const keys: string[] = [];
+        let continuationToken: string | undefined;
+        let more = false;
+        do {
+          const response = await client.send(new ListObjectsV2Command({
+            Bucket: config.bucket,
+            Prefix: prefix,
+            MaxKeys: Math.min(LIST_PAGE_SIZE, limit - keys.length),
+            ...(continuationToken !== undefined ? { ContinuationToken: continuationToken } : {}),
+          })) as ListResponse;
+          keys.push(...(response.Contents ?? [])
             .map((object) => object.Key)
-            .filter((key): key is string => typeof key === 'string'),
-          truncated: response.IsTruncated === true,
+            .filter((key): key is string => typeof key === 'string'));
+          more = response.IsTruncated === true;
+          continuationToken = more && typeof response.NextContinuationToken === 'string'
+            ? response.NextContinuationToken
+            : undefined;
+        } while (continuationToken !== undefined && keys.length < limit && keys.length < MAX_LISTED_KEYS);
+        return {
+          keys: keys.slice(0, limit),
+          truncated: more,
         };
       } catch (error) {
         return translateError(error);

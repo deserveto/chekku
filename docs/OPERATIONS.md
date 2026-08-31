@@ -353,19 +353,20 @@ The Knowledge Base lets users upload text files and PDFs in chat; Chekku persist
 
 Local setup: `npm run dev:sh` starts the `qdrant` Compose service (pinned `qdrant/qdrant` image, persistent `qdrant-data` volume, loopback port `127.0.0.1:6333`, container health check over TCP) and `scripts/setup-env.sh` writes `QDRANT_URL=http://127.0.0.1:6333` into `agent/.env.development`. In compose prod the agent resolves `http://qdrant:6333` on the internal network; Qdrant is never exposed beyond loopback or the internal Compose network, and the browser never talks to it. Set `LLM_EMBEDDING_MODEL` in `agent/.env` to enable ingestion and retrieval; both fail closed when unset.
 
-Supported documents: text formats `txt`, `md`, `csv`, `tsv`, `json`, `log`, `xml`, `yml`, `yaml` (raw cap 2 MiB) and `application/pdf` (raw cap 20 MiB). Images are never indexed — they keep flowing through the multimodal chat path. PDFs are extracted server-side with pdfjs-dist; scanned image-only PDFs fail with `No extractable text found in this document.`
+Supported documents: text formats `txt`, `md`, `csv`, `tsv`, `json`, `log`, `xml`, `yml`, `yaml` (raw cap 2 MiB) and `application/pdf` (raw cap 16 MiB — aligned with the Garage binary read bound; the production nginx `client_max_body_size` is 17m and must stay above it). A user's registry holds at most 500 documents (`MAX_KNOWLEDGE_DOCUMENTS_PER_USER`); further uploads are rejected until deletion. Images are never indexed — they keep flowing through the multimodal chat path. PDFs are extracted server-side with pdfjs-dist (capped at 200 parsed pages); scanned image-only PDFs fail with `No extractable text found in this document.`
 
 Lifecycle and consistency:
 
 1. Upload (`POST /api/storage/knowledge/documents`) writes `original.<ext>` then `metadata.json` (status `processing`) to `kb/users/<resourceId>/documents/<documentId>/` and fires the `knowledge-document-ingestion` workflow. The chat run is never blocked or waited on.
-2. Ingestion extracts, chunks (1,100-char target, 150-char overlap, ≤1,000 chunks), embeds all chunks, deletes any prior vectors for the document, upserts, then flips the record to `ready` with the chunk count. Any failure purges partial vectors and records `failed` with a fixed bounded reason; the raw document is always preserved.
+2. Ingestion is mutually exclusive per document: `begin` refuses a fresh `processing` record (only records older than the 15-minute stale window re-begin) and refuses `ready`. The pipeline purges partial vectors and records `failed` with a fixed bounded reason only when `begin` succeeded — a racing loser leaves the winner's index and status untouched; the raw document is always preserved.
 3. Retry (`POST .../retry`) is allowed for `failed` documents and for `processing` records older than 15 minutes (abandoned runs, e.g. an agent-server restart).
-4. Delete (`DELETE .../[documentId]`) fires `knowledge-document-deletion`: Qdrant vectors first (retrieval stops immediately), then Garage objects, then the metadata record last — the document leaves `/knowledge` only once it can no longer be retrieved. Steps are idempotent; retry a failed deletion from the page.
+4. Delete (`DELETE .../[documentId]`) fires `knowledge-document-deletion`: Qdrant vectors first (retrieval stops immediately), then Garage objects, then the metadata record — followed by one final idempotent vector sweep so an ingestion racing the deletion cannot leave orphaned searchable chunks. Steps are idempotent; retry a failed deletion from the page.
 
 Ownership is structural: every registry key is scoped under the session user's id, every list/read/delete validates that id, and every Qdrant search or delete carries a mandatory `resourceId` payload filter backed by a keyword index. The retrieval tool derives the tenant from the run context, never from model input.
 
 No-config smoke: start the server without `QDRANT_URL`/`LLM_EMBEDDING_MODEL`, upload a document, and confirm the Knowledge page shows it as `Failed` with `Knowledge indexing is not configured…` (or `...could not be started`) rather than hanging in `Processing`. Deterministic tests require no live Qdrant or embedding endpoint.
 
+Security note: the dev-stack Qdrant runs keyless (loopback-only publish) and holds every tenant's chunks in plaintext — an accepted local-first trade-off. Production deployments must set `QDRANT_API_KEY` (and configure the matching key on Qdrant) or front Qdrant with an authenticated proxy.
 
 ## Chat slash-command picker
 
