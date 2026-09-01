@@ -31,7 +31,7 @@ Chekku is a focused interface for managing Mastra agents, running agent-specific
 - **Visual content agent** — image generation for approved social posts (on-demand via supervisor chat, or auto-triggered when the caption is approved in `/social-posts`).
 - **Scheduled social drafts** — a weekly Monday 09:00 Asia/Jakarta workflow.
 - **Shareable slide decks** — token-gated public URLs for competitive-analysis decks.
-- **Centralized Postgres** — agent definitions, versions, memory, and threads.
+- **Per-user Knowledge Base** — chat text/PDF uploads are parsed, chunked, embedded, and indexed into Qdrant; `search_knowledge_base` retrieves them; `/knowledge` manages documents.
 - **Same-origin proxy** — browser traffic routes through the Next.js proxy, never hitting the Mastra server directly.
 - **Email + time + calculator tools** — bound to stored and selected code-defined agents (email via Resend).
 
@@ -49,7 +49,8 @@ Next.js client :3000
   │                                       ├── Mastra Memory + PostgresStore
   │                                       ├── Garage / SearXNG / Web Reader MCP (optional)
   │                                       └── OpenAI-compatible gateway ──> LLM endpoint
-  └── /reports/* + /social-posts/* ──> server services ──> @chekku/storage ──> Garage/S3
+  └── /reports/* + /social-posts/* + /knowledge ──> server services ──> @chekku/storage ──> Garage/S3
+  (Knowledge ingestion additionally talks to Qdrant for the vector index)
 ```
 
 See [Architecture](docs/ARCHITECTURE.md) for runtime boundaries, data flow, and the Garage / SearXNG / Web Reader MCP contracts.
@@ -97,7 +98,7 @@ npm run db:migrate
 
 These are optional; Chekku boots fine without them.
 
-### 3. Start Garage, SearXNG, and both application workspaces
+### 3. Start Garage, SearXNG, Qdrant, and both application workspaces
 
 ```bash
 npm run dev:sh
@@ -106,10 +107,11 @@ npm run dev:sh
 Open:
 
 - Studio: `http://localhost:3000`
-- Reports: `http://localhost:3000/reports`
+- Knowledge: `http://localhost:3000/knowledge`
 - Mastra health: `http://localhost:4111/healthz`
 - Model registry: `http://localhost:4111/models`
 - SearXNG health: `http://127.0.0.1:8888/healthz`
+- Qdrant readiness: `http://127.0.0.1:6333/readyz`
 
 ## Environment
 
@@ -137,6 +139,10 @@ Local file: `agent/.env`
 | `SEARXNG_BASE_URL` | Conditional | empty | Server-owned SearXNG base URL. `npm run dev:sh` supplies `http://127.0.0.1:8888`; set it explicitly for an external service. |
 | `SEARXNG_API_KEY` | No | empty | Optional server-only bearer token for an authenticated external SearXNG reverse proxy. |
 | `WEB_READER_BASE_URL` | Conditional | empty | Self-hosted Jina Reader base URL. `npm run setup` writes `http://127.0.0.1:8081` into `agent/.env.development`; compose uses `http://reader:8081`. No API key. |
+| `QDRANT_URL` | Conditional | empty | Knowledge Base vector index base URL. `npm run setup` writes `http://127.0.0.1:6333` into `agent/.env.development`; compose uses `http://qdrant:6333`. Empty/unset → Knowledge ingestion and search fail closed. |
+| `QDRANT_API_KEY` | No | empty | Optional bearer token for an authenticated Qdrant. Server-side only. |
+| `QDRANT_COLLECTION` | No | `chekku_knowledge` | Single shared Knowledge collection name. |
+| `LLM_EMBEDDING_MODEL` | Conditional | empty | Embeddings model served by the existing `LLM_BASE_URL` endpoint (no second key). Required for Knowledge ingestion and search; empty/unset → Knowledge tools fail closed. |
 | `TELEGRAM_BOT_TOKEN` | Conditional | empty | Bot token from [@BotFather](https://t.me/BotFather). Required when running `social-media-content-writer`. |
 | `TELEGRAM_MODE` | No | `polling` | Adapter mode: `polling` (dev, no tunnel), `webhook` (prod, public URL), or `auto`. |
 | `TELEGRAM_WEBHOOK_SECRET_TOKEN` | No | empty | Checked against `x-telegram-bot-api-secret-token`. Webhook mode only. |
@@ -172,7 +178,7 @@ Local file: `client/.env.local`
 | --- | --- |
 | `npm run setup` | Copy env examples, generate local Garage/SearXNG secrets + Better Auth env, prompt for required values. |
 | `npm run db:migrate` | Apply the Better Auth schema to `chekku_auth`. Requires Postgres running; safe to re-run. |
-| `npm run dev:sh` | Provision local Garage and SearXNG, then start agent and client workspaces. |
+| `npm run dev:sh` | Provision local Garage, SearXNG, and Qdrant, then start agent and client workspaces. |
 | `npm run dev` | Start agent and client workspaces without provisioning local services. |
 | `npm run dev:agent` | Start only the Mastra server. |
 | `npm run dev:client` | Start only the Next.js client. |

@@ -178,6 +178,17 @@ export function StudioNav({
               <span aria-hidden="true"><AgentIcon icon="pen" /></span>
               <span className="studio-sidebar-copy">Social posts</span>
             </Link>
+            <Link
+              href="/knowledge"
+              className={pathname.startsWith('/knowledge') ? 'active' : ''}
+              aria-current={pathname.startsWith('/knowledge') ? 'page' : undefined}
+              aria-label="Knowledge"
+              title={collapsed ? 'Knowledge' : undefined}
+              onClick={guardedClick('/knowledge')}
+            >
+              <span aria-hidden="true"><AgentIcon icon="book" /></span>
+              <span className="studio-sidebar-copy">Knowledge</span>
+            </Link>
           </nav>
 
           <div className="studio-nav-spacer" />

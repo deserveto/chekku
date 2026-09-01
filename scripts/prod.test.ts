@@ -150,11 +150,12 @@ if [[ "$1" == compose ]]; then
   if [[ "$*" == *" ps -q postgres" ]]; then printf 'postgres-id\\n'; exit 0; fi
   if [[ "$*" == *" ps -q agent" ]]; then printf 'agent-id\\n'; exit 0; fi
   if [[ "$*" == *" ps -q client" ]]; then printf 'client-id\\n'; exit 0; fi
+  if [[ "$*" == *" ps -q qdrant" ]]; then printf 'qdrant-id\\n'; exit 0; fi
   exit 0
 fi
 if [[ "$1" == inspect ]]; then
   case "\${*: -1}" in
-    garage-id|searxng-id|reader-id|postgres-id|agent-id|client-id) service="\${*: -1}"; service="\${service%-id}" ;;
+    garage-id|searxng-id|reader-id|postgres-id|agent-id|client-id|qdrant-id) service="\${*: -1}"; service="\${service%-id}" ;;
     *) service=unknown ;;
   esac
   if [[ "$service" == "\${UNHEALTHY_SERVICE:-}" ]]; then printf 'starting\\n'; exit 0; fi
@@ -312,13 +313,14 @@ describe("production launcher flow", () => {
     expect(result.stdout).toContain("Production stack is running");
   });
 
-  it("orders readiness as garage, searxng, reader, postgres, agent, client", () => {
+  it("orders readiness as garage, searxng, reader, qdrant, postgres, agent, client", () => {
     const root = fixture();
     const result = runProd(root);
     const readyOrder = [
       result.stdout.indexOf("Garage ready"),
       result.stdout.indexOf("SearXNG ready"),
       result.stdout.indexOf("Reader ready"),
+      result.stdout.indexOf("Qdrant ready"),
       result.stdout.indexOf("Postgres ready"),
       result.stdout.indexOf("Agent ready"),
       result.stdout.indexOf("Client ready"),
@@ -327,6 +329,7 @@ describe("production launcher flow", () => {
     for (let i = 1; i < readyOrder.length; i += 1) {
       expect(readyOrder[i]).toBeGreaterThan(readyOrder[i - 1]);
     }
+    expect(result.stdout).toContain("Qdrant ready");
   });
 
   it("aborts with a bounded message when a service never becomes healthy", () => {

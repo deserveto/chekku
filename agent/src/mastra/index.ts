@@ -37,6 +37,8 @@ import {
 } from './routes/runs.js';
 import { storedAgentTools } from './tools/registry.js';
 import { generateSocialPostVisual } from './workflows/generate-social-post-visual.js';
+import { knowledgeDocumentDeletion } from './workflows/knowledge-document-deletion.js';
+import { knowledgeDocumentIngestion } from './workflows/knowledge-document-ingestion.js';
 import { repurposeSocialPost } from './workflows/repurpose-social-post.js';
 import { weeklySocialDrafts } from './workflows/weekly-social-drafts.js';
 
@@ -84,7 +86,13 @@ export const mastra = new MastraWithDurableStoredAgents({
     socialMediaSupervisorAgent: durableSocialMediaSupervisorAgent,
     visualContentAgent: durableVisualContentAgent,
   },
-  workflows: { weeklySocialDrafts, repurposeSocialPost, generateSocialPostVisual },
+  workflows: {
+    weeklySocialDrafts,
+    repurposeSocialPost,
+    generateSocialPostVisual,
+    knowledgeDocumentIngestion,
+    knowledgeDocumentDeletion,
+  },
   mcpServers: {
     garage: garageMcpServer,
     searxng: searxngMcpServer,
