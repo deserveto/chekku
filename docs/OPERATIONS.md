@@ -685,6 +685,26 @@ npm run build --workspace agent
 
 The Next.js client uses system font stacks and does not require a Google Fonts download during production builds.
 
+### Windows emits `ERR_INVALID_MODULE_SPECIFIER` for a backslashed specifier
+
+On win32, Mastra's bundler emits module specifiers with
+native path separators (observed with `pdfjs-dist\legacy\build\pdf.mjs`), which
+the Node ESM loader rejects with `ERR_INVALID_MODULE_SPECIFIER` whenever the
+built bundle starts. Both affected flows are covered:
+
+- `npm run build --workspace agent` runs
+  `../scripts/fix-mastra-specifiers.mjs` after `mastra build`, rewriting
+  backslashed specifiers across `agent/.mastra/output` (a no-op on
+  Linux/macOS output).
+- `npm run dev --workspace agent` goes through
+  `../scripts/mastra-dev.mjs`, which preloads a Node module-resolution hook
+  (`scripts/win-esm-specifier-hook.mjs`, registered via `NODE_OPTIONS`)
+  because `mastra dev` re-bundles into `agent/.mastra/output` itself and
+  starts the server before any post-build step could run.
+
+If a future Mastra upgrade fixes the upstream emission, drop both steps
+without further changes.
+
 ## Verification
 
 Run before merging:
