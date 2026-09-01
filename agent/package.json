@@ -5,7 +5,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "dev": "mastra dev",
-    "build": "mastra build",
+    "build": "mastra build && node ../scripts/fix-mastra-specifiers.mjs",
     "start": "mastra start"
   },
   "keywords": [
