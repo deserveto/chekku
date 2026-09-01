@@ -380,9 +380,15 @@ describe('development launcher', () => {
     for (const serviceIndex of [garagePsIndex, searxngPsIndex, postgresPsIndex, garageUpIndex, searxngUpIndex, postgresUpIndex]) {
       expect(configIndex).toBeLessThan(serviceIndex);
     }
-    expect(successCalls).toContain('compose --env-file storage/.env.local ps -q garage');
-    expect(successCalls).toContain('compose --env-file storage/.env.local ps -q searxng');
-    expect(successCalls).toContain('compose --env-file storage/.env.local ps -q postgres');
+    expect(successCalls).toContain(
+      'compose --env-file storage/.env.local -f compose.yaml -f compose.dev.yaml ps -q garage',
+    );
+    expect(successCalls).toContain(
+      'compose --env-file storage/.env.local -f compose.yaml -f compose.dev.yaml ps -q searxng',
+    );
+    expect(successCalls).toContain(
+      'compose --env-file storage/.env.local -f compose.yaml -f compose.dev.yaml ps -q postgres',
+    );
     expect(successCalls.join('\n')).toMatch(/compose .* up -d .*garage/);
     expect(successCalls.join('\n')).toMatch(/compose .* up -d .*searxng/);
     expect(successCalls.join('\n')).toMatch(/compose .* up -d .*postgres/);
@@ -913,6 +919,9 @@ describe('committed local runtime', () => {
 
     expect(compose).toContain('dxflrs/garage:v2.3.0');
     expect(scripts).toMatch(/GARAGE_BUCKET=.*chekku-objects/);
+    // The launcher merges the port-less infra base with the dev overlay on
+    // every invocation; the overlay is what publishes the loopback ports.
+    expect(launcher).toContain('-f compose.yaml -f compose.dev.yaml');
     // Loopback-bound, and defaulted to 3900 so the development launcher and the
     // 127.0.0.1:3900 GARAGE_ENDPOINT in storage/.env.local keep working without
     // any extra configuration. The host port is overridable only for hosts where
