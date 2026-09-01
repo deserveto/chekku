@@ -4,7 +4,7 @@
   "description": "Chekku's Mastra agent runtime.",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "dev": "mastra dev",
+    "dev": "node ../scripts/mastra-dev.mjs",
     "build": "mastra build && node ../scripts/fix-mastra-specifiers.mjs",
     "start": "mastra start"
   },
