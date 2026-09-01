@@ -95,6 +95,7 @@ function fixture(options: {
     'storage/garage.toml.template',
     'searxng/settings.yml',
     'compose.yaml',
+    'compose.dev.yaml',
     '.gitignore',
     'agent/.env.example',
     'client/.env.example',
@@ -931,6 +932,22 @@ describe('committed local runtime', () => {
     expect(settings).toMatch(/limiter:\s*false/);
     expect(settings).toMatch(/public_instance:\s*false/);
     expect(settings).toMatch(/image_proxy:\s*false/);
+  });
+
+  it('dev overlay publishes exactly the five loopback infra ports', () => {
+    const devOverlay = readFileSync(resolve(sourceRoot, 'compose.dev.yaml'), 'utf8');
+    expect(devOverlay).toContain('"127.0.0.1:${CHEKKU_GARAGE_HOST_PORT:-3900}:3900"');
+    expect(devOverlay).toContain('"127.0.0.1:${CHEKKU_SEARXNG_HOST_PORT:-8888}:8080"');
+    expect(devOverlay).toContain('"127.0.0.1:${CHEKKU_READER_HOST_PORT:-8081}:8081"');
+    expect(devOverlay).toContain('"127.0.0.1:${CHEKKU_QDRANT_HOST_PORT:-6333}:6333"');
+    expect(devOverlay).toContain('"127.0.0.1:${CHEKKU_POSTGRES_HOST_PORT:-5432}:5432"');
+    expect(devOverlay).toMatch(/^[ \t]+ports:/m);
+    expect(devOverlay).not.toContain('profiles:');
+    const published = devOverlay.match(/- "127\.0\.0\.1:[^"]+"/g) ?? [];
+    expect(published).toHaveLength(5);
+    for (const internal of [3901, 3902, 3903]) {
+      expect(devOverlay).not.toMatch(new RegExp(`^[^#]*${internal}:${internal}`, 'm'));
+    }
   });
 
   it('ignores generated credentials, configuration, and data paths', () => {

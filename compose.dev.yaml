@@ -1,0 +1,23 @@
+# Development overlay: publishes the infra services on loopback so the
+# host-run agent and client (scripts/dev.sh) and host tools (db-migrate.sh)
+# can reach them. Always merged over the base file:
+#   docker compose -f compose.yaml -f compose.dev.yaml ...
+# or simply use scripts/dev.sh, which passes this pair on every invocation.
+# Production (scripts/prod.sh) never merges this file; its only loopback
+# publishes are the client and postgres (see compose.prod.yaml).
+services:
+  garage:
+    ports:
+      - "127.0.0.1:${CHEKKU_GARAGE_HOST_PORT:-3900}:3900"
+  searxng:
+    ports:
+      - "127.0.0.1:${CHEKKU_SEARXNG_HOST_PORT:-8888}:8080"
+  reader:
+    ports:
+      - "127.0.0.1:${CHEKKU_READER_HOST_PORT:-8081}:8081"
+  qdrant:
+    ports:
+      - "127.0.0.1:${CHEKKU_QDRANT_HOST_PORT:-6333}:6333"
+  postgres:
+    ports:
+      - "127.0.0.1:${CHEKKU_POSTGRES_HOST_PORT:-5432}:5432"

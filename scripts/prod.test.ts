@@ -123,6 +123,7 @@ function fixture(
     "storage/garage.toml.template",
     "searxng/settings.yml",
     "compose.yaml",
+    "compose.prod.yaml",
     ".gitignore",
     "agent/.env.example",
     "client/.env.example",
@@ -422,5 +423,23 @@ describe("production launcher secret hygiene", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).not.toContain("command not found");
     expect(result.stderr).not.toContain("No such file or directory");
+  });
+});
+
+describe("committed production runtime", () => {
+  it("prod overlay publishes only the client and postgres loopback ports", () => {
+    const prod = readFileSync(resolve(sourceRoot, "compose.prod.yaml"), "utf8");
+    expect(prod).toContain('"127.0.0.1:${CHEKKU_CLIENT_HOST_PORT:-3000}:3000"');
+    expect(prod).toContain('"127.0.0.1:${CHEKKU_POSTGRES_HOST_PORT:-5432}:5432"');
+    expect(prod).toMatch(/^[ \t]+ports:/m);
+    expect(prod).not.toContain("profiles:");
+    const published = prod.match(/- "127\.0\.0\.1:[^"]+"/g) ?? [];
+    expect(published).toHaveLength(2);
+    for (const internal of [":3900:", ":8888:", ":8081:", ":6333:"]) {
+      expect(prod).not.toContain(internal);
+    }
+    for (const leaked of [3901, 3902, 3903]) {
+      expect(prod).not.toMatch(new RegExp(`^[^#]*${leaked}:${leaked}`, "m"));
+    }
   });
 });
