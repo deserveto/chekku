@@ -32,6 +32,11 @@ RUN npm ci
 # has no build step, so its source must be present when Mastra bundles it.
 COPY agent/ agent/
 COPY storage/ storage/
+# Repository-level build helpers the agent workspace build script invokes by
+# relative path ("mastra build && node ../scripts/fix-mastra-specifiers.mjs").
+# They live outside agent/, so they must be copied explicitly: without them the
+# builder fails with MODULE_NOT_FOUND on the entry point itself.
+COPY scripts/fix-mastra-specifiers.mjs scripts/
 # Emit the Mastra server bundle to agent/.mastra/output.
 RUN npm run build --workspace agent
 
