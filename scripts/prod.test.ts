@@ -280,21 +280,23 @@ describe("production launcher flow", () => {
     expect(dockerLog).toContain("config --quiet");
   });
 
-  it("always activates the prod profile and the storage env-file", () => {
+  it("always merges the prod overlay and the storage env-file", () => {
     const root = fixture();
     const result = runProd(root);
     const dockerLog = readFileSync(resolve(root, "mock-log/docker"), "utf8");
 
     expect(result.status, result.stderr).toBe(0);
-    // Every compose invocation except the bare availability check carries both
-    // the env-file and the prod profile.
+    // Every compose invocation except the bare availability check carries the
+    // env-file and both -f files, and nothing activates a profile anymore.
     for (const line of dockerLog
       .split("\n")
       .filter(
         (entry) => entry.includes("compose") && !entry.includes(" version"),
       )) {
       expect(line).toContain("--env-file storage/.env.local");
-      expect(line).toContain("--profile prod");
+      expect(line).toContain("-f compose.yaml");
+      expect(line).toContain("-f compose.prod.yaml");
+      expect(line).not.toContain("--profile");
     }
   });
 
