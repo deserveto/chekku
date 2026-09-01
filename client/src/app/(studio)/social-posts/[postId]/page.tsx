@@ -4,9 +4,7 @@ import { notFound } from 'next/navigation';
 import ApproveButton from './ApproveButton';
 import GenerationPending from './GenerationPending';
 import { MarkdownMessage } from '@/components/markdown-message';
-import { StudioNav } from '@/components/studio/studio-nav';
 import { splitPostMarkdown } from '@/lib/post-markdown';
-import { requireUserId } from '@/server/auth';
 import {
   getSocialPostForUser,
   SocialPostServiceError,
@@ -39,7 +37,6 @@ export default async function SocialPostDetailPage({
 }: {
   params: Promise<{ postId: string }>;
 }) {
-  const resourceId = await requireUserId();
   const { postId } = await params;
   let post: Awaited<ReturnType<typeof getSocialPostForUser>> | undefined;
   let errorMessage: string | undefined;
@@ -60,9 +57,7 @@ export default async function SocialPostDetailPage({
 
   if (!post) {
     return (
-      <div className="studio-shell">
-        <StudioNav resourceId={resourceId} />
-        <main className="studio-main">
+      <>
           <header className="studio-page-header">
             <div>
               <p className="studio-eyebrow">Social post</p>
@@ -75,8 +70,7 @@ export default async function SocialPostDetailPage({
               {errorMessage ?? 'Could not load social post.'}
             </div>
           </section>
-        </main>
-      </div>
+    </>
     );
   }
 
@@ -96,19 +90,31 @@ export default async function SocialPostDetailPage({
   // triggered it is recent — see `isVisualGenerationPlausible` above.
   const visualGenerationPlausible = isVisualGenerationPlausible(post.metadata.captionApprovedAt);
 
+  function badgeClassForSocialStatus(raw: string): string {
+    if (raw === 'DRAFT') return 'status-draft';
+    if (raw === 'CANONICAL_APPROVED') return 'status-canonical';
+    if (raw === 'APPROVED') return 'status-approved';
+    if (raw === 'PUBLISHED') return 'status-published';
+    return '';
+  }
+
   return (
-    <div className="studio-shell">
-      <StudioNav resourceId={resourceId} />
-      <main className="studio-main">
+    <>
         <header className="studio-page-header studio-report-header">
           <div>
-            <p className="studio-eyebrow">Social post</p>
+            <p className="studio-eyebrow">Social post · Instagram draft</p>
             <h1>{post.postId}</h1>
             <p>
               {hasCanonical
                 ? 'Canonical content unit, the Instagram caption derived from it after approval, storage metadata, and the brief that generated it.'
                 : 'Drafted caption first, followed by storage metadata and the brief that generated it.'}
             </p>
+            <div className="studio-agent-meta-chips" style={{ margin: '12px 0 0', paddingTop: 0, borderTop: 0 }}>
+              <span className={`studio-source-badge ${badgeClassForSocialStatus(status)}`}>{status.replace('_', ' ')}</span>
+              <span className="studio-meta-chip">{post.metadata.topic}</span>
+              {post.metadata.specialDay ? <span className="studio-meta-chip">{post.metadata.specialDay}</span> : null}
+              <span className="studio-meta-chip">{new Date(post.metadata.createdAt).toISOString().slice(0, 10)}</span>
+            </div>
           </div>
           <div className="studio-report-header-actions">
             {status === 'DRAFT' && hasCanonical ? (
@@ -220,7 +226,6 @@ export default async function SocialPostDetailPage({
             </div>
           </section>
         </div>
-      </main>
-    </div>
+    </>
   );
 }

@@ -387,7 +387,7 @@ Generated IDs and all repository, PM tool, and public report boundaries use `pmr
 
 Report interfaces:
 
-- `/reports` groups weekly and competitive report views.
+- `/reports` redirects permanently to `/reports/weekly`.
 - `/reports/weekly` lists weekly report ID, created time, risk rating, and status newest first.
 - `/reports/[reportId]` renders saved analysis, metadata, then original weekly input.
 - `GET /api/storage/pm-reports` returns `{ reports }` after server identity validation.

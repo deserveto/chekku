@@ -1,9 +1,8 @@
 import Link from 'next/link';
 
-type ReportView = 'all' | 'weekly' | 'competitive';
+type ReportView = 'weekly' | 'competitive';
 
 const views: Array<{ id: ReportView; label: string; href: string }> = [
-  { id: 'all', label: 'Overview', href: '/reports' },
   { id: 'weekly', label: 'Weekly reviews', href: '/reports/weekly' },
   { id: 'competitive', label: 'Competitive', href: '/reports/competitive' },
 ];

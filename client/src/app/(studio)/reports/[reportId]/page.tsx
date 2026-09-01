@@ -2,9 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import { MarkdownMessage } from '@/components/markdown-message';
-import { StudioNav } from '@/components/studio/studio-nav';
 import { ReportTabs } from '@/components/reports/report-tabs';
-import { requireUserId } from '@/server/auth';
 import {
   getPmReportForUser,
   PmReportServiceError,
@@ -17,7 +15,6 @@ export default async function ReportDetailPage({
 }: {
   params: Promise<{ reportId: string }>;
 }) {
-  const resourceId = await requireUserId();
   const { reportId } = await params;
   let report: Awaited<ReturnType<typeof getPmReportForUser>> | undefined;
   let errorMessage: string | undefined;
@@ -38,37 +35,37 @@ export default async function ReportDetailPage({
 
   if (!report) {
     return (
-      <div className="studio-shell">
-        <StudioNav resourceId={resourceId} />
-        <main className="studio-main">
+      <>
           <header className="studio-page-header">
             <div>
               <p className="studio-eyebrow">PM report</p>
               <h1>Report unavailable</h1>
             </div>
-            <Link className="studio-button" href="/reports">Back to reports</Link>
+            <Link className="studio-button" href="/reports/weekly">Back to reports</Link>
           </header>
           <section className="studio-section">
             <div className="studio-alert studio-alert-error" role="alert">
               {errorMessage ?? 'Could not load report.'}
             </div>
           </section>
-        </main>
-      </div>
+    </>
     );
   }
 
   return (
-    <div className="studio-shell">
-      <StudioNav resourceId={resourceId} />
-      <main className="studio-main">
+    <>
         <header className="studio-page-header studio-report-header">
           <div>
-            <p className="studio-eyebrow">PM report</p>
+            <p className="studio-eyebrow">PM report · Weekly review</p>
             <h1>Weekly risk review</h1>
             <p className="studio-report-id"><code>{report.reportId}</code></p>
+            <div className="studio-agent-meta-chips" style={{ margin: '12px 0 0', paddingTop: 0, borderTop: 0 }}>
+              <span className="studio-meta-chip"><i className="studio-dot ready" aria-hidden="true" /> Rating {report.metadata.rating}/10</span>
+              <span className="studio-meta-chip">{report.metadata.status}</span>
+              <span className="studio-meta-chip">{new Date(report.metadata.createdAt).toISOString().slice(0, 10)}</span>
+            </div>
           </div>
-          <Link className="studio-button" href="/reports">Back to reports</Link>
+          <Link className="studio-button" href="/reports/weekly">Back to reports</Link>
         </header>
 
         <div className="studio-report-detail-wrap">
@@ -105,7 +102,6 @@ export default async function ReportDetailPage({
           </section>
           </div>
         </div>
-      </main>
-    </div>
+    </>
   );
 }

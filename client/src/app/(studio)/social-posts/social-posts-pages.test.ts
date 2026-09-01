@@ -37,8 +37,8 @@ vi.mock('@/server/social-posts', () => {
     SocialPostServiceError,
   };
 });
-vi.mock('@/server/social-post-format', async () => import('../../server/social-post-format'));
-vi.mock('@/lib/post-markdown', async () => import('../../lib/post-markdown'));
+vi.mock('@/server/social-post-format', async () => import('../../../server/social-post-format'));
+vi.mock('@/lib/post-markdown', async () => import('../../../lib/post-markdown'));
 
 import { SocialPostServiceError } from '@/server/social-posts';
 
@@ -71,17 +71,32 @@ beforeEach(() => {
 });
 
 describe('social posts list page', () => {
-  it('renders its table in a labeled keyboard-scrollable region', async () => {
+  it('renders its grid in a labeled list region with registry controls', async () => {
     const markup = renderToStaticMarkup(await SocialPostsPage());
 
-    expect(markup).toContain('class="studio-report-table-wrap studio-panel"');
-    expect(markup).toContain('tabindex="0"');
-    expect(markup).toContain('role="region"');
+    // Polished grid parity with /agents — same list region pattern as reports
+    expect(markup).toContain('class="studio-social-grid"');
+    expect(markup).toContain('role="list"');
     expect(markup).toContain('aria-label="Saved social posts"');
+    expect(markup).toContain('studio-social-card');
+    expect(markup).toContain('aria-label="Filter by status"');
+    expect(markup).toContain('aria-label="Search social posts"');
+    expect(markup).toContain('class="studio-registry-count"');
   });
 
-  it('gives the post table region a visible focus style (shared report-table CSS)', () => {
-    const css = readFileSync(new URL('../studio.css', import.meta.url), 'utf8');
+  it('gives social cards a visible hover lift and focus ring (Warm Workshop parity)', () => {
+    const css = readFileSync(new URL('../../studio.css', import.meta.url), 'utf8');
+    const hoverRule = css.match(/\.studio-social-card:hover\s*\{([^}]*)\}/)?.[1];
+    const focusRule = css.match(
+      /\.studio-social-card:focus-visible\s*\{([^}]*)\}/,
+    )?.[1];
+
+    expect(hoverRule).toContain('transform: translateY(-3px)');
+    expect(focusRule).toContain('outline: 1px solid var(--studio-accent)');
+  });
+
+  it('keeps table region focus style for legacy accessibility (shared)', () => {
+    const css = readFileSync(new URL('../../studio.css', import.meta.url), 'utf8');
     const focusRule = css.match(
       /\.studio-report-table-wrap:focus-visible\s*\{([^}]*)\}/,
     )?.[1];
@@ -99,8 +114,14 @@ describe('social posts list page', () => {
 
     const markup = renderToStaticMarkup(await SocialPostsPage());
 
-    expect(markup).toContain(`<td>${expected}</td>`);
+    // Date appears in card meta dd (not table td) after polish
+    expect(markup).toContain(expected);
     expect(markup).not.toContain('Invalid Date');
+  });
+
+  it('routes card actions to the correct post detail', async () => {
+    const markup = renderToStaticMarkup(await SocialPostsPage());
+    expect(markup).toContain(`href="/social-posts/${encodeURIComponent(metadata.postId)}"`);
   });
 });
 

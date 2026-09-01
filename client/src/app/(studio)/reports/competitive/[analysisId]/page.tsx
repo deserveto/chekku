@@ -3,9 +3,7 @@ import { notFound } from 'next/navigation';
 
 import { MarkdownMessage } from '@/components/markdown-message';
 import { ShareLinkButton } from '@/components/share-link-button';
-import { StudioNav } from '@/components/studio/studio-nav';
 import { ReportTabs } from '@/components/reports/report-tabs';
-import { requireUserId } from '@/server/auth';
 import {
   CompetitiveAnalysisServiceError,
   getCompetitiveAnalysisForUser,
@@ -19,7 +17,6 @@ export default async function CompetitiveAnalysisDetailPage({
 }: {
   params: Promise<{ analysisId: string }>;
 }) {
-  const resourceId = await requireUserId();
   const { analysisId } = await params;
   let analysis: Awaited<ReturnType<typeof getCompetitiveAnalysisForUser>> | undefined;
   let errorMessage: string | undefined;
@@ -48,9 +45,7 @@ export default async function CompetitiveAnalysisDetailPage({
 
   if (!analysis) {
     return (
-      <div className="studio-shell">
-        <StudioNav resourceId={resourceId} />
-        <main className="studio-main">
+      <>
           <header className="studio-page-header">
             <div>
               <p className="studio-eyebrow">Competitive analysis</p>
@@ -63,20 +58,22 @@ export default async function CompetitiveAnalysisDetailPage({
               {errorMessage ?? 'Could not load competitive analysis.'}
             </div>
           </section>
-        </main>
-      </div>
+    </>
     );
   }
 
   return (
-    <div className="studio-shell">
-      <StudioNav resourceId={resourceId} />
-      <main className="studio-main">
+    <>
         <header className="studio-page-header studio-report-header">
           <div>
-            <p className="studio-eyebrow">Competitive analysis</p>
+            <p className="studio-eyebrow">Competitive analysis · Market research</p>
             <h1>{analysis.metadata.anchorProduct} competitive landscape</h1>
             <p className="studio-report-id"><code>{analysis.analysisId}</code></p>
+            <div className="studio-agent-meta-chips" style={{ margin: '12px 0 0', paddingTop: 0, borderTop: 0 }}>
+              <span className="studio-meta-chip"><i className="studio-dot ready" aria-hidden="true" /> {analysis.metadata.competitorNames.length} competitors</span>
+              <span className="studio-meta-chip">{analysis.metadata.sourceCount} sources</span>
+              <span className="studio-meta-chip">{new Date(analysis.metadata.createdAt).toISOString().slice(0, 10)}</span>
+            </div>
           </div>
           <div className="studio-report-header-actions">
             {analysis.slidesMarkdown && analysis.slidesMarkdown.trim().length > 0 ? (
@@ -131,7 +128,6 @@ export default async function CompetitiveAnalysisDetailPage({
           </section>
           </div>
         </div>
-      </main>
-    </div>
+    </>
   );
 }

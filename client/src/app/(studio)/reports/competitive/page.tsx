@@ -1,8 +1,6 @@
 import Link from 'next/link';
 
-import { StudioNav } from '@/components/studio/studio-nav';
 import { ReportTabs } from '@/components/reports/report-tabs';
-import { requireUserId } from '@/server/auth';
 import {
   CompetitiveAnalysisServiceError,
   listCompetitiveAnalysesForUser,
@@ -12,7 +10,6 @@ import { formatPmReportCreatedAt } from '@/server/pm-report-format';
 export const dynamic = 'force-dynamic';
 
 export default async function CompetitiveAnalysesPage() {
-  const resourceId = await requireUserId();
   let analyses: Awaited<ReturnType<typeof listCompetitiveAnalysesForUser>> = [];
   let errorMessage: string | undefined;
 
@@ -25,9 +22,7 @@ export default async function CompetitiveAnalysesPage() {
   }
 
   return (
-    <div className="studio-shell">
-      <StudioNav resourceId={resourceId} />
-      <main className="studio-main">
+    <>
         <header className="studio-page-header">
           <div>
             <p className="studio-eyebrow">Garage storage</p>
@@ -36,14 +31,22 @@ export default async function CompetitiveAnalysesPage() {
           </div>
         </header>
 
-        <section className="studio-section">
-          <ReportTabs active="competitive" />
+        <section className="studio-section studio-registry-section">
+          <div className="studio-registry-header">
+            <div className="studio-registry-title">
+              <h2>
+                Competitive analyses <span className="studio-registry-count">{analyses.length}</span>
+              </h2>
+              <p className="studio-registry-subtitle">Product comparisons, evidence, and feature matrices — newest first.</p>
+            </div>
+            <ReportTabs active="competitive" />
+          </div>
           {errorMessage ? (
             <div className="studio-alert studio-alert-error" role="alert">
               {errorMessage}
             </div>
           ) : analyses.length === 0 ? (
-            <div className="studio-empty-state">
+            <div className="studio-empty-state studio-registry-empty">
               <h3>No saved competitive analyses</h3>
               <p>Completed PM Agent competitive analyses will appear here after they are stored.</p>
             </div>
@@ -99,7 +102,6 @@ export default async function CompetitiveAnalysesPage() {
             </div>
           )}
         </section>
-      </main>
-    </div>
+    </>
   );
 }

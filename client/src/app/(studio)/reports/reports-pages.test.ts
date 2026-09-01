@@ -15,7 +15,19 @@ vi.mock('@/server/auth', () => ({
   requireUserId: async () => 'local-user',
   getUserId: async () => 'local-user',
 }));
-vi.mock('next/navigation', () => ({ notFound: mocks.notFound }));
+vi.mock('next/navigation', () => ({
+  notFound: mocks.notFound,
+  redirect: vi.fn((url: string) => {
+    const err = new Error(`NEXT_REDIRECT:${url}`) as Error & { digest?: string };
+    (err as unknown as { digest: string }).digest = `NEXT_REDIRECT;${url}`;
+    throw err;
+  }),
+  permanentRedirect: vi.fn((url: string) => {
+    const err = new Error(`NEXT_REDIRECT:${url}`) as Error & { digest?: string };
+    (err as unknown as { digest: string }).digest = `NEXT_REDIRECT;${url};308`;
+    throw err;
+  }),
+}));
 vi.mock('@/components/markdown-message', () => ({
   MarkdownMessage: ({ content }: { content: string }) => content,
 }));
@@ -37,7 +49,7 @@ vi.mock('@/server/pm-reports', () => {
     PmReportServiceError,
   };
 });
-vi.mock('@/server/pm-report-format', async () => import('../../server/pm-report-format'));
+vi.mock('@/server/pm-report-format', async () => import('../../../server/pm-report-format'));
 
 import { PmReportServiceError } from '@/server/pm-reports';
 
@@ -69,36 +81,35 @@ beforeEach(() => {
 });
 
 describe('reports landing page', () => {
-  it('links to grouped weekly and competitive report views', async () => {
-    const markup = renderToStaticMarkup(await ReportsPage());
-
-    expect(markup).toContain('href="/reports/weekly"');
-    expect(markup).toContain('>Weekly Reports</h2>');
-    expect(markup).toContain('href="/reports/competitive"');
-    expect(markup).toContain('>Competitive Analyses</h2>');
+  it('redirects directly to weekly reviews — the overview choice cards are removed as bloat', async () => {
+    await expect(ReportsPage()).rejects.toThrow('NEXT_REDIRECT');
+    try {
+      await ReportsPage();
+    } catch (err) {
+      expect(String(err)).toContain('/reports/weekly');
+    }
+    // No data fetch happens on the redirect shell.
     expect(mocks.listReports).not.toHaveBeenCalled();
+  });
+
+  it('exposes only two report views (weekly + competitive) — overview removed', async () => {
+    const { ReportTabs } = await import('@/components/reports/report-tabs');
+    const markup = renderToStaticMarkup((ReportTabs as unknown as (props: { active: 'weekly' }) => React.ReactElement)({ active: 'weekly' }));
+    expect(markup).toContain('href="/reports/weekly"');
+    expect(markup).toContain('href="/reports/competitive"');
+    expect(markup).not.toContain('href="/reports"');
+    expect(markup).not.toContain('>Overview<');
+    expect(markup).toContain('>Weekly reviews<');
+    expect(markup).toContain('>Competitive<');
     expect(markup).toContain('aria-label="Report views"');
-    expect(markup).toContain('aria-current="page"');
   });
 
-  it('gives report choices visible focus styles and one mobile column', () => {
-    const css = readFileSync(new URL('../studio.css', import.meta.url), 'utf8');
-    const focusRule = css.match(/\.studio-report-choice:focus-visible\s*\{([^}]*)\}/)?.[1];
-    const mobileRules = css.match(/@media \(max-width: 760px\) \{([\s\S]*)$/)?.[1] ?? '';
-
-    expect(focusRule).toContain('outline: 2px solid var(--studio-accent)');
-    expect(focusRule).toContain('outline-offset: 2px');
-    expect(mobileRules).toMatch(
-      /\.studio-report-choice-grid[\s\S]*grid-template-columns:\s*1fr/,
-    );
-  });
-
-  it('uses the registry card anatomy for report choices', async () => {
-    const markup = renderToStaticMarkup(await ReportsPage());
-
-    expect(markup.match(/class="studio-agent-card studio-report-choice/g)).toHaveLength(2);
-    expect(markup).toContain('class="studio-agent-icon"');
-    expect(markup).toContain('class="studio-report-choice-body"');
+  it('keeps page header at flex-start after revert — registry header stays left-aligned', () => {
+    const css = readFileSync(new URL('../../studio.css', import.meta.url), 'utf8');
+    const headerRule = css.match(/\.studio-page-header\s*\{([^}]*)\}/)?.[1] ?? '';
+    expect(headerRule).toContain('align-items: flex-start');
+    // Registry header remains left-aligned (reverted); weekly header should not be centered
+    expect(css).not.toContain('.studio-registry-header.is-centered');
   });
 });
 
@@ -114,10 +125,10 @@ describe('weekly reports list page', () => {
   });
 
   it('gives report cards a visible hover lift', () => {
-    const css = readFileSync(new URL('../studio.css', import.meta.url), 'utf8');
+    const css = readFileSync(new URL('../../studio.css', import.meta.url), 'utf8');
     const hoverRule = css.match(/\.studio-report-card:hover\s*\{([^}]*)\}/)?.[1];
 
-    expect(hoverRule).toContain('transform: translateY(-2px)');
+    expect(hoverRule).toContain('transform: translateY(-3px)');
   });
 
   it.each([
