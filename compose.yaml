@@ -1,3 +1,9 @@
+# Infra base file: garage, searxng, reader, qdrant, and postgres definitions
+# only — this file never publishes a host port. It is always merged with an
+# environment overlay: scripts/dev.sh pairs it with compose.dev.yaml (loopback
+# publishes for host-run processes) and scripts/prod.sh pairs it with
+# compose.prod.yaml (application containers). Run the stack through those
+# scripts; a bare `docker compose up` starts infra with no host listeners.
 services:
   garage:
     image: dxflrs/garage:v2.3.0
@@ -7,14 +13,6 @@ services:
       GARAGE_DEFAULT_ACCESS_KEY: ${GARAGE_ACCESS_KEY_ID:?Set GARAGE_ACCESS_KEY_ID}
       GARAGE_DEFAULT_SECRET_KEY: ${GARAGE_SECRET_ACCESS_KEY:?Set GARAGE_SECRET_ACCESS_KEY}
       GARAGE_DEFAULT_BUCKET: ${GARAGE_BUCKET:?Set GARAGE_BUCKET}
-    ports:
-      # Loopback publish for the development launcher: scripts/dev.sh runs the
-      # agent and client as host processes, so they reach Garage through this
-      # binding (storage/.env.local pins GARAGE_ENDPOINT to 127.0.0.1:3900).
-      # The host port is overridable for machines where 3900 is already taken;
-      # the container port stays fixed because GARAGE_ENDPOINT inside Compose
-      # resolves to http://garage:3900.
-      - "127.0.0.1:${CHEKKU_GARAGE_HOST_PORT:-3900}:3900"
     volumes:
       - ./storage/.garage/garage.toml:/etc/garage.toml:ro
       - garage-metadata:/var/lib/garage/meta
@@ -33,11 +31,6 @@ services:
       SEARXNG_SECRET: ${SEARXNG_SECRET:?Set SEARXNG_SECRET}
     labels:
       chekku.searxng-config-hash: ${SEARXNG_CONFIG_HASH:?Set SEARXNG_CONFIG_HASH}
-    ports:
-      # Loopback publish for scripts/dev.sh (searxng/.env.local pins
-      # SEARXNG_BASE_URL to 127.0.0.1:8888). Host port overridable; containers
-      # always talk to http://searxng:8080.
-      - "127.0.0.1:${CHEKKU_SEARXNG_HOST_PORT:-8888}:8080"
     volumes:
       - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
       - searxng-cache:/var/cache/searxng
@@ -60,11 +53,6 @@ services:
     #   docker manifest inspect ghcr.io/jina-ai/reader:oss | grep digest | head -1
     image: ghcr.io/jina-ai/reader:oss@sha256:8cc9a5cf6dc9c240235fccc0026661de74b6e13c21b36e6a86b3281b9ef10f28
     restart: unless-stopped
-    ports:
-      # Loopback publish for scripts/dev.sh (agent/.env.development pins
-      # WEB_READER_BASE_URL to 127.0.0.1:8081). Host port overridable;
-      # containers always talk to http://reader:8081.
-      - "127.0.0.1:${CHEKKU_READER_HOST_PORT:-8081}:8081"
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8081/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"]
       interval: 5s
@@ -79,12 +67,6 @@ services:
     # bash's /dev/tcp (the pattern recommended upstream for this image).
     image: docker.io/qdrant/qdrant:v1.15.1
     restart: unless-stopped
-    ports:
-      # Loopback publish for scripts/dev.sh (agent/.env.development pins
-      # QDRANT_URL to 127.0.0.1:6333). Host port overridable; containers
-      # always talk to http://qdrant:6333. The gRPC port (6334) stays
-      # internal — Chekku uses the REST client only.
-      - "127.0.0.1:${CHEKKU_QDRANT_HOST_PORT:-6333}:6333"
     volumes:
       - qdrant-data:/qdrant/storage
     healthcheck:
@@ -101,12 +83,6 @@ services:
       POSTGRES_USER: chekku
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
       POSTGRES_DB: chekku_agent
-    ports:
-      # Loopback publish for scripts/dev.sh and, in every environment, for
-      # scripts/db-migrate.sh — the Better Auth CLI runs on the host and reaches
-      # Postgres through AUTH_DATABASE_URL in client/.env.local. Host port
-      # overridable; containers always talk to postgres:5432.
-      - "127.0.0.1:${CHEKKU_POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - ./scripts/postgres/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
       - postgres-data:/var/lib/postgresql/data
@@ -116,153 +92,6 @@ services:
       timeout: 2s
       retries: 30
       start_period: 5s
-
-  # Application services are opt-in via the `prod` profile so the development
-  # launcher (scripts/dev.sh) keeps starting garage, searxng, and postgres only
-  # while the agent and client run as host processes. Production brings the
-  # whole stack up with: docker compose --profile prod up -d --build.
-  # All interpolations use `${VAR:-}` defaults so `docker compose config --quiet`
-  # (run by scripts/dev.sh) still validates without production secrets present;
-  # scripts/prod.sh is the single place that fails closed on missing values.
-  agent:
-    profiles: [prod]
-    build:
-      context: .
-      dockerfile: agent/Dockerfile
-    restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
-      garage:
-        condition: service_healthy
-      searxng:
-        condition: service_healthy
-      reader:
-        condition: service_healthy
-      qdrant:
-        condition: service_healthy
-    environment:
-      NODE_ENV: production
-      HOST: 0.0.0.0
-      PORT: 4111
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-      MASTRA_TELEMETRY_DISABLED: ${MASTRA_TELEMETRY_DISABLED:-true}
-      WEB_URL: ${WEB_URL:-http://localhost:3000}
-      # Postgres lives on the Compose default network under service name `postgres`.
-      DATABASE_URL: postgresql://chekku:${POSTGRES_PASSWORD:-postgres}@postgres:5432/chekku_agent
-      # Single OpenAI-compatible model gateway (server-only credentials).
-      LLM_BASE_URL: ${LLM_BASE_URL:-}
-      LLM_API_KEY: ${LLM_API_KEY:-}
-      LLM_DEFAULT_MODEL: ${LLM_DEFAULT_MODEL:-}
-      LLM_DISPLAY_NAME: ${LLM_DISPLAY_NAME:-OpenAI-compatible endpoint}
-      LLM_MODELS: ${LLM_MODELS:-}
-      LLM_IMAGE_MODEL: ${LLM_IMAGE_MODEL:-}
-      LLM_IMAGE_ENDPOINT_PATH: ${LLM_IMAGE_ENDPOINT_PATH:-/images/generations}
-      # Garage object storage. The endpoint is fixed to the in-container
-      # service name (the dev-oriented 127.0.0.1:3900 from storage/.env.local
-      # must NOT reach the container). Region, bucket, and credentials come
-      # from storage/.env.local via the shell environment.
-      GARAGE_ENDPOINT: http://garage:3900
-      GARAGE_REGION: ${GARAGE_REGION:-}
-      GARAGE_BUCKET: ${GARAGE_BUCKET:-}
-      GARAGE_ACCESS_KEY_ID: ${GARAGE_ACCESS_KEY_ID:-}
-      GARAGE_SECRET_ACCESS_KEY: ${GARAGE_SECRET_ACCESS_KEY:-}
-      # SearXNG search; fixed to the in-container service (listens on 8080).
-      SEARXNG_BASE_URL: http://searxng:8080
-      SEARXNG_API_KEY: ${SEARXNG_API_KEY:-}
-      # Self-hosted Jina Reader (OSS image); fixed to the in-container service
-      # HTTP/1.1 endpoint. No API key — the local Reader is unauthenticated.
-      WEB_READER_BASE_URL: http://reader:8081
-      # Knowledge Base vector index (Qdrant). Fixed to the in-container
-      # service name. LLM_EMBEDDING_MODEL must be set for ingestion and
-      # retrieval to work; empty keeps every KB tool failing closed.
-      QDRANT_URL: http://qdrant:6333
-      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
-      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-chekku_knowledge}
-      LLM_EMBEDDING_MODEL: ${LLM_EMBEDDING_MODEL:-}
-      PUBLIC_HOLIDAY_API_BASE_URL: ${PUBLIC_HOLIDAY_API_BASE_URL:-https://api-hari-libur.vercel.app/api}
-      CHEKKU_DEFAULT_AGENT_ID: ${CHEKKU_DEFAULT_AGENT_ID:-main-agent}
-      CHEKKU_LOCAL_USER_ID: ${CHEKKU_LOCAL_USER_ID:-local-user}
-      BROWSER_HEADLESS: ${BROWSER_HEADLESS:-true}
-      # Optional integrations (empty is safe; the server boots without them).
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-      TELEGRAM_MODE: ${TELEGRAM_MODE:-webhook}
-      TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
-      TELEGRAM_WEBHOOK_SECRET_TOKEN: ${TELEGRAM_WEBHOOK_SECRET_TOKEN:-}
-      RESEND_API_KEY: ${RESEND_API_KEY:-}
-      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-Chekku <onboarding@resend.dev>}
-      SOCIAL_DRAFT_REVIEW_EMAIL: ${SOCIAL_DRAFT_REVIEW_EMAIL:-}
-      # Maestro (QA Android) stays host/device-only; never enabled in-container.
-      MAESTRO_ENABLED: "false"
-    # No published ports: the agent is reached only by the client over the
-    # Compose default network (AGENT_URL=http://agent:4111).
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4111/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
-      interval: 5s
-      timeout: 3s
-      retries: 30
-      start_period: 15s
-
-  client:
-    profiles: [prod]
-    build:
-      context: .
-      dockerfile: client/Dockerfile
-      # NEXT_PUBLIC_APP_URL is inlined by `next build`, so it must reach the
-      # builder stage as an arg (the runtime `environment:` below is not enough
-      # for client-bundle values). Operator sets it in client/.env.local.
-      args:
-        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
-    restart: unless-stopped
-    depends_on:
-      agent:
-        condition: service_healthy
-    environment:
-      NODE_ENV: production
-      PORT: 3000
-      HOSTNAME: 0.0.0.0
-      # Same-origin proxy targets the agent by its Compose service name.
-      AGENT_URL: http://agent:4111
-      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
-      CHEKKU_LOCAL_USER_ID: ${CHEKKU_LOCAL_USER_ID:-local-user}
-      AGENT_SERVICE_TOKEN: ${AGENT_SERVICE_TOKEN:-}
-      # The Next.js server reads Garage objects for /reports/* and /social-posts/*
-      # through @chekku/storage, so it needs the same Garage credentials as agent.
-      # Endpoint is fixed to the in-container service name (see agent service).
-      GARAGE_ENDPOINT: http://garage:3900
-      GARAGE_REGION: ${GARAGE_REGION:-}
-      GARAGE_BUCKET: ${GARAGE_BUCKET:-}
-      GARAGE_ACCESS_KEY_ID: ${GARAGE_ACCESS_KEY_ID:-}
-      GARAGE_SECRET_ACCESS_KEY: ${GARAGE_SECRET_ACCESS_KEY:-}
-      # Better Auth (email/password + email verification). The secret and the
-      # public base URL come from client/.env.local through scripts/prod.sh.
-      # BETTER_AUTH_URL must match the browser-facing origin or verification
-      # links and session cookies break.
-      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-}
-      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:3000}
-      # Fixed to the in-container service name, exactly like the agent's
-      # DATABASE_URL above. AUTH_DATABASE_URL in client/.env.local keeps its
-      # 127.0.0.1 form because scripts/db-migrate.sh runs the Better Auth CLI
-      # on the host; that value must NOT reach the container.
-      AUTH_DATABASE_URL: postgresql://chekku:${POSTGRES_PASSWORD:-postgres}@postgres:5432/chekku_auth
-      # Verification email transport. Without a key the link is only logged to
-      # this container's stdout, so nobody can finish signup.
-      RESEND_API_KEY: ${RESEND_API_KEY:-}
-      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-Chekku <onboarding@resend.dev>}
-      # Set to "true" only behind a reverse proxy that supplies a trustworthy
-      # x-forwarded-for; otherwise all anonymous auth traffic shares one bucket.
-      RATE_LIMIT_TRUST_PROXY: ${RATE_LIMIT_TRUST_PROXY:-}
-    ports:
-      # Loopback only; put a reverse proxy (Caddy/nginx) in front for TLS and
-      # public exposure. The host port is overridable for machines where 3000 is
-      # already taken; the container port stays 3000.
-      - "127.0.0.1:${CHEKKU_CLIENT_HOST_PORT:-3000}:3000"
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"]
-      interval: 5s
-      timeout: 3s
-      retries: 30
-      start_period: 8s
 
 networks:
   # Named explicitly instead of taking the generated `chekku_default`, so hosts

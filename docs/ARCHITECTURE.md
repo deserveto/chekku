@@ -72,12 +72,12 @@ PM competitive analysis
 
 ## Deployment topology
 
-Chekku has two deployment modes, kept apart by Compose profiles so neither mode touches the other's runtime:
+Chekku has two deployment modes, kept apart by Compose overlay files so neither mode touches the other's runtime:
 
-- **Development** — `scripts/dev.sh` starts only the stateful third-party services in containers (Garage, SearXNG, Reader, Postgres) and runs the agent and client as host processes (`npm run dev:agent`, `npm run dev:client`). The launcher never activates the `prod` profile, so the `agent` and `client` Compose services stay absent.
-- **Production** — `scripts/prod.sh` activates the `prod` profile and brings the whole stack up as containers: Garage, SearXNG, Reader, Postgres, `agent`, and `client`. The agent and client never run on the host.
+- **Development** — `scripts/dev.sh` starts only the stateful third-party services in containers (Garage, SearXNG, Reader, Qdrant, Postgres) and runs the agent and client as host processes (`npm run dev:agent`, `npm run dev:client`). Every launcher invocation merges `-f compose.yaml -f compose.dev.yaml`; the `agent` and `client` services live only in `compose.prod.yaml`, so they stay absent.
+- **Production** — `scripts/prod.sh` merges `-f compose.yaml -f compose.prod.yaml` and brings the whole stack up as containers: Garage, SearXNG, Reader, Qdrant, Postgres, `agent`, and `client`. The agent and client never run on the host.
 
-The application services in `compose.yaml` are gated behind `profiles: [prod]` and use `${VAR:-}` interpolation defaults, so the development launcher's `docker compose config --quiet` validation still passes without production secrets present. `scripts/prod.sh` is the only path that activates the profile and the only place that fails closed on missing required values.
+`compose.yaml` is the infra base and declares no published ports; `compose.dev.yaml` adds the loopback publishes the development launcher needs, and `compose.prod.yaml` adds the `agent` and `client` containers plus the postgres loopback publish for host-run migrations. The application services use `${VAR:-}` interpolation defaults, so `scripts/prod.sh`'s `docker compose config --quiet` validation and its `down`/`build` paths still work without production secrets present. `scripts/prod.sh` is the only path that merges the prod overlay and the only place that fails closed on missing required values.
 
 Production traffic flow:
 

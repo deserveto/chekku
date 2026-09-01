@@ -81,7 +81,7 @@ npm run setup
 
 This copies `.env.example` files into place, auto-generates local Garage and SearXNG secrets, generates `BETTER_AUTH_SECRET`, wires `AUTH_DATABASE_URL` into `client/.env.local`, and prompts for required values like `LLM_API_KEY`. Optional integrations (Telegram, Resend, Maestro, Web Reader) can be left empty and edited into `agent/.env` later; rerun `npm run setup` after editing so local Mastra receives the changes.
 
-Once Postgres is running (via `npm run dev:sh` or `docker compose up -d postgres`), apply the Better Auth schema once:
+Once Postgres is running (via `npm run dev:sh` or `docker compose -f compose.yaml -f compose.dev.yaml up -d postgres`), apply the Better Auth schema once:
 
 ```bash
 npm run db:migrate
@@ -178,7 +178,7 @@ Local file: `client/.env.local`
 | --- | --- |
 | `npm run setup` | Copy env examples, generate local Garage/SearXNG secrets + Better Auth env, prompt for required values. |
 | `npm run db:migrate` | Apply the Better Auth schema to `chekku_auth`. Requires Postgres running; safe to re-run. |
-| `npm run dev:sh` | Provision local Garage, SearXNG, and Qdrant, then start agent and client workspaces. |
+| `npm run dev:sh` | Provision local Garage, SearXNG, Reader, Qdrant, and Postgres, then start agent and client workspaces. |
 | `npm run dev` | Start agent and client workspaces without provisioning local services. |
 | `npm run dev:agent` | Start only the Mastra server. |
 | `npm run dev:client` | Start only the Next.js client. |
@@ -192,7 +192,7 @@ Local file: `client/.env.local`
 | `npm run start:agent` | Start only the built Mastra server. |
 | `npm run start:client` | Start only the built Next.js client. |
 | `npm run prod` | Build, then start both servers on the host. Does not provision local Garage or SearXNG. |
-| `npm run prod:sh` | Build the agent and client images and run the whole stack (Garage, SearXNG, Postgres, agent, client) in containers via the `prod` Compose profile. Recommended for production. |
+| `npm run prod:sh` | Build the agent and client images and run the whole stack (Garage, SearXNG, Reader, Qdrant, Postgres, agent, client) in containers by merging `compose.prod.yaml` over the infra base. Recommended for production. |
 | `npm run prod:build` | Build only the `agent` and `client` container images. |
 | `npm run prod:up` | Bring the containerized stack up without rebuilding. |
 | `npm run prod:down` | Stop and remove production containers (named volumes are preserved). |
@@ -201,7 +201,7 @@ The client uses system font stacks, so `next build` does not download fonts from
 
 ## Production deployment
 
-For production, run the full stack inside containers so the host only needs Docker and a reverse proxy. The agent and client services in `compose.yaml` are gated behind the `prod` profile, so development is unaffected.
+For production, run the full stack inside containers so the host only needs Docker and a reverse proxy. The application containers live in `compose.prod.yaml`, merged over the infra base by `scripts/prod.sh`; development (`npm run dev:sh`) merges `compose.dev.yaml` instead and is unaffected.
 
 ```bash
 npm ci
@@ -281,7 +281,7 @@ npm run dev
 Stop the server, then recreate the Postgres volume (name is `<compose-project>_postgres-data`, project defaults to the repository directory name):
 
 ```bash
-docker compose down
+docker compose -f compose.yaml -f compose.dev.yaml down
 docker volume rm chekku_postgres-data
 ```
 

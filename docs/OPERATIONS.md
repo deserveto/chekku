@@ -143,7 +143,7 @@ Chekku resolves identity from a Better Auth email/password session instead of a 
 
 After setup, apply the Better Auth schema once Postgres is running:
 
-    docker compose up -d postgres
+    docker compose -f compose.yaml -f compose.dev.yaml up -d postgres
     npm run db:migrate
 
 `npm run db:migrate` runs `@better-auth/cli migrate` against `AUTH_DATABASE_URL` and is safe to re-run.
@@ -269,7 +269,7 @@ Errors are fixed and bounded for missing/invalid configuration, unavailable serv
 To stop local Garage and SearXNG safely while preserving their named volumes:
 
 ```bash
-docker compose --env-file storage/.env.local --env-file searxng/.env.local down
+docker compose -f compose.yaml -f compose.dev.yaml --env-file storage/.env.local --env-file searxng/.env.local down
 ```
 
 Do not add `--volumes` or run `docker volume rm` during normal shutdown or application/database reset. SearXNG cache and all Garage objects remain available for the next startup.
@@ -388,7 +388,7 @@ DATABASE_URL=postgresql://chekku:postgres@localhost:5432/chekku_agent
 Before resetting data, stop the agent process. Reset local Postgres state by recreating its volume (this removes stored agents and conversation history):
 
 ```bash
-docker compose down
+docker compose -f compose.yaml -f compose.dev.yaml down
 docker volume rm chekku_postgres-data
 ```
 
@@ -399,7 +399,7 @@ The next `npm run dev:sh` recreates the container and re-runs the init script. T
 Local Garage runs image `dxflrs/garage:v2.3.0` with persistent Docker volumes and generic bucket `chekku-objects`. Compose publishes only the S3 API at `127.0.0.1:3900`; RPC, admin, and metrics ports stay inside the Docker network. Stop application processes before changing credentials. To stop local services without deleting their volumes:
 
 ```bash
-docker compose --env-file storage/.env.local --env-file searxng/.env.local down
+docker compose -f compose.yaml -f compose.dev.yaml --env-file storage/.env.local --env-file searxng/.env.local down
 ```
 
 Do not commit or paste contents from `storage/.env.local`, `storage/.garage/`, `searxng/.env.local`, or generated `agent/.env.development`. Removing Garage volumes destroys local agent objects and is intentionally not part of normal reset instructions; removing SearXNG cache is also unnecessary for application reset.
@@ -585,18 +585,18 @@ Run from repository root with Docker responsive and both loopback ports free:
 
 ```bash
 docker compose version
-docker compose --env-file storage/.env.local --env-file searxng/.env.local ps garage searxng
+docker compose -f compose.yaml -f compose.dev.yaml --env-file storage/.env.local --env-file searxng/.env.local ps garage searxng
 ```
 
-`npm run dev:sh` reports whether Garage port `3900` or SearXNG port `8888` is occupied. Stop the conflicting process or container; do not edit the pinned Compose ports without a reviewed configuration change. If Compose configuration is invalid, remove no volumes: inspect tracked `compose.yaml`, `searxng/settings.yml`, and generated file permissions, then rerun the launcher.
+`npm run dev:sh` reports whether Garage port `3900` or SearXNG port `8888` is occupied. Stop the conflicting process or container; do not edit the pinned Compose ports without a reviewed configuration change. If Compose configuration is invalid, remove no volumes: inspect tracked `compose.yaml`/`compose.dev.yaml`, `searxng/settings.yml`, and generated file permissions, then rerun the launcher.
 
 ### Local service readiness times out
 
 Default readiness timeout is 30 seconds. First inspect health and logs without printing environment values:
 
 ```bash
-docker compose --env-file storage/.env.local --env-file searxng/.env.local ps garage searxng
-docker compose --env-file storage/.env.local --env-file searxng/.env.local logs garage searxng
+docker compose -f compose.yaml -f compose.dev.yaml --env-file storage/.env.local --env-file searxng/.env.local ps garage searxng
+docker compose -f compose.yaml -f compose.dev.yaml --env-file storage/.env.local --env-file searxng/.env.local logs garage searxng
 ```
 
 For a slow Docker host, retry with `CHEKKU_READY_TIMEOUT_SECONDS` set from 1 to 300. `CHEKKU_READY_INTERVAL_SECONDS` must be a positive integer and is capped at 5. These launcher settings do not change `search_web`'s fixed 12-second request deadline.
@@ -611,16 +611,16 @@ For local operation, call `curl --fail http://127.0.0.1:8888/healthz` and inspec
 
 ### Web Reader is not configured
 
-For local development, ensure the `reader` Compose service is up (`docker compose ps reader`) and `WEB_READER_BASE_URL` resolves to it. `scripts/setup-env.sh` writes the canonical dev URL (`http://127.0.0.1:8081`) into `agent/.env.development`; in compose prod the service name resolves it (`http://reader:8081`). Restart the agent after changing env. Server should remain healthy while tool fails closed.
+For local development, ensure the `reader` Compose service is up (`docker compose -f compose.yaml -f compose.dev.yaml ps reader`) and `WEB_READER_BASE_URL` resolves to it. `scripts/setup-env.sh` writes the canonical dev URL (`http://127.0.0.1:8081`) into `agent/.env.development`; in compose prod the service name resolves it (`http://reader:8081`). Restart the agent after changing env. Server should remain healthy while tool fails closed.
 
 ### Web Reader is unavailable or times out
 
-Reader is a self-hosted container. Confirm `docker compose ps reader` shows it healthy and `WEB_READER_BASE_URL` points at the right host:port. Inspect container logs (`docker compose logs reader`) for outbound fetcher errors. Request deadline stays fixed at 30 seconds. Do not add configurable timeout, retries, anonymous fallback, or raw provider diagnostics.
+Reader is a self-hosted container. Confirm `docker compose -f compose.yaml -f compose.dev.yaml ps reader` shows it healthy and `WEB_READER_BASE_URL` points at the right host:port. Inspect container logs (`docker compose -f compose.yaml -f compose.dev.yaml logs reader`) for outbound fetcher errors. Request deadline stays fixed at 30 seconds. Do not add configurable timeout, retries, anonymous fallback, or raw provider diagnostics.
 
 
 ### Knowledge indexing is not configured
 
-`/knowledge` shows a document as `Failed` with `Knowledge indexing is not configured…`. Confirm the `qdrant` Compose service is up (`docker compose ps qdrant`) and `QDRANT_URL` resolves to it, and set `LLM_EMBEDDING_MODEL` in `agent/.env` to an embeddings-capable model on the configured gateway. Restart the agent after changing env; then use Retry indexing on the document. The chat composer keeps working — only ingestion and `search_knowledge_base` fail closed.
+`/knowledge` shows a document as `Failed` with `Knowledge indexing is not configured…`. Confirm the `qdrant` Compose service is up (`docker compose -f compose.yaml -f compose.dev.yaml ps qdrant`) and `QDRANT_URL` resolves to it, and set `LLM_EMBEDDING_MODEL` in `agent/.env` to an embeddings-capable model on the configured gateway. Restart the agent after changing env; then use Retry indexing on the document. The chat composer keeps working — only ingestion and `search_knowledge_base` fail closed.
 
 ### Knowledge document is stuck in Processing
 
@@ -657,8 +657,8 @@ Confirm all five `GARAGE_*` application values are available to the agent proces
 Check Docker and local health without exposing environment values:
 
 ```bash
-docker compose --env-file storage/.env.local --env-file searxng/.env.local ps garage
-docker inspect --format '{{.State.Health.Status}}' "$(docker compose --env-file storage/.env.local --env-file searxng/.env.local ps -q garage)"
+docker compose -f compose.yaml -f compose.dev.yaml --env-file storage/.env.local --env-file searxng/.env.local ps garage
+docker inspect --format '{{.State.Health.Status}}' "$(docker compose -f compose.yaml -f compose.dev.yaml --env-file storage/.env.local --env-file searxng/.env.local ps -q garage)"
 ```
 
 ### Model access denied
@@ -800,7 +800,7 @@ See Production notes below for the durable `DATABASE_URL`, deployed origin, and 
 
 ## Containerized production
 
-`npm run prod:sh` (or `bash scripts/prod.sh`) is the recommended way to run the full Chekku stack in containers. It activates the `prod` Compose profile so Garage, SearXNG, Postgres, the agent, and the client all run as containers; nothing application-level runs on the host.
+`npm run prod:sh` (or `bash scripts/prod.sh`) is the recommended way to run the full Chekku stack in containers. It merges `-f compose.yaml -f compose.prod.yaml` so Garage, SearXNG, Reader, Qdrant, Postgres, the agent, and the client all run as containers; nothing application-level runs on the host.
 
 ```bash
 npm run setup        # generates storage/.env.local, searxng/.env.local; prompts for LLM_* in agent/.env
@@ -809,7 +809,7 @@ npm run prod:sh      # build images, bring the stack up, wait for every service 
 
 Subcommands:
 
-- `npm run prod:sh` — build (if needed), bring everything up, wait for all five services to become healthy.
+- `npm run prod:sh` — build (if needed), bring everything up, wait for all seven services to become healthy.
 - `npm run prod:build` — build only the `agent` and `client` images.
 - `npm run prod:up` — bring the stack up without rebuilding.
 - `npm run prod:down` — stop and remove containers (named volumes are preserved).
@@ -822,14 +822,14 @@ In-container wiring is fixed by Compose and differs from local development:
 - `DATABASE_URL` is constructed as `postgresql://chekku:${POSTGRES_PASSWORD}@postgres:5432/chekku_agent` (service name `postgres`, not `127.0.0.1`).
 - SearXNG is reached at `http://searxng:8080` (the container's internal port), not the loopback `8888` used in development.
 - Reader is reached at `http://reader:8081` (the container's HTTP/1.1 port), not the loopback `8081` host publish used in development.
-- Every published port is loopback-only. The client publishes `127.0.0.1:3000`; put a reverse proxy (Caddy/nginx — a ready nginx template lives at [`ops/nginx/chekku.conf`](../ops/nginx/chekku.conf)) in front for TLS and public exposure. Garage, SearXNG, Reader, and Postgres also keep their development publishes, because `scripts/dev.sh` runs the agent and client as host processes against them and `scripts/db-migrate.sh` runs the Better Auth CLI on the host against `127.0.0.1:5432`.
-- Each of those host ports is overridable for shared hosts where the default is already taken by another stack: `CHEKKU_CLIENT_HOST_PORT` (default 3000, set in `client/.env.local`), and `CHEKKU_GARAGE_HOST_PORT` / `CHEKKU_SEARXNG_HOST_PORT` / `CHEKKU_READER_HOST_PORT` / `CHEKKU_POSTGRES_HOST_PORT` (defaults 3900 / 8888 / 8081 / 5432, set in `agent/.env`). Leaving them empty keeps the defaults. They move the host side of the publish only — containers always reach each other at `garage:3900`, `searxng:8080`, `reader:8081`, `postgres:5432`, and `agent:4111`. `scripts/prod.sh` merges those files into its shell, so the overrides apply to the containerized stack; `scripts/dev.sh` reads `storage/.env.local` instead and is unaffected. Point the reverse proxy at whatever `CHEKKU_CLIENT_HOST_PORT` resolves to.
+- Every published port is loopback-only, and the containerized stack has exactly two. The client publishes `127.0.0.1:3000`; put a reverse proxy (Caddy/nginx — a ready nginx template lives at [`ops/nginx/chekku.conf`](../ops/nginx/chekku.conf)) in front for TLS and public exposure. Postgres publishes `127.0.0.1:5432` because `scripts/db-migrate.sh` runs the Better Auth CLI on the host. The dev-only publishes (Garage `3900`, SearXNG `8888`, Reader `8081`, Qdrant `6333`) live only in `compose.dev.yaml` for the host-run development launcher and never apply to the containerized stack.
+- Each production host port is overridable for shared hosts where the default is already taken by another stack: `CHEKKU_CLIENT_HOST_PORT` (default 3000, set in `client/.env.local`) and `CHEKKU_POSTGRES_HOST_PORT` (default 5432, set in any dotenv file `scripts/prod.sh` parses). The dev-only `CHEKKU_GARAGE_HOST_PORT` / `CHEKKU_SEARXNG_HOST_PORT` / `CHEKKU_READER_HOST_PORT` / `CHEKKU_QDRANT_HOST_PORT` overrides apply only to `scripts/dev.sh`. Leaving them empty keeps the defaults. Overrides move the host side of the publish only — containers always reach each other at `garage:3900`, `searxng:8080`, `reader:8081`, `postgres:5432`, and `agent:4111`. Point the reverse proxy at whatever `CHEKKU_CLIENT_HOST_PORT` resolves to.
 - Better Auth values reach the client container from `client/.env.local`: `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, and `RATE_LIMIT_TRUST_PROXY`. `BETTER_AUTH_URL` must equal the public browser origin or session cookies and verification links break. Set `RATE_LIMIT_TRUST_PROXY=true` only when a reverse proxy supplies a trustworthy `x-forwarded-for`. `AUTH_DATABASE_URL` is **not** forwarded: Compose pins it to `postgresql://chekku:${POSTGRES_PASSWORD}@postgres:5432/chekku_auth`, leaving the `127.0.0.1` value in `client/.env.local` free for the host-side `npm run db:migrate`.
 - The Compose project network is named `chekku-network` rather than the generated `chekku_default`, so it is identifiable on a host running several stacks.
 - The QA Web Agent works in production because the agent image installs system Chromium and points the agent browser at it with `BROWSER_EXECUTABLE_PATH=/usr/bin/chromium`. Leave that variable empty outside the container: host development uses Playwright's own downloaded browser, and an empty value correctly falls back to it. The QA Android Agent (Maestro) stays host/device-only: `MAESTRO_ENABLED` is forced to `false` in the agent container.
 - `NEXT_PUBLIC_APP_URL` is a **build-time** value for the client image. Next.js inlines `NEXT_PUBLIC_*` into the browser bundle during `next build`, so `scripts/prod.sh` forwards it from `client/.env.local` to the builder stage as a `build.args` entry. Before building for a real domain, set `NEXT_PUBLIC_APP_URL=https://studio.example.com` in `client/.env.local` and rebuild (`npm run prod:sh`); overriding it at runtime will not reach the already-built browser bundle. This mirrors the host-`prod` gotcha documented above.
 
-Readiness timeout defaults to 60 seconds and is configurable via `CHEKKU_READY_TIMEOUT_SECONDS` (1–600). The launcher reports each service as it becomes healthy (`Garage ready`, `SearXNG ready`, `Postgres ready`, `Agent ready`, `Client ready`) and aborts with a bounded message if any service fails to become healthy.
+Readiness timeout defaults to 60 seconds and is configurable via `CHEKKU_READY_TIMEOUT_SECONDS` (1–600). The launcher reports each service as it becomes healthy (`Garage ready`, `SearXNG ready`, `Reader ready`, `Qdrant ready`, `Postgres ready`, `Agent ready`, `Client ready`) and aborts with a bounded message if any service fails to become healthy.
 
 ### Containerized production troubleshooting
 
@@ -839,14 +839,14 @@ Direct `docker compose` invocations (for `ps`, `logs`, `exec`, etc.) need `SEARX
 set -a; source storage/.env.local; source searxng/.env.local; set +a
 ```
 
-`npm run prod:sh` / `prod:up` / `prod:down` do not need this step — `scripts/prod.sh` parses every env file internally.
+`npm run prod:sh` / `prod:up` / `prod:down` do not need this step — `scripts/prod.sh` parses every env file internally. Manual commands against the production stack merge `-f compose.yaml -f compose.prod.yaml`; manual commands during development merge `-f compose.yaml -f compose.dev.yaml`.
 
-- **`Production Compose configuration is invalid`** — inspect `compose.yaml` and the local env files; rerun `npm run setup` if a file is missing.
+- **`Production Compose configuration is invalid`** — inspect `compose.yaml`, `compose.prod.yaml`, and the local env files; rerun `npm run setup` if a file is missing.
 - **`... is empty in ...`** — fill the named value in the named file (e.g. `LLM_API_KEY` in `agent/.env`) and rerun `npm run prod:sh`.
-- **`Agent did not become healthy within ... seconds`** — inspect logs without printing secrets: `docker compose --profile prod logs agent` (after sourcing the env files as above). Confirm `HOST=0.0.0.0`, a reachable `DATABASE_URL`, and valid `LLM_*` values.
-- **Client cannot reach the agent** — confirm the client container's `AGENT_URL=http://agent:4111` and that the agent container is healthy (`docker compose --profile prod ps`).
+- **`Agent did not become healthy within ... seconds`** — inspect logs without printing secrets: `docker compose -f compose.yaml -f compose.prod.yaml logs agent` (after sourcing the env files as above). Confirm `HOST=0.0.0.0`, a reachable `DATABASE_URL`, and valid `LLM_*` values.
+- **Client cannot reach the agent** — confirm the client container's `AGENT_URL=http://agent:4111` and that the agent container is healthy (`docker compose -f compose.yaml -f compose.prod.yaml ps`).
 - **`next build` fails on `/_global-error` prerendering inside the container** — the builder stage must NOT set `NODE_ENV=development`; `next build` needs the default production `NODE_ENV`. `npm ci` installs devDependencies regardless of `NODE_ENV`, so the builder leaves it unset.
-- **Reset production data** — same Postgres volume reset as development, but scoped to the prod profile:
+- **Reset production data** — same Postgres volume reset as development, but scoped to the production stack (`npm run prod:down` passes the `-f compose.yaml -f compose.prod.yaml` pair):
   ```bash
   npm run prod:down
   docker volume rm chekku_postgres-data

@@ -26,6 +26,12 @@ const bash = process.platform === 'win32'
   ? 'C:\\Program Files\\Git\\bin\\bash.exe'
   : execSync('command -v bash', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 const fixtures: string[] = [];
+// The merged-config tests execute real `docker compose config`; they skip on
+// hosts without Docker Compose or without the generated env files.
+const dockerMergeReady =
+  spawnSync('docker', ['compose', 'version'], { stdio: 'ignore' }).status === 0 &&
+  existsSync(resolve(sourceRoot, 'storage/.env.local')) &&
+  existsSync(resolve(sourceRoot, 'searxng/.env.local'));
 
 const validAgentEnv = [
   'NODE_ENV=development',
@@ -95,6 +101,7 @@ function fixture(options: {
     'storage/garage.toml.template',
     'searxng/settings.yml',
     'compose.yaml',
+    'compose.dev.yaml',
     '.gitignore',
     'agent/.env.example',
     'client/.env.example',
@@ -379,12 +386,26 @@ describe('development launcher', () => {
     for (const serviceIndex of [garagePsIndex, searxngPsIndex, postgresPsIndex, garageUpIndex, searxngUpIndex, postgresUpIndex]) {
       expect(configIndex).toBeLessThan(serviceIndex);
     }
-    expect(successCalls).toContain('compose --env-file storage/.env.local ps -q garage');
-    expect(successCalls).toContain('compose --env-file storage/.env.local ps -q searxng');
-    expect(successCalls).toContain('compose --env-file storage/.env.local ps -q postgres');
+    expect(successCalls).toContain(
+      'compose --env-file storage/.env.local -f compose.yaml -f compose.dev.yaml ps -q garage',
+    );
+    expect(successCalls).toContain(
+      'compose --env-file storage/.env.local -f compose.yaml -f compose.dev.yaml ps -q searxng',
+    );
+    expect(successCalls).toContain(
+      'compose --env-file storage/.env.local -f compose.yaml -f compose.dev.yaml ps -q postgres',
+    );
     expect(successCalls.join('\n')).toMatch(/compose .* up -d .*garage/);
     expect(successCalls.join('\n')).toMatch(/compose .* up -d .*searxng/);
     expect(successCalls.join('\n')).toMatch(/compose .* up -d .*postgres/);
+    // Not just the pinned samples: every compose invocation must merge the dev
+    // overlay, so a new call site cannot bypass it silently.
+    for (const line of successCalls.filter(
+      (call) => call.includes('compose') && !call.includes(' version'),
+    )) {
+      expect(line).toContain('-f compose.yaml');
+      expect(line).toContain('-f compose.dev.yaml');
+    }
     expect(success.stdout).toContain('Garage ready');
     expect(success.stdout).toContain('SearXNG ready');
     expect(success.stdout).toContain('Postgres ready');
@@ -912,11 +933,12 @@ describe('committed local runtime', () => {
 
     expect(compose).toContain('dxflrs/garage:v2.3.0');
     expect(scripts).toMatch(/GARAGE_BUCKET=.*chekku-objects/);
-    // Loopback-bound, and defaulted to 3900 so the development launcher and the
-    // 127.0.0.1:3900 GARAGE_ENDPOINT in storage/.env.local keep working without
-    // any extra configuration. The host port is overridable only for hosts where
-    // 3900 already belongs to another stack.
-    expect(compose).toContain('"127.0.0.1:${CHEKKU_GARAGE_HOST_PORT:-3900}:3900"');
+    // The launcher merges the port-less infra base with the dev overlay on
+    // every invocation; the overlay is what publishes the loopback ports.
+    expect(launcher).toContain('-f compose.yaml -f compose.dev.yaml');
+    // Loopback-bound publish lives in compose.dev.yaml (covered by the dev
+    // overlay test below); the base itself declares no ports at all.
+    expect(compose).not.toMatch(/^[ \t]+ports:/m);
     for (const port of [3901, 3902, 3903]) expect(compose).not.toMatch(new RegExp(`^[^#]*${port}:${port}`, 'm'));
     expect(launcher).toContain('CHEKKU_GARAGE_PORTS:-3900}');
     expect(compose).toMatch(/\.\/storage\/\.garage\/garage\.toml:\/etc\/garage\.toml:ro/);
@@ -924,13 +946,58 @@ describe('committed local runtime', () => {
     expect(compose).toMatch(/garage-data:\/var\/lib\/garage\/data/);
     expect(compose).toMatch(/healthcheck:[\s\S]*retries:\s*[1-9]/);
     expect(compose).toContain('docker.io/searxng/searxng:2026.7.18-277d8469c');
-    expect(compose).toContain('"127.0.0.1:${CHEKKU_SEARXNG_HOST_PORT:-8888}:8080"');
     expect(compose).toMatch(/\.\/searxng\/settings\.yml:\/etc\/searxng\/settings\.yml:ro/);
     expect(compose).toMatch(/searxng-cache:\/var\/cache\/searxng/);
     expect(settings).toMatch(/formats:\s*\r?\n\s*- html\s*\r?\n\s*- json/);
     expect(settings).toMatch(/limiter:\s*false/);
     expect(settings).toMatch(/public_instance:\s*false/);
     expect(settings).toMatch(/image_proxy:\s*false/);
+  });
+
+  it('dev overlay publishes exactly the five loopback infra ports', () => {
+    const devOverlay = readFileSync(resolve(sourceRoot, 'compose.dev.yaml'), 'utf8');
+    expect(devOverlay).toContain('"127.0.0.1:${CHEKKU_GARAGE_HOST_PORT:-3900}:3900"');
+    expect(devOverlay).toContain('"127.0.0.1:${CHEKKU_SEARXNG_HOST_PORT:-8888}:8080"');
+    expect(devOverlay).toContain('"127.0.0.1:${CHEKKU_READER_HOST_PORT:-8081}:8081"');
+    expect(devOverlay).toContain('"127.0.0.1:${CHEKKU_QDRANT_HOST_PORT:-6333}:6333"');
+    expect(devOverlay).toContain('"127.0.0.1:${CHEKKU_POSTGRES_HOST_PORT:-5432}:5432"');
+    expect(devOverlay).toMatch(/^[ \t]+ports:/m);
+    expect(devOverlay).not.toContain('profiles:');
+    const published = devOverlay.match(/- "127\.0\.0\.1:[^"]+"/g) ?? [];
+    expect(published).toHaveLength(5);
+    for (const internal of [3901, 3902, 3903]) {
+      expect(devOverlay).not.toMatch(new RegExp(`^[^#]*${internal}:${internal}`, 'm'));
+    }
+  });
+
+  it.runIf(dockerMergeReady)('merged dev config publishes exactly the five loopback ports', () => {
+    const merged = spawnSync(
+      'docker',
+      [
+        'compose',
+        '--env-file', 'storage/.env.local',
+        '--env-file', 'searxng/.env.local',
+        '-f', 'compose.yaml',
+        '-f', 'compose.dev.yaml',
+        'config',
+        '--format', 'json',
+      ],
+      { cwd: sourceRoot, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
+    );
+    expect(merged.status, merged.stderr).toBe(0);
+    const config = JSON.parse(merged.stdout) as {
+      services: Record<string, { ports?: Array<{ host_ip?: string; published?: string | number }> }>;
+    };
+    const published = Object.values(config.services)
+      .flatMap((service) => service.ports ?? [])
+      .map((port) => `${port.host_ip ?? ''}:${port.published}`);
+    expect(published.sort()).toEqual([
+      '127.0.0.1:3900',
+      '127.0.0.1:5432',
+      '127.0.0.1:6333',
+      '127.0.0.1:8081',
+      '127.0.0.1:8888',
+    ]);
   });
 
   it('ignores generated credentials, configuration, and data paths', () => {

@@ -23,6 +23,13 @@ const bash =
         stdio: ["ignore", "pipe", "ignore"],
       }).trim();
 const fixtures: string[] = [];
+// The merged-config test executes real `docker compose config`; it skips on
+// hosts without Docker Compose or without the generated env files.
+const dockerMergeReady =
+  spawnSync("docker", ["compose", "version"], { stdio: "ignore" }).status ===
+    0 &&
+  existsSync(resolve(sourceRoot, "storage/.env.local")) &&
+  existsSync(resolve(sourceRoot, "searxng/.env.local"));
 
 const POSTGRES_PASSWORD = "prod-postgres-password";
 const GARAGE_ACCESS_KEY_ID = "GKPRODACCESSKEYID123";
@@ -123,6 +130,7 @@ function fixture(
     "storage/garage.toml.template",
     "searxng/settings.yml",
     "compose.yaml",
+    "compose.prod.yaml",
     ".gitignore",
     "agent/.env.example",
     "client/.env.example",
@@ -279,21 +287,23 @@ describe("production launcher flow", () => {
     expect(dockerLog).toContain("config --quiet");
   });
 
-  it("always activates the prod profile and the storage env-file", () => {
+  it("always merges the prod overlay and the storage env-file", () => {
     const root = fixture();
     const result = runProd(root);
     const dockerLog = readFileSync(resolve(root, "mock-log/docker"), "utf8");
 
     expect(result.status, result.stderr).toBe(0);
-    // Every compose invocation except the bare availability check carries both
-    // the env-file and the prod profile.
+    // Every compose invocation except the bare availability check carries the
+    // env-file and both -f files, and nothing activates a profile anymore.
     for (const line of dockerLog
       .split("\n")
       .filter(
         (entry) => entry.includes("compose") && !entry.includes(" version"),
       )) {
       expect(line).toContain("--env-file storage/.env.local");
-      expect(line).toContain("--profile prod");
+      expect(line).toContain("-f compose.yaml");
+      expect(line).toContain("-f compose.prod.yaml");
+      expect(line).not.toContain("--profile");
     }
   });
 
@@ -423,4 +433,59 @@ describe("production launcher secret hygiene", () => {
     expect(result.stderr).not.toContain("command not found");
     expect(result.stderr).not.toContain("No such file or directory");
   });
+});
+
+describe("committed production runtime", () => {
+  it("prod overlay publishes only the client and postgres loopback ports", () => {
+    const prod = readFileSync(resolve(sourceRoot, "compose.prod.yaml"), "utf8");
+    expect(prod).toContain('"127.0.0.1:${CHEKKU_CLIENT_HOST_PORT:-3000}:3000"');
+    expect(prod).toContain('"127.0.0.1:${CHEKKU_POSTGRES_HOST_PORT:-5432}:5432"');
+    expect(prod).toMatch(/^[ \t]+ports:/m);
+    expect(prod).not.toContain("profiles:");
+    const published = prod.match(/- "127\.0\.0\.1:[^"]+"/g) ?? [];
+    expect(published).toHaveLength(2);
+    // Belt and braces for the count above: any binding whose host side is
+    // numeric but not 127.0.0.1 (e.g. `- "3900:3900"`) fails loudly whatever
+    // the quoting; long syntax is covered by the merged-config test below.
+    expect(prod).not.toMatch(/^[ \t]*-[ \t]*["']?(?!\$|127\.0\.0\.1)[0-9]/m);
+    for (const internal of [":3900:", ":8888:", ":8081:", ":6333:"]) {
+      expect(prod).not.toContain(internal);
+    }
+    for (const leaked of [3901, 3902, 3903]) {
+      expect(prod).not.toMatch(new RegExp(`^[^#]*${leaked}:${leaked}`, "m"));
+    }
+  });
+
+  it.runIf(dockerMergeReady)(
+    "merged production config publishes exactly two loopback ports",
+    () => {
+      const merged = spawnSync(
+        "docker",
+        [
+          "compose",
+          "--env-file", "storage/.env.local",
+          "--env-file", "searxng/.env.local",
+          "-f", "compose.yaml",
+          "-f", "compose.prod.yaml",
+          "config",
+          "--format", "json",
+        ],
+        { cwd: sourceRoot, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+      );
+      expect(merged.status, merged.stderr).toBe(0);
+      const config = JSON.parse(merged.stdout) as {
+        services: Record<
+          string,
+          { ports?: Array<{ host_ip?: string; published?: string | number }> }
+        >;
+      };
+      const published = Object.values(config.services)
+        .flatMap((service) => service.ports ?? [])
+        .map((port) => `${port.host_ip ?? ""}:${port.published}`);
+      expect(published.sort()).toEqual([
+        "127.0.0.1:3000",
+        "127.0.0.1:5432",
+      ]);
+    },
+  );
 });

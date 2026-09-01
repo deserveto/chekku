@@ -28,6 +28,11 @@ if ! docker compose version >/dev/null 2>&1; then
   exit 1
 fi
 
+# Every Compose invocation merges the port-less infra base with the dev
+# overlay: the overlay is what publishes the loopback ports the host-run
+# agent, client, and migration CLI reach services through.
+DEV_COMPOSE=(docker compose --env-file storage/.env.local -f compose.yaml -f compose.dev.yaml)
+
 STORAGE_ENV_FILE="$ROOT/storage/.env.local"
 SEARXNG_ENV_FILE="$ROOT/searxng/.env.local"
 GARAGE_CONFIG_FILE="$ROOT/storage/.garage/garage.toml"
@@ -57,8 +62,8 @@ if [[ "$TOML_HASH" != "$APPLIED_HASH" ]]; then
   export GARAGE_CONFIG_CHANGED=1
 fi
 
-if ! docker compose --env-file storage/.env.local config --quiet >/dev/null 2>&1; then
-  echo "Local services Compose configuration is invalid. Check compose.yaml and generated service configuration." >&2
+if ! "${DEV_COMPOSE[@]}" config --quiet >/dev/null 2>&1; then
+  echo "Local services Compose configuration is invalid. Check compose.yaml, compose.dev.yaml, and generated service configuration." >&2
   exit 1
 fi
 
@@ -183,7 +188,7 @@ ensure_service_ready() {
   esac
 
   set +e
-  service_id="$(run_with_timeout "$ready_timeout_seconds" docker compose --env-file storage/.env.local ps -q "$service")"
+  service_id="$(run_with_timeout "$ready_timeout_seconds" "${DEV_COMPOSE[@]}" ps -q "$service")"
   health_status=$?
   set -e
   if [[ "$health_status" == 124 ]]; then docker_health_timeout "$display_name"; fi
@@ -205,7 +210,7 @@ ensure_service_ready() {
     start_args=(up -d "$service")
   fi
 
-  if ! docker compose --env-file storage/.env.local "${start_args[@]}"; then
+  if ! "${DEV_COMPOSE[@]}" "${start_args[@]}"; then
     conflicts="$(service_port_conflicts "$test_ports")"
     if [[ -n "$conflicts" ]]; then
       echo "$display_name Compose failed because required port ${conflicts// /, } is occupied (required: $required_port)." >&2
@@ -224,7 +229,7 @@ ensure_service_ready() {
       if [[ "$first_ready_poll" == true ]]; then remaining_seconds=1; else break; fi
     fi
     set +e
-    service_id="$(run_with_timeout "$remaining_seconds" docker compose --env-file storage/.env.local ps -q "$service")"
+    service_id="$(run_with_timeout "$remaining_seconds" "${DEV_COMPOSE[@]}" ps -q "$service")"
     health_status=$?
     set -e
     if [[ "$health_status" == 124 ]]; then docker_health_timeout "$display_name"; fi
