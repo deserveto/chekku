@@ -26,6 +26,12 @@ const bash = process.platform === 'win32'
   ? 'C:\\Program Files\\Git\\bin\\bash.exe'
   : execSync('command -v bash', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 const fixtures: string[] = [];
+// The merged-config tests execute real `docker compose config`; they skip on
+// hosts without Docker Compose or without the generated env files.
+const dockerMergeReady =
+  spawnSync('docker', ['compose', 'version'], { stdio: 'ignore' }).status === 0 &&
+  existsSync(resolve(sourceRoot, 'storage/.env.local')) &&
+  existsSync(resolve(sourceRoot, 'searxng/.env.local'));
 
 const validAgentEnv = [
   'NODE_ENV=development',
@@ -392,6 +398,14 @@ describe('development launcher', () => {
     expect(successCalls.join('\n')).toMatch(/compose .* up -d .*garage/);
     expect(successCalls.join('\n')).toMatch(/compose .* up -d .*searxng/);
     expect(successCalls.join('\n')).toMatch(/compose .* up -d .*postgres/);
+    // Not just the pinned samples: every compose invocation must merge the dev
+    // overlay, so a new call site cannot bypass it silently.
+    for (const line of successCalls.filter(
+      (call) => call.includes('compose') && !call.includes(' version'),
+    )) {
+      expect(line).toContain('-f compose.yaml');
+      expect(line).toContain('-f compose.dev.yaml');
+    }
     expect(success.stdout).toContain('Garage ready');
     expect(success.stdout).toContain('SearXNG ready');
     expect(success.stdout).toContain('Postgres ready');
@@ -954,6 +968,36 @@ describe('committed local runtime', () => {
     for (const internal of [3901, 3902, 3903]) {
       expect(devOverlay).not.toMatch(new RegExp(`^[^#]*${internal}:${internal}`, 'm'));
     }
+  });
+
+  it.runIf(dockerMergeReady)('merged dev config publishes exactly the five loopback ports', () => {
+    const merged = spawnSync(
+      'docker',
+      [
+        'compose',
+        '--env-file', 'storage/.env.local',
+        '--env-file', 'searxng/.env.local',
+        '-f', 'compose.yaml',
+        '-f', 'compose.dev.yaml',
+        'config',
+        '--format', 'json',
+      ],
+      { cwd: sourceRoot, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 },
+    );
+    expect(merged.status, merged.stderr).toBe(0);
+    const config = JSON.parse(merged.stdout) as {
+      services: Record<string, { ports?: Array<{ host_ip?: string; published?: string | number }> }>;
+    };
+    const published = Object.values(config.services)
+      .flatMap((service) => service.ports ?? [])
+      .map((port) => `${port.host_ip ?? ''}:${port.published}`);
+    expect(published.sort()).toEqual([
+      '127.0.0.1:3900',
+      '127.0.0.1:5432',
+      '127.0.0.1:6333',
+      '127.0.0.1:8081',
+      '127.0.0.1:8888',
+    ]);
   });
 
   it('ignores generated credentials, configuration, and data paths', () => {

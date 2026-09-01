@@ -58,7 +58,7 @@ Toolchain facts:
 - Run `npm ci` from the root after every pull. Stale workspace symlinks make Mastra fail with `Invalid Version: ^1.14.0`-style errors.
 - `npm run check` order is typecheck (`@chekku/storage` then `agent` then `client`) → lint → test. `npm run lint` covers the `client` workspace only.
 - Root `package.json` `overrides` pin `@mastra/core`, `@mastra/pg`, and `zod` for all workspaces.
-- `npm run dev:sh` provisions the local Garage, SearXNG, Reader, and Postgres containers before starting both workspaces; plain `npm run dev` starts only the workspaces and assumes services are up.
+- `npm run dev:sh` provisions the local Garage, SearXNG, Reader, Qdrant, and Postgres containers before starting both workspaces; plain `npm run dev` starts only the workspaces and assumes services are up.
 - `npm run db:migrate` applies the Better Auth schema to `chekku_auth`; it needs Postgres running and is safe to re-run.
 - `agent` scripts map to the Mastra CLI (`mastra dev` / `mastra build` / `mastra start`); `mastra build` installs generated-bundle dependencies and needs npm registry access.
 

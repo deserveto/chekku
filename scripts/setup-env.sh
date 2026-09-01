@@ -652,7 +652,7 @@ NODE
   echo "Rerun npm run setup after editing agent/.env."
   echo ""
   echo "Apply the auth schema once Postgres is running:"
-  echo "  docker compose -f compose.yaml -f compose.dev.yaml up -d postgres && npm run db:migrate"
+  echo "  docker compose --env-file storage/.env.local --env-file searxng/.env.local -f compose.yaml -f compose.dev.yaml up -d postgres && npm run db:migrate"
   echo ""
   echo "Next step: npm run dev:sh"
 }

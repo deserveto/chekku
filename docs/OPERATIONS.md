@@ -800,7 +800,7 @@ See Production notes below for the durable `DATABASE_URL`, deployed origin, and 
 
 ## Containerized production
 
-`npm run prod:sh` (or `bash scripts/prod.sh`) is the recommended way to run the full Chekku stack in containers. It activates the `prod` Compose profile so Garage, SearXNG, Postgres, the agent, and the client all run as containers; nothing application-level runs on the host.
+`npm run prod:sh` (or `bash scripts/prod.sh`) is the recommended way to run the full Chekku stack in containers. It merges `-f compose.yaml -f compose.prod.yaml` so Garage, SearXNG, Reader, Qdrant, Postgres, the agent, and the client all run as containers; nothing application-level runs on the host.
 
 ```bash
 npm run setup        # generates storage/.env.local, searxng/.env.local; prompts for LLM_* in agent/.env
@@ -809,7 +809,7 @@ npm run prod:sh      # build images, bring the stack up, wait for every service 
 
 Subcommands:
 
-- `npm run prod:sh` — build (if needed), bring everything up, wait for all five services to become healthy.
+- `npm run prod:sh` — build (if needed), bring everything up, wait for all seven services to become healthy.
 - `npm run prod:build` — build only the `agent` and `client` images.
 - `npm run prod:up` — bring the stack up without rebuilding.
 - `npm run prod:down` — stop and remove containers (named volumes are preserved).
@@ -822,14 +822,14 @@ In-container wiring is fixed by Compose and differs from local development:
 - `DATABASE_URL` is constructed as `postgresql://chekku:${POSTGRES_PASSWORD}@postgres:5432/chekku_agent` (service name `postgres`, not `127.0.0.1`).
 - SearXNG is reached at `http://searxng:8080` (the container's internal port), not the loopback `8888` used in development.
 - Reader is reached at `http://reader:8081` (the container's HTTP/1.1 port), not the loopback `8081` host publish used in development.
-- Every published port is loopback-only. The client publishes `127.0.0.1:3000`; put a reverse proxy (Caddy/nginx — a ready nginx template lives at [`ops/nginx/chekku.conf`](../ops/nginx/chekku.conf)) in front for TLS and public exposure. Garage, SearXNG, Reader, and Postgres also keep their development publishes, because `scripts/dev.sh` runs the agent and client as host processes against them and `scripts/db-migrate.sh` runs the Better Auth CLI on the host against `127.0.0.1:5432`.
-- Each of those host ports is overridable for shared hosts where the default is already taken by another stack: `CHEKKU_CLIENT_HOST_PORT` (default 3000, set in `client/.env.local`), and `CHEKKU_GARAGE_HOST_PORT` / `CHEKKU_SEARXNG_HOST_PORT` / `CHEKKU_READER_HOST_PORT` / `CHEKKU_POSTGRES_HOST_PORT` (defaults 3900 / 8888 / 8081 / 5432, set in `agent/.env`). Leaving them empty keeps the defaults. They move the host side of the publish only — containers always reach each other at `garage:3900`, `searxng:8080`, `reader:8081`, `postgres:5432`, and `agent:4111`. `scripts/prod.sh` merges those files into its shell, so the overrides apply to the containerized stack; `scripts/dev.sh` reads `storage/.env.local` instead and is unaffected. Point the reverse proxy at whatever `CHEKKU_CLIENT_HOST_PORT` resolves to.
+- Every published port is loopback-only, and the containerized stack has exactly two. The client publishes `127.0.0.1:3000`; put a reverse proxy (Caddy/nginx — a ready nginx template lives at [`ops/nginx/chekku.conf`](../ops/nginx/chekku.conf)) in front for TLS and public exposure. Postgres publishes `127.0.0.1:5432` because `scripts/db-migrate.sh` runs the Better Auth CLI on the host. The dev-only publishes (Garage `3900`, SearXNG `8888`, Reader `8081`, Qdrant `6333`) live only in `compose.dev.yaml` for the host-run development launcher and never apply to the containerized stack.
+- Each production host port is overridable for shared hosts where the default is already taken by another stack: `CHEKKU_CLIENT_HOST_PORT` (default 3000, set in `client/.env.local`) and `CHEKKU_POSTGRES_HOST_PORT` (default 5432, set in any dotenv file `scripts/prod.sh` parses). The dev-only `CHEKKU_GARAGE_HOST_PORT` / `CHEKKU_SEARXNG_HOST_PORT` / `CHEKKU_READER_HOST_PORT` / `CHEKKU_QDRANT_HOST_PORT` overrides apply only to `scripts/dev.sh`. Leaving them empty keeps the defaults. Overrides move the host side of the publish only — containers always reach each other at `garage:3900`, `searxng:8080`, `reader:8081`, `postgres:5432`, and `agent:4111`. Point the reverse proxy at whatever `CHEKKU_CLIENT_HOST_PORT` resolves to.
 - Better Auth values reach the client container from `client/.env.local`: `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, and `RATE_LIMIT_TRUST_PROXY`. `BETTER_AUTH_URL` must equal the public browser origin or session cookies and verification links break. Set `RATE_LIMIT_TRUST_PROXY=true` only when a reverse proxy supplies a trustworthy `x-forwarded-for`. `AUTH_DATABASE_URL` is **not** forwarded: Compose pins it to `postgresql://chekku:${POSTGRES_PASSWORD}@postgres:5432/chekku_auth`, leaving the `127.0.0.1` value in `client/.env.local` free for the host-side `npm run db:migrate`.
 - The Compose project network is named `chekku-network` rather than the generated `chekku_default`, so it is identifiable on a host running several stacks.
 - The QA Web Agent works in production because the agent image installs system Chromium and points the agent browser at it with `BROWSER_EXECUTABLE_PATH=/usr/bin/chromium`. Leave that variable empty outside the container: host development uses Playwright's own downloaded browser, and an empty value correctly falls back to it. The QA Android Agent (Maestro) stays host/device-only: `MAESTRO_ENABLED` is forced to `false` in the agent container.
 - `NEXT_PUBLIC_APP_URL` is a **build-time** value for the client image. Next.js inlines `NEXT_PUBLIC_*` into the browser bundle during `next build`, so `scripts/prod.sh` forwards it from `client/.env.local` to the builder stage as a `build.args` entry. Before building for a real domain, set `NEXT_PUBLIC_APP_URL=https://studio.example.com` in `client/.env.local` and rebuild (`npm run prod:sh`); overriding it at runtime will not reach the already-built browser bundle. This mirrors the host-`prod` gotcha documented above.
 
-Readiness timeout defaults to 60 seconds and is configurable via `CHEKKU_READY_TIMEOUT_SECONDS` (1–600). The launcher reports each service as it becomes healthy (`Garage ready`, `SearXNG ready`, `Postgres ready`, `Agent ready`, `Client ready`) and aborts with a bounded message if any service fails to become healthy.
+Readiness timeout defaults to 60 seconds and is configurable via `CHEKKU_READY_TIMEOUT_SECONDS` (1–600). The launcher reports each service as it becomes healthy (`Garage ready`, `SearXNG ready`, `Reader ready`, `Qdrant ready`, `Postgres ready`, `Agent ready`, `Client ready`) and aborts with a bounded message if any service fails to become healthy.
 
 ### Containerized production troubleshooting
 

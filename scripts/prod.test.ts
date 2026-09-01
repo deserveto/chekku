@@ -23,6 +23,13 @@ const bash =
         stdio: ["ignore", "pipe", "ignore"],
       }).trim();
 const fixtures: string[] = [];
+// The merged-config test executes real `docker compose config`; it skips on
+// hosts without Docker Compose or without the generated env files.
+const dockerMergeReady =
+  spawnSync("docker", ["compose", "version"], { stdio: "ignore" }).status ===
+    0 &&
+  existsSync(resolve(sourceRoot, "storage/.env.local")) &&
+  existsSync(resolve(sourceRoot, "searxng/.env.local"));
 
 const POSTGRES_PASSWORD = "prod-postgres-password";
 const GARAGE_ACCESS_KEY_ID = "GKPRODACCESSKEYID123";
@@ -437,6 +444,10 @@ describe("committed production runtime", () => {
     expect(prod).not.toContain("profiles:");
     const published = prod.match(/- "127\.0\.0\.1:[^"]+"/g) ?? [];
     expect(published).toHaveLength(2);
+    // Belt and braces for the count above: any binding whose host side is
+    // numeric but not 127.0.0.1 (e.g. `- "3900:3900"`) fails loudly whatever
+    // the quoting; long syntax is covered by the merged-config test below.
+    expect(prod).not.toMatch(/^[ \t]*-[ \t]*["']?(?!\$|127\.0\.0\.1)[0-9]/m);
     for (const internal of [":3900:", ":8888:", ":8081:", ":6333:"]) {
       expect(prod).not.toContain(internal);
     }
@@ -444,4 +455,37 @@ describe("committed production runtime", () => {
       expect(prod).not.toMatch(new RegExp(`^[^#]*${leaked}:${leaked}`, "m"));
     }
   });
+
+  it.runIf(dockerMergeReady)(
+    "merged production config publishes exactly two loopback ports",
+    () => {
+      const merged = spawnSync(
+        "docker",
+        [
+          "compose",
+          "--env-file", "storage/.env.local",
+          "--env-file", "searxng/.env.local",
+          "-f", "compose.yaml",
+          "-f", "compose.prod.yaml",
+          "config",
+          "--format", "json",
+        ],
+        { cwd: sourceRoot, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+      );
+      expect(merged.status, merged.stderr).toBe(0);
+      const config = JSON.parse(merged.stdout) as {
+        services: Record<
+          string,
+          { ports?: Array<{ host_ip?: string; published?: string | number }> }
+        >;
+      };
+      const published = Object.values(config.services)
+        .flatMap((service) => service.ports ?? [])
+        .map((port) => `${port.host_ip ?? ""}:${port.published}`);
+      expect(published.sort()).toEqual([
+        "127.0.0.1:3000",
+        "127.0.0.1:5432",
+      ]);
+    },
+  );
 });
