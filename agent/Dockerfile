@@ -22,6 +22,10 @@ FROM node:22-bookworm-slim AS builder
 # regardless of NODE_ENV, while `next build`/`mastra build` must run under
 # the default production NODE_ENV (forcing development breaks prerendering).
 WORKDIR /app
+# The root devDependency @playwright/test (E2E suites, host-only) pulls the
+# `playwright` package whose postinstall downloads browsers. E2E never runs in
+# the image and the agent uses system Chromium, so skip the download.
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 # Copy workspace manifests first for a cacheable `npm ci` layer.
 COPY package.json package-lock.json ./
 COPY agent/package.json agent/

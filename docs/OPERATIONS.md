@@ -772,6 +772,15 @@ git diff --check
 
 The test suite covers model routing, model discovery, prompt normalization, all five built-in agents, Telegram roles and slash commands, email delivery, weekly and competitive PM skills/tools/repositories, report APIs/pages and accessible tables, stored-agent payloads and fixed Garage/SearXNG/Web Reader hydration, bounded search and self-hosted reading transports with safe errors, stored-model migration, thread ownership, proxy paths, UI structure, namespaced storage, Garage adapter safety, Maestro flow runner, char-budget guard, and launcher behavior.
 
+### Local Playwright E2E tests
+
+`npm run test:e2e` runs the Playwright end-to-end suites from `e2e/` on demand (not part of `npm run check`, not attached to CI). Prerequisites: `npm run setup` and `npm run db:migrate` ran at least once, Postgres is up (`docker compose --env-file storage/.env.local --env-file searxng/.env.local up -d postgres`), and the Chromium browser is installed (`npx playwright install chromium`). Playwright starts `npm run dev:client` itself or reuses an already-running dev stack; override the target origin with `CHEKKU_E2E_BASE_URL`.
+
+Two operational constraints matter when running the auth suite:
+
+- The in-process auth rate limiter caps each scope (signin / signup / resend / password-reset) at 5 POSTs per 60 seconds and, without `RATE_LIMIT_TRUST_PROXY`, all anonymous clients share one bucket. The suite is serial with `workers: 1` and budgets its POSTs under the caps; re-running within a minute of a previous run can trip 429s — wait ~60 seconds or restart the dev client.
+- Local dev cannot verify email through a real mailbox (without `RESEND_API_KEY` the verification link only prints to the dev server console). The suite therefore flips `emailVerified` directly in `chekku_auth` through `e2e/helpers/auth-db.ts`, resolving `AUTH_DATABASE_URL` from `client/.env.local` (override: `CHEKKU_E2E_AUTH_DATABASE_URL`), and deletes the test users afterwards.
+
 ## Production run
 
 `npm run prod` builds both workspaces and starts them together:

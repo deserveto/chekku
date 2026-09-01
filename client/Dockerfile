@@ -19,6 +19,10 @@ FROM node:22-bookworm-slim AS builder
 # production NODE_ENV (forcing development trips the non-standard-NODE_ENV
 # warning and breaks `/_global-error` prerendering).
 WORKDIR /app
+# The root devDependency @playwright/test (E2E suites, host-only) pulls the
+# `playwright` package whose postinstall downloads browsers. E2E never runs in
+# the image, so skip the download.
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 # Copy workspace manifests first for a cacheable `npm ci` layer. All three
 # workspace package.json files are needed so npm can resolve the workspaces.
 COPY package.json package-lock.json ./
