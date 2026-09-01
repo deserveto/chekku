@@ -29,7 +29,7 @@ import {
 } from '../../image-generation/index.js';
 
 /**
- * Visual Content Agent — `preview_image` tool (dev-only).
+ * Visual Content Agent — `preview_image` tool.
  *
  * ARCHITECTURE (Rafiqspace visual pipeline upgrade):
  *
@@ -58,9 +58,10 @@ import {
  *     stamped onto the final image as-is. NEVER regenerated, NEVER drawn by
  *     the image model, NEVER replaced with wordmark text.
  *
- * Dev-only: no postId, no approval check, isolated `chat-previews/` prefix.
- * Production uses the post-bound `generate_image` tool which shares the same
- * pipeline but verifies APPROVED status before composing.
+ * Registered in every environment (production included): no postId, no
+ * approval check, isolated `chat-previews/` prefix. The post-bound
+ * `generate_image` tool shares the same pipeline but verifies APPROVED
+ * status before composing.
  */
 
 const PREVIEW_PREFIX = 'chat-previews';

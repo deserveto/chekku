@@ -4,6 +4,7 @@
 .impeccable/config.local.json
 .impeccable/live/server.json
 .impeccable/live/roots.json
+.impeccable/live/config.json
 .impeccable/live/app-root.json
 .impeccable/live/inject-journal.json
 .impeccable/live/sessions/

@@ -199,6 +199,21 @@ describe('RunRegistry max-duration watchdog', () => {
     expect(late?.error).toBe(RUN_MAX_DURATION_MESSAGE);
   });
 
+  it('latches the cancel intent so the driver persists the partial turn', () => {
+    const { registry, clock } = makeRegistry({ maxRunDurationMs: 1_000 });
+    const run = startRun(registry);
+
+    clock.advance(2_000);
+    registry.getRun(run.id); // triggers the reap
+
+    // Without this latch the driver's unwind path treats the abort as a
+    // plain failure and skips the cancelled-turn persistence, leaving the
+    // thread blank after a watchdog force-fail.
+    expect(registry.isCancelRequested(run.id)).toBe(true);
+    // The terminal status stays the watchdog's failed, not cancelled.
+    expect(registry.finishRun(run.id, 'cancelled')?.status).toBe('failed');
+  });
+
   it('leaves runs within the duration untouched', () => {
     const { registry, clock } = makeRegistry({ maxRunDurationMs: 60_000 });
     const run = startRun(registry);

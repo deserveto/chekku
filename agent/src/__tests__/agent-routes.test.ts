@@ -41,8 +41,11 @@ describe('agent server routes', () => {
       'weeklySocialDrafts',
       'repurposeSocialPost',
       'generateSocialPostVisual',
+      // Internal engine workflow auto-registered by the pm-agent durable
+      // pilot (`createDurableAgent`); not an application workflow.
       'knowledgeDocumentIngestion',
       'knowledgeDocumentDeletion',
+      'durable-agentic-loop',
     ]);
     expect(mastra.listMCPServers()).toEqual({
       garage: garageMcpServer,

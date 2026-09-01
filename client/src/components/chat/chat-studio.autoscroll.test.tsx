@@ -263,7 +263,13 @@ describe('ChatStudio auto-scroll behavior', () => {
   it('stops forcing the viewport down after the user scrolls up', async () => {
     await submitMessage('Long answer please');
 
-    // User scrolls up to read earlier context.
+    // Start pinned at the bottom, then scroll up to read earlier context.
+    setScrollGeometry(conversation(), {
+      scrollTop: 4_000,
+      scrollHeight: 5_000,
+      clientHeight: 1_000,
+    });
+    await fireScroll(conversation());
     setScrollGeometry(conversation(), {
       scrollTop: 500,
       scrollHeight: 5_000,
@@ -285,6 +291,12 @@ describe('ChatStudio auto-scroll behavior', () => {
     await submitMessage('Long answer please');
 
     setScrollGeometry(conversation(), {
+      scrollTop: 4_000,
+      scrollHeight: 5_000,
+      clientHeight: 1_000,
+    });
+    await fireScroll(conversation());
+    setScrollGeometry(conversation(), {
       scrollTop: 500,
       scrollHeight: 5_000,
       clientHeight: 1_000,
@@ -302,17 +314,32 @@ describe('ChatStudio auto-scroll behavior', () => {
       await Promise.resolve();
     });
 
+    // The jump is instant: exactly one scroll call, and the control unmounts
+    // (an animated jump used to unpin itself on its own mid-flight events).
+    expect(scrollToMock).toHaveBeenCalledTimes(1);
     expect(scrollToMock).toHaveBeenCalledWith({
       top: 5_000,
-      behavior: 'smooth',
+      behavior: 'auto',
     });
     expect(container.querySelector('.chat-jump-latest')).toBeNull();
+
+    // The jump must leave the follow alive: the next delta keeps scrolling.
+    await pumpEvents([
+      { type: 'text-delta', payload: { text: 'Still following.' } },
+    ]);
+    expect(scrollToMock).toHaveBeenCalledTimes(2);
   });
 
   it('resumes pinned following after the user scrolls back to the bottom', async () => {
     await submitMessage('Long answer please');
 
-    // Scroll up…
+    // Scroll up from the bottom…
+    setScrollGeometry(conversation(), {
+      scrollTop: 4_000,
+      scrollHeight: 5_000,
+      clientHeight: 1_000,
+    });
+    await fireScroll(conversation());
     setScrollGeometry(conversation(), {
       scrollTop: 500,
       scrollHeight: 5_000,
@@ -320,7 +347,7 @@ describe('ChatStudio auto-scroll behavior', () => {
     });
     await fireScroll(conversation());
 
-    // …and return near the bottom manually.
+    // …and return near the bottom manually (downward into the band).
     setScrollGeometry(conversation(), {
       scrollTop: 3_950,
       scrollHeight: 5_000,
@@ -339,5 +366,65 @@ describe('ChatStudio auto-scroll behavior', () => {
       top: 5_000,
       behavior: 'auto',
     });
+  });
+
+  it('detaches when the user scrolls up inside the re-attach band', async () => {
+    await submitMessage('Long answer please');
+
+    setScrollGeometry(conversation(), {
+      scrollTop: 4_000,
+      scrollHeight: 5_000,
+      clientHeight: 1_000,
+    });
+    await fireScroll(conversation());
+
+    // A 40px upward scroll is still inside the 120px band — it must detach
+    // anyway, or the next streamed delta snaps the viewport back down.
+    setScrollGeometry(conversation(), {
+      scrollTop: 3_960,
+      scrollHeight: 5_000,
+      clientHeight: 1_000,
+    });
+    await fireScroll(conversation());
+    scrollToMock.mockClear();
+
+    await pumpEvents([
+      { type: 'text-delta', payload: { text: 'Should not yank.' } },
+    ]);
+
+    expect(scrollToMock).not.toHaveBeenCalled();
+  });
+
+  it('stays detached while scrolling down but still far from the bottom', async () => {
+    await submitMessage('Long answer please');
+
+    setScrollGeometry(conversation(), {
+      scrollTop: 4_000,
+      scrollHeight: 5_000,
+      clientHeight: 1_000,
+    });
+    await fireScroll(conversation());
+    setScrollGeometry(conversation(), {
+      scrollTop: 500,
+      scrollHeight: 5_000,
+      clientHeight: 1_000,
+    });
+    await fireScroll(conversation());
+
+    // Proximity re-attaches only inside the band; scrolling down but
+    // stopping short of it must leave the follow off.
+    setScrollGeometry(conversation(), {
+      scrollTop: 2_000,
+      scrollHeight: 5_000,
+      clientHeight: 1_000,
+    });
+    await fireScroll(conversation());
+    scrollToMock.mockClear();
+
+    await pumpEvents([
+      { type: 'text-delta', payload: { text: 'Not yet in view.' } },
+    ]);
+
+    expect(scrollToMock).not.toHaveBeenCalled();
   });
 });

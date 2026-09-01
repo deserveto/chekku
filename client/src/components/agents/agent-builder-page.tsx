@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import {
   FormEvent,
+  useCallback,
   useEffect,
   useMemo,
   useState,
@@ -233,6 +234,18 @@ export function AgentBuilderPage({
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [dirty]);
+  // Client-side navigations from the shared sidebar and ⌘K palette must
+  // respect the same dirty-guard as the in-page links; beforeunload only
+  // covers full page unloads.
+  const guardNavigation = useCallback(
+    (href: string) => {
+      if (!dirty) return true;
+      setPendingExit(href);
+      return false;
+    },
+    [dirty],
+  );
+
 
   const duplicateIds = useMemo(() => {
     const copy = new Set(existingIds);
@@ -316,7 +329,7 @@ export function AgentBuilderPage({
 
   return (
     <div className="studio-shell">
-      <StudioNav resourceId={resourceId} />
+      <StudioNav resourceId={resourceId} guard={guardNavigation} />
 
       <main className="studio-main studio-builder-main">
         <header className="studio-page-header studio-builder-header">

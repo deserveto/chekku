@@ -2,9 +2,12 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { AgentIcon } from '@/components/agents/agent-icon';
-import { CommandPalette } from '@/components/studio/command-palette';
+import {
+  CommandPalette,
+  type NavigationGuard,
+} from '@/components/studio/command-palette';
 import { ResizableSidebar } from '@/components/studio/resizable-sidebar';
 import { BrandMark } from '@/components/ui/brand-mark';
 import {
@@ -17,7 +20,14 @@ import { listAllAgents } from '@/lib/stored-agents';
 import { createOwnedThreadId } from '@/lib/thread-id';
 import { MAIN_AGENT_ID } from '@/lib/types';
 
-export function StudioNav({ resourceId }: { resourceId: string }) {
+export function StudioNav({
+  resourceId,
+  guard,
+}: {
+  resourceId: string;
+  /** Unsaved-work gate: return false to block the navigation. */
+  guard?: NavigationGuard;
+}) {
   const pathname = usePathname();
   const router = useRouter();
   const { data: session } = authClient.useSession();
@@ -50,6 +60,14 @@ export function StudioNav({ resourceId }: { resourceId: string }) {
 
   const [creatingChat, setCreatingChat] = useState(false);
 
+  // Sidebar links are client-side navigations; the optional guard lets a
+  // page with unsaved work (agent builder) intercept them the same way as
+  // its in-page links.
+  const guardedClick =
+    (href: string) => (event: MouseEvent<HTMLAnchorElement>) => {
+      if (guard && !guard(href)) event.preventDefault();
+    };
+
   const startChat = async () => {
     setCreatingChat(true);
     try {
@@ -64,7 +82,9 @@ export function StudioNav({ resourceId }: { resourceId: string }) {
         }
       }
       const threadId = createOwnedThreadId(agentId, resourceId);
-      router.push(buildChatHref(agentId, threadId));
+      const href = buildChatHref(agentId, threadId);
+      if (guard && !guard(href)) return;
+      router.push(href);
     } finally {
       setCreatingChat(false);
     }
@@ -91,6 +111,7 @@ export function StudioNav({ resourceId }: { resourceId: string }) {
               href="/agents"
               aria-label="Chekku Agent Studio"
               title={collapsed ? 'Chekku Agent Studio' : undefined}
+              onClick={guardedClick('/agents')}
             >
               <BrandMark />
               <span className="studio-sidebar-copy">
@@ -130,6 +151,7 @@ export function StudioNav({ resourceId }: { resourceId: string }) {
               aria-current={pathname.startsWith('/agents') ? 'page' : undefined}
               aria-label="Agents"
               title={collapsed ? 'Agents' : undefined}
+              onClick={guardedClick('/agents')}
             >
               <span aria-hidden="true"><AgentIcon icon="network" /></span>
               <span className="studio-sidebar-copy">Agents</span>
@@ -140,6 +162,7 @@ export function StudioNav({ resourceId }: { resourceId: string }) {
               aria-current={pathname.startsWith('/reports') ? 'page' : undefined}
               aria-label="Reports"
               title={collapsed ? 'Reports' : undefined}
+              onClick={guardedClick('/reports/weekly')}
             >
               <span aria-hidden="true"><AgentIcon icon="chart" /></span>
               <span className="studio-sidebar-copy">Reports</span>
@@ -150,6 +173,7 @@ export function StudioNav({ resourceId }: { resourceId: string }) {
               aria-current={pathname.startsWith('/social-posts') ? 'page' : undefined}
               aria-label="Social posts"
               title={collapsed ? 'Social posts' : undefined}
+              onClick={guardedClick('/social-posts')}
             >
               <span aria-hidden="true"><AgentIcon icon="pen" /></span>
               <span className="studio-sidebar-copy">Social posts</span>
@@ -160,6 +184,7 @@ export function StudioNav({ resourceId }: { resourceId: string }) {
               aria-current={pathname.startsWith('/knowledge') ? 'page' : undefined}
               aria-label="Knowledge"
               title={collapsed ? 'Knowledge' : undefined}
+              onClick={guardedClick('/knowledge')}
             >
               <span aria-hidden="true"><AgentIcon icon="book" /></span>
               <span className="studio-sidebar-copy">Knowledge</span>
@@ -203,7 +228,13 @@ export function StudioNav({ resourceId }: { resourceId: string }) {
                     <small>{session.user.email}</small>
                   </span>
                 </div>
-                <Link href="/settings" onClick={() => setAccountOpen(false)}>
+                <Link
+                  href="/settings"
+                  onClick={() => {
+                    if (guard && !guard('/settings')) return;
+                    setAccountOpen(false);
+                  }}
+                >
                   <span aria-hidden="true">⚙</span>
                   Settings
                 </Link>
@@ -214,7 +245,7 @@ export function StudioNav({ resourceId }: { resourceId: string }) {
               </div>
             </div>
           ) : null}
-          <CommandPalette resourceId={resourceId} />
+          <CommandPalette resourceId={resourceId} guard={guard} />
         </>
       )}
     </ResizableSidebar>

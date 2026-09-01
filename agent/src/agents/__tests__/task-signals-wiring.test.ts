@@ -184,13 +184,21 @@ describe('code-defined agents task tool wiring', () => {
     // Spawn reliability: the advisory nudge closes the gap where the model
     // skips task tracking on genuinely multi-step turns. It must run on
     // every code-defined agent, with the char-budget guard still LAST.
+    // Durable wrappers (e.g. the pm-agent pilot) carry a bare config of
+    // their own — `listConfiguredInputProcessors` on the wrapper sees none
+    // of the wrapped agent's processors, even though the durable execution
+    // path resolves them from the wrapped agent at runtime. Introspect the
+    // wrapped instance so the assertion keeps matching reality.
+    const unwrapDurable = (agent: unknown): unknown =>
+      (agent as { agent?: unknown } | null)?.agent ?? agent;
     for (const key of AGENT_KEYS) {
-      const agent = mastra.getAgent(key);
-      const ids = (
-        await agent.listConfiguredInputProcessors()
-      ).map((p) => (p as { id?: unknown })?.id);
-      const nudgeIndex = ids.indexOf('task-nudge');
-      const guardIndex = ids.indexOf('char-budget-guard');
+      const agent = unwrapDurable(mastra.getAgent(key)) as
+        | { listConfiguredInputProcessors: () => Promise<Array<{ id?: unknown }>> }
+        | undefined;
+      expect(agent?.listConfiguredInputProcessors, key).toBeDefined();
+      const ids = (await agent?.listConfiguredInputProcessors())?.map((p) => p?.id);
+      const nudgeIndex = ids?.indexOf('task-nudge') ?? -1;
+      const guardIndex = ids?.indexOf('char-budget-guard') ?? -1;
       expect(nudgeIndex, key).toBeGreaterThan(-1);
       expect(guardIndex, key).toBeGreaterThan(-1);
       expect(guardIndex, key).toBeGreaterThan(nudgeIndex);

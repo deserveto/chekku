@@ -1,4 +1,5 @@
 import { Agent, type AgentConfig, type ToolsInput } from '@mastra/core/agent';
+import { createDurableAgent } from '@mastra/core/agent/durable';
 
 import { createAgentContextLimiter, createAgentMemory, createCharBudgetGuard } from '../mastra/processors/context-limit.js';
 import { createTaskNudgeProcessor } from '../mastra/tasks/task-nudge-processor.js';
@@ -313,3 +314,16 @@ const socialMediaStrategistAgentConfig: AgentConfig<string, ToolsInput, undefine
 };
 
 export const socialMediaStrategistAgent = new Agent(socialMediaStrategistAgentConfig);
+
+/**
+ * Durable rollout (Task D, Fase 2): the Strategist is reached through the
+ * supervisor's `agents` delegation field, which now holds this wrapper, so
+ * delegated news-research / brand-strategy turns run as durable runs. Same
+ * contract as `durablePmAgent` (in-process PubSub, no Redis, public id
+ * `social-media-strategist-agent` unchanged, `cleanup()` on terminal,
+ * crash recovery unavailable in the pinned `@mastra/core` 1.50.1). The
+ * plain instance stays exported for tests.
+ */
+export const durableSocialMediaStrategistAgent = createDurableAgent({
+  agent: socialMediaStrategistAgent as Agent<string, ToolsInput, undefined>,
+});

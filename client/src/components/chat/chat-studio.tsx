@@ -90,6 +90,7 @@ import {
 import {
   appendTextDelta,
   groupAssistantParts,
+  interruptRunningToolParts,
   textFromAssistantParts,
   upsertToolPart,
 } from '@/lib/assistant-parts';
@@ -306,12 +307,16 @@ export function ChatStudio({
   // installing a stale thread's run into the newly viewed thread.
   const threadRef = useRef(initialThreadId);
   // ChatGPT-style pinned-to-bottom scrolling: streamed content only scrolls
-  // the conversation while the user is already near its bottom. Scrolling up
-  // detaches the follow (freely reading history is never interrupted) and
-  // returning near the bottom re-attaches it. The ref is authoritative for
-  // effects; the state only drives the jump-to-latest button.
+  // the conversation while the user is already near its bottom. Any upward
+  // scroll detaches the follow (freely reading history is never interrupted,
+  // even inside the re-attach band) and returning near the bottom re-attaches
+  // it. The ref is authoritative for effects; the state only drives the
+  // jump-to-latest button. previousScrollTopRef gives the scroll handler a
+  // direction signal: programmatic jumps only ever move down, so upward
+  // movement is always user intent.
   const isPinnedRef = useRef(true);
   const [isPinned, setIsPinned] = useState(true);
+  const previousScrollTopRef = useRef(0);
 
   const [agents, setAgents] = useState<ChekkuAgentSummary[]>([]);
   const [threads, setThreads] = useState<StudioThread[]>([]);
@@ -651,14 +656,17 @@ export function ChatStudio({
     threadRef.current = threadId;
   }, [threadId]);
 
-  const scrollToConversationBottom = useCallback(
-    (behavior: ScrollBehavior) => {
-      const element = conversationRef.current;
-      if (!element) return;
-      element.scrollTo({ top: element.scrollHeight, behavior });
-    },
-    [],
-  );
+  // Instant jumps only: an animated jump emits intermediate scroll events
+  // far from the bottom and competes with the streaming follow for the
+  // viewport. `behavior: 'auto'` applies synchronously, so syncing the
+  // direction baseline to the destination afterwards guarantees the jump's
+  // own scroll event is never misread as upward user scrolling.
+  const scrollToConversationBottom = useCallback(() => {
+    const element = conversationRef.current;
+    if (!element) return;
+    element.scrollTo({ top: element.scrollHeight, behavior: 'auto' });
+    previousScrollTopRef.current = element.scrollTop;
+  }, []);
 
   const setPinned = useCallback((pinned: boolean) => {
     isPinnedRef.current = pinned;
@@ -668,9 +676,23 @@ export function ChatStudio({
   const handleConversationScroll = useCallback(() => {
     const element = conversationRef.current;
     if (!element) return;
-    const distanceFromBottom =
-      element.scrollHeight - element.scrollTop - element.clientHeight;
-    setPinned(distanceFromBottom <= CHAT_PIN_THRESHOLD_PX);
+    const { scrollTop, scrollHeight, clientHeight } = element;
+    const previousScrollTop = previousScrollTopRef.current;
+    previousScrollTopRef.current = scrollTop;
+    // Upward movement is always the user reading history — detach even
+    // inside the re-attach band, so a small scroll-up during streaming is
+    // never yanked back by the next delta. Programmatic jumps only ever
+    // move down, so upward movement cannot be our own scroll.
+    if (scrollTop < previousScrollTop) {
+      setPinned(false);
+      return;
+    }
+    // Near-bottom proximity re-attaches the follow; it is never a detach
+    // condition, so a downward scroll event far from the bottom (e.g. a
+    // jump still in flight) cannot unpin the follow.
+    if (scrollHeight - scrollTop - clientHeight <= CHAT_PIN_THRESHOLD_PX) {
+      setPinned(true);
+    }
   }, [setPinned]);
 
   // Streaming follows the output only while the user is pinned to the
@@ -681,13 +703,13 @@ export function ChatStudio({
   // the earlier stutter.
   useEffect(() => {
     if (!isPinnedRef.current) return;
-    scrollToConversationBottom('auto');
+    scrollToConversationBottom();
   }, [messages, scrollToConversationBottom]);
 
   // A thread switch (or first load) always lands at the latest message.
   useEffect(() => {
     setPinned(true);
-    scrollToConversationBottom('auto');
+    scrollToConversationBottom();
   }, [threadId, scrollToConversationBottom, setPinned]);
 
   useEffect(() => {
@@ -1182,6 +1204,20 @@ export function ChatStudio({
     const stopThreadId = threadId;
     try {
       await cancelRun(run.id);
+      // Optimistic feedback: the server abort lands at the next engine step
+      // boundary (an in-flight tool call keeps running until it finishes),
+      // so flip pending tool cards to `interrupted` immediately. A late
+      // tool-result event still upserts over this state.
+      const assistantId = activeAssistantId;
+      if (assistantId) {
+        setMessages((current) =>
+          current.map((message) =>
+            message.id === assistantId && message.parts?.length
+              ? { ...message, parts: interruptRunningToolParts(message.parts) }
+              : message,
+          ),
+        );
+      }
     } catch (reason) {
       // The user may have switched threads while the cancel request was in
       // flight; a stale thread's stop failure must not banner the view.
@@ -1505,6 +1541,7 @@ export function ChatStudio({
         <section
           ref={conversationRef}
           onScroll={handleConversationScroll}
+          aria-live="polite"
           className={`chat-conversation ${
             messages.length ? 'has-messages' : ''
           }`}
@@ -1718,7 +1755,7 @@ export function ChatStudio({
                   className="chat-jump-latest"
                   onClick={() => {
                     setPinned(true);
-                    scrollToConversationBottom('smooth');
+                    scrollToConversationBottom();
                   }}
                   aria-label="Jump to latest message"
                 >
