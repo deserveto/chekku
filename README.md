@@ -81,7 +81,7 @@ npm run setup
 
 This copies `.env.example` files into place, auto-generates local Garage and SearXNG secrets, generates `BETTER_AUTH_SECRET`, wires `AUTH_DATABASE_URL` into `client/.env.local`, and prompts for required values like `LLM_API_KEY`. Optional integrations (Telegram, Resend, Maestro, Web Reader) can be left empty and edited into `agent/.env` later; rerun `npm run setup` after editing so local Mastra receives the changes.
 
-Once Postgres is running (via `npm run dev:sh` or `docker compose up -d postgres`), apply the Better Auth schema once:
+Once Postgres is running (via `npm run dev:sh` or `docker compose -f compose.yaml -f compose.dev.yaml up -d postgres`), apply the Better Auth schema once:
 
 ```bash
 npm run db:migrate
@@ -201,7 +201,7 @@ The client uses system font stacks, so `next build` does not download fonts from
 
 ## Production deployment
 
-For production, run the full stack inside containers so the host only needs Docker and a reverse proxy. The agent and client services in `compose.yaml` are gated behind the `prod` profile, so development is unaffected.
+For production, run the full stack inside containers so the host only needs Docker and a reverse proxy. The application containers live in `compose.prod.yaml`, merged over the infra base by `scripts/prod.sh`; development (`npm run dev:sh`) merges `compose.dev.yaml` instead and is unaffected.
 
 ```bash
 npm ci

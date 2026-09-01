@@ -143,7 +143,7 @@ Chekku resolves identity from a Better Auth email/password session instead of a 
 
 After setup, apply the Better Auth schema once Postgres is running:
 
-    docker compose up -d postgres
+    docker compose -f compose.yaml -f compose.dev.yaml up -d postgres
     npm run db:migrate
 
 `npm run db:migrate` runs `@better-auth/cli migrate` against `AUTH_DATABASE_URL` and is safe to re-run.
@@ -269,7 +269,7 @@ Errors are fixed and bounded for missing/invalid configuration, unavailable serv
 To stop local Garage and SearXNG safely while preserving their named volumes:
 
 ```bash
-docker compose --env-file storage/.env.local --env-file searxng/.env.local down
+docker compose -f compose.yaml -f compose.dev.yaml --env-file storage/.env.local --env-file searxng/.env.local down
 ```
 
 Do not add `--volumes` or run `docker volume rm` during normal shutdown or application/database reset. SearXNG cache and all Garage objects remain available for the next startup.
@@ -388,7 +388,7 @@ DATABASE_URL=postgresql://chekku:postgres@localhost:5432/chekku_agent
 Before resetting data, stop the agent process. Reset local Postgres state by recreating its volume (this removes stored agents and conversation history):
 
 ```bash
-docker compose down
+docker compose -f compose.yaml -f compose.dev.yaml down
 docker volume rm chekku_postgres-data
 ```
 
@@ -399,7 +399,7 @@ The next `npm run dev:sh` recreates the container and re-runs the init script. T
 Local Garage runs image `dxflrs/garage:v2.3.0` with persistent Docker volumes and generic bucket `chekku-objects`. Compose publishes only the S3 API at `127.0.0.1:3900`; RPC, admin, and metrics ports stay inside the Docker network. Stop application processes before changing credentials. To stop local services without deleting their volumes:
 
 ```bash
-docker compose --env-file storage/.env.local --env-file searxng/.env.local down
+docker compose -f compose.yaml -f compose.dev.yaml --env-file storage/.env.local --env-file searxng/.env.local down
 ```
 
 Do not commit or paste contents from `storage/.env.local`, `storage/.garage/`, `searxng/.env.local`, or generated `agent/.env.development`. Removing Garage volumes destroys local agent objects and is intentionally not part of normal reset instructions; removing SearXNG cache is also unnecessary for application reset.
@@ -585,18 +585,18 @@ Run from repository root with Docker responsive and both loopback ports free:
 
 ```bash
 docker compose version
-docker compose --env-file storage/.env.local --env-file searxng/.env.local ps garage searxng
+docker compose -f compose.yaml -f compose.dev.yaml --env-file storage/.env.local --env-file searxng/.env.local ps garage searxng
 ```
 
-`npm run dev:sh` reports whether Garage port `3900` or SearXNG port `8888` is occupied. Stop the conflicting process or container; do not edit the pinned Compose ports without a reviewed configuration change. If Compose configuration is invalid, remove no volumes: inspect tracked `compose.yaml`, `searxng/settings.yml`, and generated file permissions, then rerun the launcher.
+`npm run dev:sh` reports whether Garage port `3900` or SearXNG port `8888` is occupied. Stop the conflicting process or container; do not edit the pinned Compose ports without a reviewed configuration change. If Compose configuration is invalid, remove no volumes: inspect tracked `compose.yaml`/`compose.dev.yaml`, `searxng/settings.yml`, and generated file permissions, then rerun the launcher.
 
 ### Local service readiness times out
 
 Default readiness timeout is 30 seconds. First inspect health and logs without printing environment values:
 
 ```bash
-docker compose --env-file storage/.env.local --env-file searxng/.env.local ps garage searxng
-docker compose --env-file storage/.env.local --env-file searxng/.env.local logs garage searxng
+docker compose -f compose.yaml -f compose.dev.yaml --env-file storage/.env.local --env-file searxng/.env.local ps garage searxng
+docker compose -f compose.yaml -f compose.dev.yaml --env-file storage/.env.local --env-file searxng/.env.local logs garage searxng
 ```
 
 For a slow Docker host, retry with `CHEKKU_READY_TIMEOUT_SECONDS` set from 1 to 300. `CHEKKU_READY_INTERVAL_SECONDS` must be a positive integer and is capped at 5. These launcher settings do not change `search_web`'s fixed 12-second request deadline.
@@ -611,16 +611,16 @@ For local operation, call `curl --fail http://127.0.0.1:8888/healthz` and inspec
 
 ### Web Reader is not configured
 
-For local development, ensure the `reader` Compose service is up (`docker compose ps reader`) and `WEB_READER_BASE_URL` resolves to it. `scripts/setup-env.sh` writes the canonical dev URL (`http://127.0.0.1:8081`) into `agent/.env.development`; in compose prod the service name resolves it (`http://reader:8081`). Restart the agent after changing env. Server should remain healthy while tool fails closed.
+For local development, ensure the `reader` Compose service is up (`docker compose -f compose.yaml -f compose.dev.yaml ps reader`) and `WEB_READER_BASE_URL` resolves to it. `scripts/setup-env.sh` writes the canonical dev URL (`http://127.0.0.1:8081`) into `agent/.env.development`; in compose prod the service name resolves it (`http://reader:8081`). Restart the agent after changing env. Server should remain healthy while tool fails closed.
 
 ### Web Reader is unavailable or times out
 
-Reader is a self-hosted container. Confirm `docker compose ps reader` shows it healthy and `WEB_READER_BASE_URL` points at the right host:port. Inspect container logs (`docker compose logs reader`) for outbound fetcher errors. Request deadline stays fixed at 30 seconds. Do not add configurable timeout, retries, anonymous fallback, or raw provider diagnostics.
+Reader is a self-hosted container. Confirm `docker compose -f compose.yaml -f compose.dev.yaml ps reader` shows it healthy and `WEB_READER_BASE_URL` points at the right host:port. Inspect container logs (`docker compose -f compose.yaml -f compose.dev.yaml logs reader`) for outbound fetcher errors. Request deadline stays fixed at 30 seconds. Do not add configurable timeout, retries, anonymous fallback, or raw provider diagnostics.
 
 
 ### Knowledge indexing is not configured
 
-`/knowledge` shows a document as `Failed` with `Knowledge indexing is not configured…`. Confirm the `qdrant` Compose service is up (`docker compose ps qdrant`) and `QDRANT_URL` resolves to it, and set `LLM_EMBEDDING_MODEL` in `agent/.env` to an embeddings-capable model on the configured gateway. Restart the agent after changing env; then use Retry indexing on the document. The chat composer keeps working — only ingestion and `search_knowledge_base` fail closed.
+`/knowledge` shows a document as `Failed` with `Knowledge indexing is not configured…`. Confirm the `qdrant` Compose service is up (`docker compose -f compose.yaml -f compose.dev.yaml ps qdrant`) and `QDRANT_URL` resolves to it, and set `LLM_EMBEDDING_MODEL` in `agent/.env` to an embeddings-capable model on the configured gateway. Restart the agent after changing env; then use Retry indexing on the document. The chat composer keeps working — only ingestion and `search_knowledge_base` fail closed.
 
 ### Knowledge document is stuck in Processing
 
@@ -657,8 +657,8 @@ Confirm all five `GARAGE_*` application values are available to the agent proces
 Check Docker and local health without exposing environment values:
 
 ```bash
-docker compose --env-file storage/.env.local --env-file searxng/.env.local ps garage
-docker inspect --format '{{.State.Health.Status}}' "$(docker compose --env-file storage/.env.local --env-file searxng/.env.local ps -q garage)"
+docker compose -f compose.yaml -f compose.dev.yaml --env-file storage/.env.local --env-file searxng/.env.local ps garage
+docker inspect --format '{{.State.Health.Status}}' "$(docker compose -f compose.yaml -f compose.dev.yaml --env-file storage/.env.local --env-file searxng/.env.local ps -q garage)"
 ```
 
 ### Model access denied
@@ -839,14 +839,14 @@ Direct `docker compose` invocations (for `ps`, `logs`, `exec`, etc.) need `SEARX
 set -a; source storage/.env.local; source searxng/.env.local; set +a
 ```
 
-`npm run prod:sh` / `prod:up` / `prod:down` do not need this step — `scripts/prod.sh` parses every env file internally.
+`npm run prod:sh` / `prod:up` / `prod:down` do not need this step — `scripts/prod.sh` parses every env file internally. Manual commands against the production stack merge `-f compose.yaml -f compose.prod.yaml`; manual commands during development merge `-f compose.yaml -f compose.dev.yaml`.
 
-- **`Production Compose configuration is invalid`** — inspect `compose.yaml` and the local env files; rerun `npm run setup` if a file is missing.
+- **`Production Compose configuration is invalid`** — inspect `compose.yaml`, `compose.prod.yaml`, and the local env files; rerun `npm run setup` if a file is missing.
 - **`... is empty in ...`** — fill the named value in the named file (e.g. `LLM_API_KEY` in `agent/.env`) and rerun `npm run prod:sh`.
-- **`Agent did not become healthy within ... seconds`** — inspect logs without printing secrets: `docker compose --profile prod logs agent` (after sourcing the env files as above). Confirm `HOST=0.0.0.0`, a reachable `DATABASE_URL`, and valid `LLM_*` values.
-- **Client cannot reach the agent** — confirm the client container's `AGENT_URL=http://agent:4111` and that the agent container is healthy (`docker compose --profile prod ps`).
+- **`Agent did not become healthy within ... seconds`** — inspect logs without printing secrets: `docker compose -f compose.yaml -f compose.prod.yaml logs agent` (after sourcing the env files as above). Confirm `HOST=0.0.0.0`, a reachable `DATABASE_URL`, and valid `LLM_*` values.
+- **Client cannot reach the agent** — confirm the client container's `AGENT_URL=http://agent:4111` and that the agent container is healthy (`docker compose -f compose.yaml -f compose.prod.yaml ps`).
 - **`next build` fails on `/_global-error` prerendering inside the container** — the builder stage must NOT set `NODE_ENV=development`; `next build` needs the default production `NODE_ENV`. `npm ci` installs devDependencies regardless of `NODE_ENV`, so the builder leaves it unset.
-- **Reset production data** — same Postgres volume reset as development, but scoped to the prod profile:
+- **Reset production data** — same Postgres volume reset as development, but scoped to the production stack (`npm run prod:down` passes the `-f compose.yaml -f compose.prod.yaml` pair):
   ```bash
   npm run prod:down
   docker volume rm chekku_postgres-data
