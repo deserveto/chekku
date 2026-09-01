@@ -1,4 +1,5 @@
 import { Agent, type AgentConfig, type ToolsInput } from '@mastra/core/agent';
+import { createDurableAgent } from '@mastra/core/agent/durable';
 import { providerContextSchema, type ProviderContext } from './context.js';
 import { createAgentContextLimiter, createAgentMemory, createCharBudgetGuard } from '../mastra/processors/context-limit.js';
 import { createTaskNudgeProcessor } from '../mastra/tasks/task-nudge-processor.js';
@@ -23,3 +24,16 @@ Do not act as a supervisor or delegate work to other agents in this version.${TA
 };
 
 export const mainAgent = new Agent(mainAgentConfig);
+
+/**
+ * Durable rollout (Task D, Fase 1): the general-purpose assistant runs
+ * through `createDurableAgent` for a uniform runtime across the studio —
+ * same contract as `durablePmAgent` (in-process PubSub, no Redis, public
+ * id stays `main-agent`, composition key stays `mainAgent`, `/runs`
+ * surface unchanged, `cleanup()` on terminal states, crash recovery not
+ * available in the pinned `@mastra/core` 1.50.1). Its only caller is the
+ * chat run surface.
+ */
+export const durableMainAgent = createDurableAgent({
+  agent: mainAgent as Agent<string, ToolsInput, undefined>,
+});

@@ -239,6 +239,10 @@ function collectFlatToolResults(
       if (!toolCallId) continue;
 
       const output = p.output ?? p.result;
+      // The abort-persistence bridge stamps synthetic results with
+      // `interrupted: true`; that marker outranks the error-text output it
+      // is persisted with — the tool was stopped, not failed.
+      const interrupted = p.interrupted === true;
       let status: FlatToolResult['status'] = 'complete';
       let value: unknown = output;
       if (output && typeof output === 'object') {
@@ -251,6 +255,7 @@ function collectFlatToolResults(
               : 'complete';
         }
       }
+      if (interrupted) status = 'interrupted';
 
       results.set(toolCallId, {
         status,

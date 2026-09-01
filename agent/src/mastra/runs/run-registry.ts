@@ -3,9 +3,14 @@
  *
  * A run's lifetime is the agent server process: execution is driven by a
  * server-owned AbortController, never by an HTTP connection, so navigating
- * away or reloading the browser never cancels a run. Because a server
- * restart kills both the execution and this registry together, no durable
- * run storage exists — persisted conversation state remains Mastra Memory.
+ * away or reloading the browser never cancels a run. A server restart kills
+ * both the execution and this registry together — the run-status surface
+ * (status, replay, 409 locks) has no durable storage of its own. The
+ * durable-wrapped agents (the six code-defined wrappers plus every stored
+ * agent) persist execution snapshots through the workflow engine into
+ * Postgres, but those snapshots never feed this registry's HTTP surface and
+ * carry no automatic recovery. Persisted conversation state remains Mastra
+ * Memory.
  */
 
 export type AgentRunStatus = 'running' | 'completed' | 'failed' | 'cancelled';
@@ -258,6 +263,17 @@ export class RunRegistry {
     return record ? { ...record.summary } : null;
   }
 
+  /**
+   * Snapshot copy of one run's buffered events (replay order). Used by the
+   * execution driver to reconstruct a cancelled turn for Memory persistence.
+   */
+  getEvents(runId: string): AgentRunEvent[] | null {
+    this.evictExpired();
+    const record = this.records.get(runId);
+    if (!record) return null;
+    return record.events.map((event) => ({ ...event }));
+  }
+
   findActiveRun(
     agentId: string,
     threadId: string,
@@ -447,6 +463,13 @@ export class RunRegistry {
       ) {
         continue;
       }
+      // Latch the cancel intent (same flag the cancel route sets) before
+      // aborting, so the execution driver's unwind path persists the
+      // partial turn — a long run that produced real research must not
+      // leave a blank thread behind. The run still terminates as failed
+      // with the watchdog message; finishRun is first-call-wins, so the
+      // driver's later cancelled finalize is a no-op.
+      record.cancelRequested = true;
       record.requestAbort();
       this.finishRun(id, 'failed', RUN_MAX_DURATION_MESSAGE);
     }

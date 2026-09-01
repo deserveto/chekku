@@ -1,5 +1,4 @@
 import 'dotenv/config';
-import { Mastra } from '@mastra/core/mastra';
 import { MastraEditor } from '@mastra/editor';
 import { PostgresStore } from '@mastra/pg';
 import { PinoLogger } from '@mastra/loggers';
@@ -9,18 +8,19 @@ import {
 } from './tasks/task-state-store.js';
 import { env } from '../config/env.js';
 import { requestIdInjector, requestLogger } from '../config/middleware.js';
+import { MastraWithDurableStoredAgents } from './durable-stored-agents.js';
 import { registerTaskSignalProcessors } from './tasks/task-signals.js';
-import { mainAgent } from '../agents/main-agent.js';
-import { pmAgent } from '../agents/pm-agent.js';
-import { qaWebAgent } from '../agents/qa-web-agent.js';
+import { durableMainAgent } from '../agents/main-agent.js';
+import { durablePmAgent } from '../agents/pm-agent.js';
+import { durableQaWebAgent } from '../agents/qa-web-agent.js';
 import { qaAndroidAgent } from '../agents/qa-android-agent.js';
 import {
   socialMediaContentWriter,
   registerSocialSlashCommands,
 } from '../agents/social-media-content-writer.js';
-import { socialMediaStrategistAgent } from '../agents/social-media-strategist-agent.js';
-import { socialMediaSupervisorAgent } from '../agents/social-media-supervisor-agent.js';
-import { visualContentAgent } from '../agents/visual-content-agent.js';
+import { durableSocialMediaStrategistAgent } from '../agents/social-media-strategist-agent.js';
+import { durableSocialMediaSupervisorAgent } from '../agents/social-media-supervisor-agent.js';
+import { durableVisualContentAgent } from '../agents/visual-content-agent.js';
 import { OpenAICompatibleGateway } from './gateways/openai-compatible.js';
 import { garageMcpServer } from './mcp/garage-mcp-server.js';
 import { searxngMcpServer } from './mcp/searxng-mcp-server.js';
@@ -64,16 +64,25 @@ if (!storage.stores?.threadState) {
   };
 }
 if (storage.stores) wireThreadStateEviction(storage.stores);
-export const mastra = new Mastra({
+
+export const mastra = new MastraWithDurableStoredAgents({
   agents: {
-    mainAgent,
-    pmAgent,
-    qaWebAgent,
+    // Durable execution (N8_4 pilot + Task D rollout Fase 1 & 2): main, pm,
+    // qa-web, and the social cluster (strategist, supervisor, visual) run
+    // through `createDurableAgent` — composition keys and public ids are
+    // unchanged, so `getAgentById` and the `/runs` surface are unaffected.
+    // Stored agents are wrapped at registration time by
+    // MastraWithDurableStoredAgents (Fase 3). Excluded by design:
+    // social-media-content-writer (the wrapper does not carry Telegram
+    // channels) and qa-android-agent (not production-ready).
+    mainAgent: durableMainAgent,
+    pmAgent: durablePmAgent,
+    qaWebAgent: durableQaWebAgent,
     qaAndroidAgent,
     socialMediaContentWriter,
-    socialMediaStrategistAgent,
-    socialMediaSupervisorAgent,
-    visualContentAgent,
+    socialMediaStrategistAgent: durableSocialMediaStrategistAgent,
+    socialMediaSupervisorAgent: durableSocialMediaSupervisorAgent,
+    visualContentAgent: durableVisualContentAgent,
   },
   workflows: { weeklySocialDrafts, repurposeSocialPost, generateSocialPostVisual },
   mcpServers: {
