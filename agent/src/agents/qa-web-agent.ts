@@ -1,7 +1,7 @@
 import { Agent, type AgentConfig, type ToolsInput } from '@mastra/core/agent';
-import { createDurableAgent } from '@mastra/core/agent/durable';
 
 import { browser } from '../mastra/browsers.js';
+import { createDescriptionForwardingDurableAgent } from '../mastra/durable-agent.js';
 import { gatewayCompatibilityProcessor } from '../mastra/processors/gateway-compatibility.js';
 import { createAgentContextLimiter, createAgentMemory, createCharBudgetGuard } from '../mastra/processors/context-limit.js';
 import { createTaskNudgeProcessor } from '../mastra/tasks/task-nudge-processor.js';
@@ -36,7 +36,8 @@ export const qaWebAgent = new Agent(qaWebAgentConfig);
 /**
  * Durable rollout (Task D, Fase 1): the QA Web Agent runs the studio's
  * longest interactive jobs (`maxSteps: 80` browser sessions), so it runs
- * through `createDurableAgent` alongside the pm-agent pilot. Same contract
+ * through `createDescriptionForwardingDurableAgent` alongside the pm-agent
+ * pilot. Same contract
  * as `durablePmAgent`: in-process PubSub and in-memory event cache (no
  * Redis), public id stays `qa-web-agent` and the composition key stays
  * `qaWebAgent`, so `getAgentById`, thread-id ownership, and the `/runs`
@@ -49,6 +50,6 @@ export const qaWebAgent = new Agent(qaWebAgentConfig);
  * Crash recovery is not available in this version. No workflow or channel
  * calls this agent directly — the chat run surface is its only caller.
  */
-export const durableQaWebAgent = createDurableAgent({
+export const durableQaWebAgent = createDescriptionForwardingDurableAgent({
   agent: qaWebAgent as Agent<string, ToolsInput, undefined>,
 });

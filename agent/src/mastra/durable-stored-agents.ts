@@ -1,6 +1,7 @@
 import { Mastra } from '@mastra/core/mastra';
-import { createDurableAgent, isDurableAgent } from '@mastra/core/agent/durable';
+import { isDurableAgent } from '@mastra/core/agent/durable';
 import type { Agent, ToolsInput } from '@mastra/core/agent';
+import { createDescriptionForwardingDurableAgent } from './durable-agent.js';
 
 /**
  * Task D Fase 3 — durable execution for stored (user-created) agents.
@@ -10,7 +11,9 @@ import type { Agent, ToolsInput } from '@mastra/core/agent';
  * (`@mastra/editor` `createAgentFromStoredConfig`). The editor's namespace
  * classes are not exported, so the clean Chekku-owned seam is the
  * registration call itself: this `Mastra` subclass wraps every
- * stored-source registration with `createDurableAgent` before handing it to
+ * stored-source registration with `createDescriptionForwardingDurableAgent`
+ * (the local wrapper that also forwards the stored description to the
+ * native catalog) before handing it to
  * the base class, whose `isDurableAgentLike` path auto-registers the engine
  * workflow, scorers, and Mastra wiring.
  *
@@ -59,7 +62,7 @@ export class MastraWithDurableStoredAgents extends Mastra {
     // `unknown` while hydrated stored agents carry the editor's context
     // shape; the runtime shapes are identical (same contravariance note as
     // the code-defined durable wrappers).
-    const wrapped = createDurableAgent({
+    const wrapped = createDescriptionForwardingDurableAgent({
       agent: agent as Agent<string, ToolsInput, undefined>,
     });
     super.addAgent(wrapped, key, options as Parameters<Mastra['addAgent']>[2]);

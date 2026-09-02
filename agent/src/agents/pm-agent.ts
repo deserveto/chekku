@@ -1,6 +1,6 @@
 import { Agent, type AgentConfig, type ToolsInput } from '@mastra/core/agent';
-import { createDurableAgent } from '@mastra/core/agent/durable';
 
+import { createDescriptionForwardingDurableAgent } from '../mastra/durable-agent.js';
 import { createCompetitiveResearchGuard } from '../mastra/processors/competitive-research-guard.js';
 import { createAgentContextLimiter, createAgentMemory, createCharBudgetGuard } from '../mastra/processors/context-limit.js';
 import { createTaskNudgeProcessor } from '../mastra/tasks/task-nudge-processor.js';
@@ -69,7 +69,8 @@ export const pmAgent = new Agent(pmAgentConfig);
 /**
  * Durable execution pilot (N8_4): the PM Agent runs the longest jobs on the
  * server (competitive research: up to 25 steps, bounded web research, one
- * save), so it is the pilot agent wrapped with `createDurableAgent`.
+ * save), so it is the pilot agent wrapped with
+ * `createDescriptionForwardingDurableAgent`.
  *
  * The wrapper runs the same agentic loop inside the built-in workflow
  * engine using the default in-process PubSub and in-memory event cache —
@@ -90,7 +91,7 @@ export const pmAgent = new Agent(pmAgentConfig);
  * `recovery.durableAgents` do not exist in the pinned `@mastra/core`
  * 1.50.1, and re-driving abandoned runs would re-issue real LLM calls.
  */
-export const durablePmAgent = createDurableAgent({
+export const durablePmAgent = createDescriptionForwardingDurableAgent({
   // The factory's `agent` parameter leaves the request-context generic at
   // `unknown` while code-defined agents carry a zod `requestContextSchema`
   // (`ProviderContext`); the runtime shapes are identical but TypeScript

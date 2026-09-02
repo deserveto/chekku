@@ -71,7 +71,8 @@ export const mastra = new MastraWithDurableStoredAgents({
   agents: {
     // Durable execution (N8_4 pilot + Task D rollout Fase 1 & 2): main, pm,
     // qa-web, and the social cluster (strategist, supervisor, visual) run
-    // through `createDurableAgent` — composition keys and public ids are
+    // through `createDescriptionForwardingDurableAgent` — composition keys
+    // and public ids are
     // unchanged, so `getAgentById` and the `/runs` surface are unaffected.
     // Stored agents are wrapped at registration time by
     // MastraWithDurableStoredAgents (Fase 3). Excluded by design:
