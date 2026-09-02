@@ -4,6 +4,7 @@ import {
   countUsersByEmail,
   deleteTestUser,
   markEmailVerified,
+  sweepStaleTestUsers,
 } from '../helpers/auth-db';
 import { authAlert } from '../helpers/auth-locators';
 
@@ -15,8 +16,18 @@ const testUserName = 'E2E Auth Tester';
 
 test.describe.configure({ mode: 'serial' });
 
+test.beforeAll(async () => {
+  // Remove users left behind by an interrupted previous run.
+  await sweepStaleTestUsers();
+});
+
 test.afterAll(async () => {
-  await deleteTestUser(testEmail).catch(() => undefined);
+  await deleteTestUser(testEmail).catch((error: unknown) => {
+    console.warn(
+      '[e2e] test-user cleanup failed (%s); the next run sweeps stale rows',
+      error instanceof Error ? error.name : 'unknown',
+    );
+  });
   await closeAuthDb();
 });
 

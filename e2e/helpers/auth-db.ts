@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { isIP as netIsIP } from 'node:net';
 import { join } from 'node:path';
 import { Pool } from 'pg';
 
@@ -42,10 +43,34 @@ export function resolveAuthDatabaseUrl(): string {
   );
 }
 
+/** Refuse anything but a loopback host before the suite runs UPDATE/DELETE. */
+function assertLoopbackDatabaseUrl(connectionString: string): void {
+  let hostname: string;
+  try {
+    hostname = new URL(connectionString).hostname;
+  } catch {
+    throw new Error('Auth database URL is not a valid URL.');
+  }
+  const isLoopback =
+    hostname === 'localhost' ||
+    hostname === '[::1]' ||
+    hostname === '::1' ||
+    (/^127\.\d+\.\d+\.\d+$/.test(hostname) && Boolean(netIsIP(hostname)));
+  if (!isLoopback) {
+    throw new Error(
+      'E2E auth database URL must point at a loopback host (localhost / 127.0.0.1 / ::1); refusing to touch a remote database.',
+    );
+  }
+}
+
 let pool: Pool | undefined;
 
 function getPool(): Pool {
-  pool ??= new Pool({ connectionString: resolveAuthDatabaseUrl(), max: 1 });
+  pool ??= (() => {
+    const connectionString = resolveAuthDatabaseUrl();
+    assertLoopbackDatabaseUrl(connectionString);
+    return new Pool({ connectionString, max: 1 });
+  })();
   return pool;
 }
 
@@ -71,10 +96,27 @@ export async function countUsersByEmail(email: string): Promise<number> {
 
 export async function deleteTestUser(email: string): Promise<void> {
   const client = getPool();
-  await client.query('DELETE FROM "verification" WHERE "identifier" = $1', [
-    email,
-  ]);
+  // Reset-password rows use `reset-password:<token>` identifiers with the user
+  // id in `value` (email-verification tokens are stateless JWTs), and the
+  // verification table has no FK to `user` — sweep before the user delete.
+  await client.query(
+    `DELETE FROM "verification"
+     WHERE "identifier" LIKE 'reset-password:%'
+       AND "value" IN (SELECT "id" FROM "user" WHERE "email" = $1)`,
+    [email],
+  );
   await client.query('DELETE FROM "user" WHERE "email" = $1', [email]);
+}
+
+export async function sweepStaleTestUsers(): Promise<void> {
+  const client = getPool();
+  await client.query(
+    `DELETE FROM "verification"
+     WHERE "value" IN (SELECT "id" FROM "user" WHERE "email" LIKE 'e2e-%@chekku.test')`,
+  );
+  await client.query(
+    `DELETE FROM "user" WHERE "email" LIKE 'e2e-%@chekku.test'`,
+  );
 }
 
 export async function closeAuthDb(): Promise<void> {

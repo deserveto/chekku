@@ -204,18 +204,19 @@ The client uses system font stacks, so `next build` does not download fonts from
 
 Local Playwright E2E suites live in `e2e/` (run on demand; they are not attached to CI and are separate from the Vitest suites). The auth module suite covers signup, email-verification gating and resend, sign-in, middleware redirects, the unauthenticated API 403 JSON boundary, session persistence across reloads, sign-out, and password-reset request/reset-link pages — test-case inventory (including one deliberately manual rate-limit case) lives in `e2e/auth-test-cases.csv`.
 
+Prerequisites, once per machine and repository: `npm run setup` and `npm run db:migrate` have been run at least once, and Postgres is up — the `docker compose --env-file` invocation below hard-errors until `storage/.env.local` and `searxng/.env.local` exist. The Playwright `webServer` starts `npm run dev:client` automatically (or reuses an already-running dev stack).
+
 ```bash
-npx playwright install chromium   # once per machine
-docker compose --env-file storage/.env.local --env-file searxng/.env.local up -d postgres
+npx playwright install chromium   # once per machine; add --with-deps on fresh Linux hosts missing system libraries
+docker compose -f compose.yaml -f compose.dev.yaml --env-file storage/.env.local --env-file searxng/.env.local up -d postgres
 npm run test:e2e
 ```
 
 Notes:
 
-- Prerequisites: `npm run setup` and `npm run db:migrate` have been run at least once, and Postgres is up. The Playwright `webServer` starts `npm run dev:client` automatically (or reuses an already-running dev stack).
 - The client's auth rate limiter allows 5 POSTs per scope per 60 seconds; the suite runs serially with `workers: 1` and stays under the caps. If you re-run the suite within a minute of a previous run, wait ~60 seconds or restart the dev client first.
 - Email verification cannot be completed through a real mailbox in local dev, so the suite signs up through the UI and then flips `emailVerified` directly in `chekku_auth` via `e2e/helpers/auth-db.ts` (connection resolved from `AUTH_DATABASE_URL`; override with `CHEKKU_E2E_AUTH_DATABASE_URL`). Test users are deleted afterwards.
-- Point the suite at another origin with `CHEKKU_E2E_BASE_URL` (default `http://localhost:3000`).
+- Point the suite at another origin with `CHEKKU_E2E_BASE_URL` (default `http://localhost:3000`). The override retargets the browser only; the target stack must already be running — the Playwright `webServer` readiness poll always checks the local origin.
 
 ## Production deployment
 
