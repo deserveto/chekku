@@ -1,9 +1,11 @@
 import { expect, test, type Page } from '@playwright/test';
 import {
   closeAuthDb,
+  countUsersByEmail,
   deleteTestUser,
   markEmailVerified,
 } from '../helpers/auth-db';
+import { authAlert } from '../helpers/auth-locators';
 
 const runStamp = `${Date.now().toString(36)}-${process.pid ?? 0}`;
 const testEmail = `e2e-auth-${runStamp}@chekku.test`;
@@ -49,9 +51,7 @@ test.describe('auth flow (signup -> verify -> sign-in -> sign-out)', () => {
     });
     await page.getByRole('button', { name: 'Create account' }).click();
 
-    await expect(page.getByRole('alert')).toContainText(
-      'Passwords do not match.',
-    );
+    await expect(authAlert(page, 'Passwords do not match.')).toBeVisible();
     await expect(page).toHaveURL(/\/signup$/);
   });
 
@@ -71,7 +71,9 @@ test.describe('auth flow (signup -> verify -> sign-in -> sign-out)', () => {
     await expect(page.getByText(testEmail).first()).toBeVisible();
   });
 
-  test('rejects signup with an already registered email', async ({ page }) => {
+  test('treats a duplicate signup like a fresh one without creating a second account', async ({
+    page,
+  }) => {
     await page.goto('/signup');
     await fillSignupForm(page, {
       email: testEmail,
@@ -80,17 +82,18 @@ test.describe('auth flow (signup -> verify -> sign-in -> sign-out)', () => {
     });
     await page.getByRole('button', { name: 'Create account' }).click();
 
-    await expect(page.getByRole('alert')).toContainText(/already exist/i);
-    await expect(page).toHaveURL(/\/signup$/);
+    await expect(page.getByText('Check your email.')).toBeVisible();
+    await expect(page.getByText(testEmail).first()).toBeVisible();
+    expect(await countUsersByEmail(testEmail)).toBe(1);
   });
 
   test('rejects sign-in with a wrong password', async ({ page }) => {
     await page.goto('/login');
     await submitSignIn(page, { email: testEmail, password: 'wrong-password' });
 
-    await expect(page.getByRole('alert')).toContainText(
-      'Invalid email or password',
-    );
+    await expect(
+      authAlert(page, 'Invalid email or password'),
+    ).toBeVisible();
     await expect(page).toHaveURL(/\/login$/);
   });
 
@@ -98,7 +101,7 @@ test.describe('auth flow (signup -> verify -> sign-in -> sign-out)', () => {
     await page.goto('/login');
     await submitSignIn(page, { email: testEmail, password: testPassword });
 
-    await expect(page.getByRole('alert')).toContainText(/verif/i);
+    await expect(authAlert(page, /verif/i)).toBeVisible();
     await expect(page).toHaveURL(/\/login$/);
   });
 
@@ -158,9 +161,9 @@ test.describe('reset link form', () => {
     await page.getByLabel('Confirm password').fill('e2e-ResetPass-42');
     await page.getByRole('button', { name: 'Reset password' }).click();
 
-    await expect(page.getByRole('alert')).toContainText(
-      'invalid or has expired',
-    );
+    await expect(
+      authAlert(page, 'invalid or has expired'),
+    ).toBeVisible();
   });
 });
 

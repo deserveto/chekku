@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { authAlert } from '../helpers/auth-locators';
 
 test.describe('auth gate (middleware redirects and public login page)', () => {
   test('redirects unauthenticated visits to /agents back to /login', async ({
@@ -37,9 +38,9 @@ test.describe('auth gate (middleware redirects and public login page)', () => {
   }) => {
     await page.goto('/login?verified=1&error=invalid_token');
 
-    await expect(page.getByRole('alert')).toContainText(
-      'invalid or has expired',
-    );
+    await expect(
+      authAlert(page, 'invalid or has expired'),
+    ).toBeVisible();
     await expect(
       page.getByRole('link', { name: 'Resend verification email' }),
     ).toHaveAttribute('href', '/verify-email');
@@ -78,9 +79,9 @@ test.describe('auth gate (middleware redirects and public login page)', () => {
     await page.goto('/reset-password');
 
     await expect(page.getByText('Reset link problem')).toBeVisible();
-    await expect(page.getByRole('alert')).toContainText(
-      'invalid or has expired',
-    );
+    await expect(
+      authAlert(page, 'invalid or has expired'),
+    ).toBeVisible();
     await expect(
       page.getByRole('link', { name: 'Request a new link' }),
     ).toHaveAttribute('href', '/forgot-password');

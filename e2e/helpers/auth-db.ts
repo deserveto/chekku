@@ -61,6 +61,14 @@ export async function markEmailVerified(email: string): Promise<void> {
   }
 }
 
+export async function countUsersByEmail(email: string): Promise<number> {
+  const result = await getPool().query(
+    'SELECT COUNT(*)::int AS count FROM "user" WHERE "email" = $1',
+    [email],
+  );
+  return result.rows[0]?.count ?? 0;
+}
+
 export async function deleteTestUser(email: string): Promise<void> {
   const client = getPool();
   await client.query('DELETE FROM "verification" WHERE "identifier" = $1', [

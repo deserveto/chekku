@@ -1,0 +1,80 @@
+### TC-AUTH-021 — Rate limit auth (manual, 5 POST per scope per 60 detik)
+### Prasyarat : client dev berjalan di http://localhost:3000
+###             Tunggu 60 detik bila suite E2E / percobaan signin lain baru saja jalan
+###             (semua klien anonim berbagi satu bucket per scope).
+### Langkah   : kirim request 1-6 BERTURUT-TURUT dalam jendela 60 detik
+###             (klik "Send Request" di tiap blok, jangan tunggu di antaranya).
+### Expected  : request 1-5 -> bukan 429 (401 "Invalid email or password" itu NORMAL,
+###             kredensial sengaja dummy; throttling terjadi sebelum autentikasi).
+###             request 6   -> 429 dengan body "Too many requests." + header retry-after.
+
+@baseUrl = http://localhost:3000
+@email = rate-limit-probe@chekku.test
+@password = probe-pass-123
+
+### 1 — signin (boleh 401, TIDAK boleh 429)
+# @name signin1
+POST {{baseUrl}}/api/auth/sign-in/email
+Content-Type: application/json
+
+{
+  "email": "{{email}}",
+  "password": "{{password}}"
+}
+
+###
+
+### 2 — signin (boleh 401, TIDAK boleh 429)
+POST {{baseUrl}}/api/auth/sign-in/email
+Content-Type: application/json
+
+{
+  "email": "{{email}}",
+  "password": "{{password}}"
+}
+
+###
+
+### 3 — signin (boleh 401, TIDAK boleh 429)
+POST {{baseUrl}}/api/auth/sign-in/email
+Content-Type: application/json
+
+{
+  "email": "{{email}}",
+  "password": "{{password}}"
+}
+
+###
+
+### 4 — signin (boleh 401, TIDAK boleh 429)
+POST {{baseUrl}}/api/auth/sign-in/email
+Content-Type: application/json
+
+{
+  "email": "{{email}}",
+  "password": "{{password}}"
+}
+
+###
+
+### 5 — signin (boleh 401, TIDAK boleh 429)
+POST {{baseUrl}}/api/auth/sign-in/email
+Content-Type: application/json
+
+{
+  "email": "{{email}}",
+  "password": "{{password}}"
+}
+
+###
+
+### 6 — signin (EXPECTED: 429 Too many requests + header retry-after)
+POST {{baseUrl}}/api/auth/sign-in/email
+Content-Type: application/json
+
+{
+  "email": "{{email}}",
+  "password": "{{password}}"
+}
+
+###
