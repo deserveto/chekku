@@ -48,6 +48,8 @@ npm run typecheck --workspace agent
 npm run typecheck --workspace client
 npm run lint --workspace client
 npx vitest run path/to/file.test.ts
+npx tsc -p e2e --noEmit
+npm run test:e2e
 ```
 
 A task is not complete until affected tests pass. Before finalizing any repository-level change, run the full `npm run check` and `npm run build` commands.
@@ -408,12 +410,15 @@ Add regression tests for behavior changes, especially:
 
 Tests use Vitest. Keep tests alongside the relevant module or in the existing `__tests__` folder. Do not add a second test runner for new tests.
 
+The single sanctioned exception is the local Playwright E2E suite under `e2e/`: browser end-to-end coverage runs on demand via `npm run test:e2e` (type-checks the specs with `tsc -p e2e --noEmit`, then runs Playwright), is host-only, and is deliberately outside `npm run check`, `npm test`, and CI. Do not add any further test runners.
+
 Test-runner quirks:
 
 - Root `npm test` runs three vitest invocations: the main suite (excluding `scripts/dev.test.ts` and `scripts/prod.test.ts`), then each of those two script tests in isolation. Run one file with `npx vitest run <path>` from the root.
 - Root `vitest.config.ts` discovers tests only as `*.test.ts`/`*.test.tsx` under `agent/src`, `client/src`, `scripts`, and `storage/src`. Default environment is `node`; DOM tests opt in per file with `// @vitest-environment jsdom`. The `@/` alias maps to `client/src/`; timeout is 15 seconds.
 - `vitest.setup.js` pins `WEB_URL` and swaps `@mastra/pg`'s `PostgresStore` for an in-memory store, so unit tests import the Mastra composition root without a running Postgres.
 - `npm run test:web-reader:live` is a live smoke test that activates only under its own script name (`npm_lifecycle_event` guard); it never runs in `npm test` or CI.
+- `npm run test:e2e` runs the Playwright E2E suites from `e2e/` on demand; it needs Postgres up, a configured `client/.env.local`, and Chromium installed (`npx playwright install chromium`). It is host-only and never part of `check`, `npm test`, or CI.
 
 ## Documentation rules
 
