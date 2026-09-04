@@ -10,6 +10,7 @@ import {
 import { z } from 'zod';
 
 import { durableVisualContentAgent } from '../../agents/visual-content-agent.js';
+import { createDurableRunMemoryOptions } from '../../agents/durable-run-memory.js';
 import { unwrapPostMarkdown } from '../social-content/canonical-unit.js';
 
 /**
@@ -72,7 +73,9 @@ function truncateForPrompt(value: string, budget: number): string {
 }
 
 export const defaultGenerateVisual: VisualGenerateFn = (prompt) =>
-  durableVisualContentAgent.generate(prompt).then((result) => result.text);
+  durableVisualContentAgent
+    .generate(prompt, createDurableRunMemoryOptions('visual-content-agent'))
+    .then((result) => result.text);
 
 /**
  * Build the delegation prompt for the Visual Content Agent. Follows the
