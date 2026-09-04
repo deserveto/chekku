@@ -13,6 +13,22 @@ function isStoredAgentMutation(method: string, path: string[]): boolean {
     || ((method === 'PATCH' || method === 'PUT') && path.length === 4);
 }
 
+const BLOCKED_NATIVE_AGENT_ENDPOINTS = new Set(['generate', 'stream']);
+
+/**
+ * `api/agents/:id/{generate,stream}` are the native Mastra LLM-spending
+ * routes. They execute model calls with a caller-chosen resourceId outside
+ * the server-owned run surface, bypassing the token quota, thread
+ * ownership, and concurrency caps. Chat execution must go through
+ * `/api/runs/*`; read-only agent routes stay available through the proxy.
+ */
+function isBlockedNativeAgentRoute(path: string[]): boolean {
+  return path[0] === 'api'
+    && path[1] === 'agents'
+    && path.length === 4
+    && BLOCKED_NATIVE_AGENT_ENDPOINTS.has(path[3]);
+}
+
 function isEmptyToolsSelection(value: unknown): boolean {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const keys = Object.keys(value);
@@ -54,6 +70,9 @@ async function handler(request: NextRequest, context: { params: Promise<{ path: 
     url = buildAgentProxyUrl(process.env.AGENT_URL ?? 'http://localhost:4111', authorizationPath, request.nextUrl.search);
   }
   catch (error) { return new Response(error instanceof Error ? error.message : 'Invalid path', { status: 400 }); }
+  if (isBlockedNativeAgentRoute(authorizationPath)) {
+    return new Response('Blocked native agent generation endpoint. Use the run surface.', { status: 403 });
+  }
   const body = request.method === 'GET' || request.method === 'HEAD' ? undefined : await request.text();
   if (isStoredAgentMutation(request.method, authorizationPath) && !hasAllowedMcpConfig(body ?? '')) {
     return new Response('Invalid stored-agent MCP configuration.', { status: 400 });
