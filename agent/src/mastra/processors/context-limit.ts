@@ -78,17 +78,29 @@ export const TITLE_GENERATION_INSTRUCTIONS = [
   'Your entire response is used verbatim as the title.',
 ].join(' ');
 
+export interface AgentTitleGenerationConfig {
+  /** Resolved by Mastra to the agent's own model when omitted. */
+  model?: unknown;
+  instructions?: string;
+}
+
 export function createAgentMemory(
-  options: { generateTitle?: boolean | { instructions: string } } = {},
+  options: { generateTitle?: boolean | AgentTitleGenerationConfig } = {},
 ): Memory {
-  return new Memory({
+  const generateTitle: boolean | AgentTitleGenerationConfig | undefined =
+    options.generateTitle;
+  // The pinned core d.ts marks `model` required in the generateTitle object
+  // form, but its only consumer (`resolveTitleGenerationConfig`) types it
+  // optional and resolves it to the agent's own model at generation time —
+  // instructions-only is the intended shape and the library type is wrong on
+  // this boundary, hence the assertion.
+  const memoryConfig = {
     options: {
       lastMessages: AGENT_MEMORY_LAST_MESSAGES,
-      generateTitle: options.generateTitle === true
-        ? true
-        : options.generateTitle,
+      generateTitle,
     },
-  });
+  } as unknown as ConstructorParameters<typeof Memory>[0];
+  return new Memory(memoryConfig);
 }
 
 type VisionCountableMessage = {

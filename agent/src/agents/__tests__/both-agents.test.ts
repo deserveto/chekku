@@ -488,7 +488,16 @@ describe('thread title generation (main agents only)', () => {
     ['social-media-supervisor-agent', socialMediaSupervisorAgent],
   ] as const)('enables Mastra title generation on %s', async (_id, agent) => {
     const memory = await agent.getMemory();
-    expect(memory?.getMergedThreadConfig().generateTitle).toBe(true);
+    const generateTitle = memory?.getMergedThreadConfig().generateTitle;
+    // Opt-in carries either the default boolean or the strict instructions
+    // object the first-turn title paths resolve.
+    expect(
+      generateTitle === true
+        || (typeof generateTitle === 'object'
+          && generateTitle !== null
+          && typeof generateTitle.instructions === 'string'
+          && generateTitle.instructions.length > 0),
+    ).toBe(true);
   });
 
   it.each([
