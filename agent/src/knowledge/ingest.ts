@@ -59,6 +59,7 @@ const FIXED_ERRORS = {
   empty: 'No extractable text found in this document.',
   tooLarge: 'This document is too large to index.',
   embedFailed: 'The embedding model request failed.',
+  indexUnavailable: 'The knowledge index is currently unreachable. Check the Qdrant service and retry.',
   indexFailed: 'The knowledge index rejected the update.',
 } as const;
 
@@ -78,6 +79,7 @@ function fixedReason(error: unknown): string {
   if (error instanceof KnowledgeIndexError) {
     if (error.code === 'configuration') return FIXED_ERRORS.unconfigured;
     if (error.code === 'incompatible') return sanitizeReason(error);
+    if (error.code === 'unavailable') return FIXED_ERRORS.indexUnavailable;
     return FIXED_ERRORS.indexFailed;
   }
   return sanitizeReason(error);
@@ -239,6 +241,7 @@ export async function runKnowledgeIngestion(
     }
     await cleanupVectors();
     const reason = fixedReason(error);
+    console.error('[knowledge-ingestion] ingestion failed:', logCode(error), 'documentId:', input.documentId);
     try {
       await failKnowledgeDocumentIngestion(store, input.resourceId, input.documentId, reason, { now });
     } catch (metadataError) {

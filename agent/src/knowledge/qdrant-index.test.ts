@@ -28,7 +28,8 @@ function createFakeClient(options: { existingDimension?: number } = {}) {
   const client = {
     async collectionExists() {
       calls.push({ method: 'collectionExists', args: {} });
-      return dimension !== undefined;
+      // Runtime shape of @qdrant/js-client-rest 1.19: an object, not a boolean.
+      return { exists: dimension !== undefined };
     },
     async createCollection(_collection: string, params: { vectors: FakeConfig }) {
       calls.push({ method: 'createCollection', args: params as unknown as Record<string, unknown> });
@@ -190,7 +191,7 @@ describe('createQdrantKnowledgeIndex', () => {
         calls.push({ method: 'collectionExists' });
         // false on the pre-check; the "other" creator wins while our
         // createCollection is in flight, so the post-failure check sees it.
-        return exists;
+        return { exists };
       },
       async createCollection() {
         calls.push({ method: 'createCollection' });
@@ -214,12 +215,62 @@ describe('createQdrantKnowledgeIndex', () => {
     expect(calls.some((call) => call.method === 'createCollection')).toBe(true);
   });
 
+  it('creates a missing collection when the double matches the real exists shape', async () => {
+    // Regression: the runtime client resolves collectionExists to
+    // `{ exists: boolean }`; a truthy object typed as boolean once made the
+    // missing-collection guard skip creation and ingestion 404 instead.
+    const fake = createFakeClient();
+    const index = createQdrantKnowledgeIndex({ client: fake.client, collection: 'c' });
+    await expect(index.ensureCollection(8)).resolves.toBeUndefined();
+    expect(fake.calls.some((call) => call.method === 'createCollection')).toBe(true);
+  });
+
+  it('logs an operation-tagged failure with the error name only', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const rawProviderMessage = 'Not Found: collection c does not exist on http://secret-host:6333';
+    const failing = {
+      async collectionExists() {
+        return { exists: true };
+      },
+      async createCollection() {},
+      async getCollection() {},
+      async createPayloadIndex() {},
+      async upsert() {
+        throw new Error(rawProviderMessage);
+      },
+      async delete() {
+        throw new Error(rawProviderMessage);
+      },
+      async query() {
+        throw new Error(rawProviderMessage);
+      },
+    };
+    const index = createQdrantKnowledgeIndex({ client: failing, collection: 'c' });
+
+    await expect(index.upsertPoints([point()])).rejects.toMatchObject({ code: 'unavailable' });
+    await expect(index.deleteDocumentPoints('user-a', 'kbd_20260828101112_abcd1234')).rejects.toMatchObject({ code: 'unavailable' });
+    await expect(index.search([1, 0, 0], 'user-a', 5)).rejects.toMatchObject({ code: 'unavailable' });
+
+    const opLogs = errorSpy.mock.calls
+      .map((call) => String(call[0]))
+      .filter((line) => line.includes('[knowledge] qdrant'));
+    expect(opLogs).toContain('[knowledge] qdrant upsertPoints failed:');
+    expect(opLogs).toContain('[knowledge] qdrant deleteDocumentPoints failed:');
+    expect(opLogs).toContain('[knowledge] qdrant search failed:');
+    // The log carries only the error NAME; the raw provider message with the
+    // host URL never reaches the console.
+    for (const call of errorSpy.mock.calls) {
+      expect(call.join(' ')).not.toContain('secret-host');
+    }
+    errorSpy.mockRestore();
+  });
+
   it('repairs a half-created collection whose payload indexes are missing', async () => {
     const calls: Array<{ method: string; args?: unknown }> = [];
     const indexedFields = new Set<string>();
     const client = {
       async collectionExists() {
-        return true;
+        return { exists: true };
       },
       async createCollection() {},
       async getCollection() {

@@ -72,9 +72,15 @@ export interface QdrantKnowledgeIndexOptions {
  * The narrow slice of the Qdrant REST client Chekku actually uses. Defining
  * it structurally keeps the seam testable without dragging QdrantClient's
  * full parameter unions into tests.
+ *
+ * `collectionExists` resolves to `{ exists: boolean }` — the runtime shape
+ * of `@qdrant/js-client-rest`'s method. Typing it as a bare `boolean` once
+ * made every missing-collection guard skip its branch (a truthy object is
+ * never falsy), so ingestion 404'd against an absent collection instead of
+ * creating it; keep the object shape authoritative.
  */
 export interface QdrantClientLike {
-  collectionExists(collection: string): Promise<boolean>;
+  collectionExists(collection: string): Promise<{ exists: boolean }>;
   createCollection(collection: string, params: { vectors: { size: number; distance: 'Cosine' } }): Promise<unknown>;
   getCollection(collection: string): Promise<unknown>;
   createPayloadIndex(collection: string, params: {
@@ -182,6 +188,15 @@ function collectionVectorSize(collectionInfo: unknown): number | undefined {
   }
 }
 
+/** Fixed-code operation logging: safe operation name + error code/name only —
+ * never API keys, URLs, provider bodies, or raw payloads. */
+function logQdrantOperationFailure(operation: string, error: unknown): void {
+  const code = error instanceof KnowledgeIndexError ? error.code
+    : error instanceof Error ? error.name
+    : 'unknown';
+  console.error(`[knowledge] qdrant ${operation} failed:`, code);
+}
+
 function mapIndexError(error: unknown): KnowledgeIndexError {
   if (error instanceof KnowledgeIndexError) return error;
   // Fixed-code logging: raw provider errors can embed URLs and bodies, so
@@ -196,12 +211,11 @@ function mapIndexError(error: unknown): KnowledgeIndexError {
 function indexedPayloadFields(collectionInfo: unknown): Set<string> {
   const fields = new Set<string>();
   if (typeof collectionInfo !== 'object' || collectionInfo === null) return fields;
-  if (!('payload_schema' in collectionInfo)) return fields;
-  const schema: unknown = collectionInfo.payload_schema;
+  const schema = (collectionInfo as { payload_schema?: unknown }).payload_schema;
   if (Array.isArray(schema)) {
     for (const entry of schema) {
-      if (entry !== null && typeof entry === 'object' && 'field_name' in entry) {
-        const name: unknown = entry.field_name;
+      if (typeof entry === 'object' && entry !== null && 'field_name' in entry) {
+        const name = (entry as { field_name?: unknown }).field_name;
         if (typeof name === 'string') fields.add(name);
       }
     }
@@ -259,7 +273,7 @@ export function createQdrantKnowledgeIndex(explicit?: QdrantKnowledgeIndexOption
     async ensureCollection(dimension: number): Promise<void> {
       try {
         const client = getClient();
-        if (!(await client.collectionExists(options.collection))) {
+        if (!(await client.collectionExists(options.collection)).exists) {
           try {
             await client.createCollection(options.collection, {
               vectors: { size: dimension, distance: 'Cosine' },
@@ -268,7 +282,7 @@ export function createQdrantKnowledgeIndex(explicit?: QdrantKnowledgeIndexOption
             // Lost a concurrent first-upload race: the winner's collection
             // is exactly as good as ours would have been. Only a still-missing
             // collection is a real failure.
-            if (!(await client.collectionExists(options.collection))) throw error;
+            if (!(await client.collectionExists(options.collection)).exists) throw error;
           }
         }
         const info = await client.getCollection(options.collection);
@@ -286,6 +300,7 @@ export function createQdrantKnowledgeIndex(explicit?: QdrantKnowledgeIndexOption
         await ensurePayloadIndex(client, options.collection, 'resourceId');
         await ensurePayloadIndex(client, options.collection, 'documentId');
       } catch (error) {
+        logQdrantOperationFailure('ensureCollection', error);
         throw mapIndexError(error);
       }
     },
@@ -296,12 +311,13 @@ export function createQdrantKnowledgeIndex(explicit?: QdrantKnowledgeIndexOption
     async deleteDocumentPoints(resourceId: string, documentId: string): Promise<void> {
       try {
         const client = getClient();
-        if (!(await client.collectionExists(options.collection))) return;
+        if (!(await client.collectionExists(options.collection)).exists) return;
         await client.delete(options.collection, {
           filter: tenantFilter(resourceId, documentId),
           wait: true,
         });
       } catch (error) {
+        logQdrantOperationFailure('deleteDocumentPoints', error);
         throw mapIndexError(error);
       }
     },
@@ -322,6 +338,7 @@ export function createQdrantKnowledgeIndex(explicit?: QdrantKnowledgeIndexOption
           });
         }
       } catch (error) {
+        logQdrantOperationFailure('upsertPoints', error);
         throw mapIndexError(error);
       }
     },
@@ -332,7 +349,7 @@ export function createQdrantKnowledgeIndex(explicit?: QdrantKnowledgeIndexOption
     async search(queryVector: number[], resourceId: string, limit: number): Promise<KnowledgeSearchHit[]> {
       try {
         const client = getClient();
-        if (!(await client.collectionExists(options.collection))) return [];
+        if (!(await client.collectionExists(options.collection)).exists) return [];
         const response = await client.query(options.collection, {
           query: queryVector,
           limit,
@@ -347,6 +364,7 @@ export function createQdrantKnowledgeIndex(explicit?: QdrantKnowledgeIndexOption
         }
         return hits;
       } catch (error) {
+        logQdrantOperationFailure('search', error);
         throw mapIndexError(error);
       }
     },
