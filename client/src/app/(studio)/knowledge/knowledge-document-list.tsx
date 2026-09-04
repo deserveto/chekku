@@ -35,6 +35,10 @@ function kindLabel(mimeType: string, kind: 'text' | 'pdf'): string {
   return suffix.length > 0 ? `Text (${suffix})` : 'Text';
 }
 
+function kindGlyph(kind: 'text' | 'pdf'): string {
+  return kind === 'pdf' ? '⎘' : '≡';
+}
+
 const STATUS_LABELS: Record<KnowledgeDocumentView['status'], string> = {
   processing: 'Processing',
   ready: 'Ready',
@@ -47,7 +51,7 @@ export function KnowledgeDocumentList({ initialDocuments }: { initialDocuments: 
   const [pendingDeleteId, setPendingDeleteId] = useState<string | undefined>();
   const [deleting, setDeleting] = useState(false);
   const [retryingId, setRetryingId] = useState<string | undefined>();
-  /** Docs whose deletion is fired but not yet confirmed by a poll. Their rows
+  /** Docs whose deletion is fired but not yet confirmed by a poll. Their cards
    * stay visible as "Deleting…" — optimistic removal would hide a failed
    * purge forever, because polling only runs while the list is not settled. */
   const [deletingIds, setDeletingIds] = useState<ReadonlySet<string>>(new Set());
@@ -81,11 +85,11 @@ export function KnowledgeDocumentList({ initialDocuments }: { initialDocuments: 
           for (const id of next) {
             const started = deleteStartsRef.current.get(id) ?? now;
             if (!serverIds.has(id)) {
-              // Poll confirmed the purge — row is gone, stop tracking.
+              // Poll confirmed the purge — card is gone, stop tracking.
               next.delete(id);
               deleteStartsRef.current.delete(id);
             } else if (now - started > DELETE_CONFIRM_WINDOW_MS) {
-              // Deletion stalled server-side; release the row so the user
+              // Deletion stalled server-side; release the card so the user
               // sees its stored status and can retry.
               next.delete(id);
               deleteStartsRef.current.delete(id);
@@ -114,9 +118,10 @@ export function KnowledgeDocumentList({ initialDocuments }: { initialDocuments: 
       setActionError(result.message);
       return;
     }
-    // Deletion is asynchronous server-side: keep the row as "Deleting…" and
-    // let polling confirm removal. If the purge job fails, the row's stored
-    // status becomes visible again instead of silently never coming back.
+    // Deletion is asynchronous server-side: keep the card as "Deleting…" and
+    // let polling confirm removal. If the purge job fails, the document's
+    // stored status becomes visible again instead of silently never coming
+    // back.
     deleteStartsRef.current.set(documentId, Date.now());
     setDeletingIds((current) => new Set(current).add(documentId));
   }, [pendingDeleteId]);
@@ -141,11 +146,12 @@ export function KnowledgeDocumentList({ initialDocuments }: { initialDocuments: 
   if (documents.length === 0) {
     return (
       <section className="studio-section">
-        <div className="studio-empty-state">
+        <div className="studio-empty-state studio-knowledge-empty">
+          <span className="studio-agent-glyph" aria-hidden="true">≡</span>
           <h3>No documents in your Knowledge yet.</h3>
           <p>
-            Supported documents you upload in chat — text files and PDFs — are saved here
-            automatically and become searchable for your agents.
+            Attach a text file or PDF in chat and it lands here automatically —
+            parsed, indexed, and searchable by every agent in your studio.
           </p>
         </div>
       </section>
@@ -160,85 +166,95 @@ export function KnowledgeDocumentList({ initialDocuments }: { initialDocuments: 
         </div>
       ) : null}
       <div
-        className="studio-report-table-wrap studio-panel"
-        tabIndex={0}
-        role="region"
+        className="studio-report-grid studio-knowledge-grid"
+        role="list"
         aria-label="Knowledge documents"
       >
-        <table className="studio-report-table">
-          <thead>
-            <tr>
-              <th>Document</th>
-              <th>Type</th>
-              <th>Size</th>
-              <th>Uploaded</th>
-              <th>Status</th>
-              <th>Indexed chunks</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {documents.map((doc) => (
-              <tr key={doc.id}>
-                <td>{doc.filename}</td>
-                <td>{kindLabel(doc.mimeType, doc.kind)}</td>
-                <td>{formatBytes(doc.sizeBytes)}</td>
-                <td>{formatUploadedAt(doc.createdAt)}</td>
-                <td>
-                  {deletingIds.has(doc.id) ? (
-                    <span data-knowledge-status="deleting">Deleting…</span>
-                  ) : (
-                    <span
-                      data-knowledge-status={doc.status}
-                      title={doc.error ?? STATUS_LABELS[doc.status]}
-                    >
-                      {STATUS_LABELS[doc.status]}
-                      {doc.status === 'failed' && doc.error ? ': ' : ''}
-                      {doc.status === 'failed' && doc.error ? doc.error : ''}
-                    </span>
-                  )}
-                </td>
-                <td>
-                  {doc.chunkCount ?? '—'}
-                </td>
-                <td>
-                  <div className="studio-action-row">
-                    <a href={`/api/storage/knowledge/documents/${encodeURIComponent(doc.id)}/original`}>
-                      Open
-                    </a>
-                    {doc.status === 'failed' || doc.status === 'processing' ? (
-                      <button
-                        type="button"
-                        className="studio-button"
-                        disabled={retryingId === doc.id || (doc.status === 'processing' && !isStaleProcessing(doc))}
-                        onClick={() => void retry(doc.id)}
-                      >
-                        {retryingId === doc.id ? 'Retrying…' : 'Retry indexing'}
-                      </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="studio-button"
-                      disabled={deletingIds.has(doc.id)}
-                      onClick={() => setPendingDeleteId(doc.id)}
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        {documents.map((doc) => {
+          const deleting = deletingIds.has(doc.id);
+          const retryable =
+            doc.status === 'failed'
+            || (doc.status === 'processing' && isStaleProcessing(doc));
+          return (
+            <article
+              className="studio-report-card"
+              role="listitem"
+              key={doc.id}
+              data-knowledge-document={doc.status}
+            >
+              <div className="studio-agent-card-top">
+                <span className="studio-agent-glyph" aria-hidden="true">
+                  {kindGlyph(doc.kind)}
+                </span>
+                <span
+                  className="studio-source-badge"
+                  data-knowledge-status={deleting ? 'deleting' : doc.status}
+                >
+                  {deleting ? 'Deleting…' : STATUS_LABELS[doc.status]}
+                </span>
+              </div>
+
+              <div>
+                <h3 className="studio-knowledge-name">{doc.filename}</h3>
+              </div>
+
+              <dl className="studio-agent-meta">
+                <div>
+                  <dt>Type</dt>
+                  <dd>{kindLabel(doc.mimeType, doc.kind)}</dd>
+                </div>
+                <div>
+                  <dt>Size</dt>
+                  <dd>{formatBytes(doc.sizeBytes)}</dd>
+                </div>
+                <div>
+                  <dt>Uploaded</dt>
+                  <dd>{formatUploadedAt(doc.createdAt)}</dd>
+                </div>
+                <div>
+                  <dt>Indexed chunks</dt>
+                  <dd data-knowledge-chunks>{doc.chunkCount ?? '—'}</dd>
+                </div>
+              </dl>
+
+              {doc.status === 'failed' && doc.error ? (
+                <p className="studio-knowledge-reason">{doc.error}</p>
+              ) : null}
+
+              <div className="studio-card-actions">
+                <a
+                  className="studio-button"
+                  href={`/api/storage/knowledge/documents/${encodeURIComponent(doc.id)}/original`}
+                >
+                  Open
+                </a>
+                {retryable ? (
+                  <button
+                    type="button"
+                    className="studio-button"
+                    disabled={retryingId === doc.id}
+                    onClick={() => void retry(doc.id)}
+                  >
+                    {retryingId === doc.id ? 'Retrying…' : 'Retry indexing'}
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="studio-button studio-knowledge-danger"
+                  disabled={deletingIds.has(doc.id)}
+                  onClick={() => setPendingDeleteId(doc.id)}
+                >
+                  Delete
+                </button>
+              </div>
+            </article>
+          );
+        })}
       </div>
       <ConfirmationDialog
         open={pendingDeleteId !== undefined}
         title="Delete from Knowledge?"
-        description={
-          pendingDeleteId === undefined
-            ? ''
-            : `"${documents.find((doc) => doc.id === pendingDeleteId)?.filename ?? pendingDeleteId}" will be removed from your Knowledge. Agents will no longer find its content.`
-        }
+        description="The document, its extracted text, and its index entries are removed. Chats that used it are not affected."
         confirmLabel="Delete"
         pending={deleting}
         onCancel={() => setPendingDeleteId(undefined)}

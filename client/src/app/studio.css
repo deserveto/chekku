@@ -3692,6 +3692,82 @@ dialog.chat-task-dock-dialog[open] {
   outline-offset: 1px;
 }
 
+/* ── Knowledge library — report-card parity, status as badge color ── */
+
+.studio-knowledge-empty .studio-agent-glyph {
+  width: 44px;
+  height: 44px;
+  font-size: 20px;
+  border-color: var(--studio-line);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.studio-knowledge-name {
+  margin: 0;
+  font: 550 13px/1.4 var(--font-inter);
+  color: var(--studio-ink);
+  overflow-wrap: anywhere;
+}
+
+.studio-agent-meta .studio-knowledge-name + * {
+  margin-top: 0;
+}
+
+.studio-source-badge[data-knowledge-status='ready'] {
+  color: var(--studio-success);
+  border-color: rgb(201 213 191 / 38%);
+}
+
+.studio-source-badge[data-knowledge-status='processing'] {
+  color: var(--studio-warning);
+  border-color: rgb(229 183 143 / 38%);
+}
+
+.studio-source-badge[data-knowledge-status='failed'] {
+  color: var(--studio-danger);
+  border-color: rgb(228 169 162 / 38%);
+}
+
+.studio-source-badge[data-knowledge-status='deleting'] {
+  color: var(--studio-muted);
+  font-style: italic;
+}
+
+.studio-report-card[data-knowledge-document='failed'] {
+  border-color: rgb(228 169 162 / 26%);
+}
+
+.studio-knowledge-reason {
+  margin: 10px 16px 0;
+  padding: 8px 10px;
+  border: 1px solid rgb(228 169 162 / 22%);
+  border-radius: 4px;
+  background: rgb(228 169 162 / 6%);
+  color: var(--studio-danger);
+  font: 11.5px/16px var(--font-inter);
+  overflow-wrap: anywhere;
+}
+
+.studio-card-actions .studio-knowledge-danger {
+  color: var(--studio-danger);
+}
+
+.studio-card-actions .studio-knowledge-danger:hover:not(:disabled) {
+  border-color: rgb(228 169 162 / 45%);
+}
+
+.studio-knowledge-grid {
+  grid-template-columns: repeat(auto-fill, minmax(292px, 1fr));
+}
+
+@media (max-width: 760px) {
+  .studio-knowledge-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .chat-knowledge-status[data-knowledge-state='failed'] {
   color: var(--studio-warning);
   border-style: solid;

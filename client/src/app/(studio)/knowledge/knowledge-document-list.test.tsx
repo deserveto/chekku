@@ -50,7 +50,7 @@ describe('KnowledgeDocumentList', () => {
   it('shows the empty state when no documents exist', () => {
     const container = render(<KnowledgeDocumentList initialDocuments={[]} />);
     expect(container.textContent).toContain('No documents in your Knowledge yet.');
-    expect(container.textContent).toContain('upload in chat');
+    expect(container.textContent).toContain('Attach a text file or PDF in chat');
   });
 
   it('lists documents with filename, type, size, date, status, and chunk count', () => {
@@ -92,7 +92,7 @@ describe('KnowledgeDocumentList', () => {
     expect(buttons).toContain('Retry indexing');
   });
 
-  it('aligns header columns with row cells and renders chunk counts in their own column', () => {
+  it('renders every document card with status badge, meta, and chunk count', () => {
     const container = render(
       <KnowledgeDocumentList
         initialDocuments={[
@@ -109,26 +109,34 @@ describe('KnowledgeDocumentList', () => {
         ]}
       />,
     );
-    const headerCount = container.querySelectorAll('thead th').length;
-    for (const row of container.querySelectorAll('tbody tr')) {
-      expect(row.querySelectorAll('td')).toHaveLength(headerCount);
-    }
-    const rows = [...container.querySelectorAll('tbody tr')];
-    // Ready row: the "Indexed chunks" column (6th) carries the count.
-    expect(rows[0]?.querySelectorAll('td')[5]?.textContent).toBe('12');
-    // Processing row: no count yet — an em dash placeholder, and Actions stay last.
-    expect(rows[1]?.querySelectorAll('td')[5]?.textContent).toBe('—');
-    expect(rows[1]?.querySelectorAll('td')[6]?.textContent).toContain('Delete');
+    const cards = [...container.querySelectorAll('article[data-knowledge-document]')];
+    expect(cards).toHaveLength(2);
+
+    // Ready card: badge state, the chunk count in its own meta entry, and
+    // actions last.
+    expect(cards[0]?.getAttribute('data-knowledge-document')).toBe('ready');
+    expect(
+      cards[0]?.querySelector('[data-knowledge-status]')?.getAttribute('data-knowledge-status'),
+    ).toBe('ready');
+    expect(cards[0]?.querySelector('[data-knowledge-chunks]')?.textContent).toBe('12');
+    expect(cards[0]?.textContent).toContain('Open');
+    expect(cards[0]?.textContent).toContain('Delete');
+
+    // Processing card: no count yet — an em dash placeholder; no Open-less card.
+    expect(cards[1]?.getAttribute('data-knowledge-document')).toBe('processing');
+    expect(cards[1]?.querySelector('[data-knowledge-chunks]')?.textContent).toBe('—');
   });
 
-  it('shows an em dash chunk placeholder for failed documents', () => {
+  it('shows the failure reason on its own line with an em dash chunk placeholder', () => {
     const container = render(
       <KnowledgeDocumentList
         initialDocuments={[doc({ status: 'failed', error: 'boom', chunkCount: undefined })]}
       />,
     );
-    const row = container.querySelector('tbody tr');
-    expect(row?.querySelectorAll('td')[5]?.textContent).toBe('—');
+    const card = container.querySelector('article[data-knowledge-document]');
+    expect(card?.getAttribute('data-knowledge-document')).toBe('failed');
+    expect(card?.querySelector('[data-knowledge-chunks]')?.textContent).toBe('—');
+    expect(card?.querySelector('.studio-knowledge-reason')?.textContent).toBe('boom');
   });
 
   it('does not offer retry for ready documents', () => {
