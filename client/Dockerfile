@@ -19,6 +19,10 @@ FROM node:22-bookworm-slim AS builder
 # production NODE_ENV (forcing development trips the non-standard-NODE_ENV
 # warning and breaks `/_global-error` prerendering).
 WORKDIR /app
+# Defensive: playwright@1.61.1 ships no install script, so `npm ci` downloads
+# no browsers either way. Skip the download should any playwright version in
+# the lock graph ever ship an install script; E2E never runs in the image.
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 # Copy workspace manifests first for a cacheable `npm ci` layer. All three
 # workspace package.json files are needed so npm can resolve the workspaces.
 COPY package.json package-lock.json ./

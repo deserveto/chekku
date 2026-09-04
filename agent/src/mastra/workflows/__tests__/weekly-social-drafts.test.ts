@@ -7,7 +7,7 @@ import {
   resolveContentWriterInstructions,
   socialMediaContentWriter,
 } from '../../../agents/social-media-content-writer.js';
-import { socialMediaSupervisorAgent } from '../../../agents/social-media-supervisor-agent.js';
+import { durableSocialMediaSupervisorAgent } from '../../../agents/social-media-supervisor-agent.js';
 import type { SearxngSearchOutput, SearxngSearchResult } from '../../searxng/client.js';
 import type { SendEmailInput } from '../../tools/send-email.js';
 import type { Topic } from '../special-days.js';
@@ -41,6 +41,15 @@ const envMock = vi.hoisted(() => ({
   PUBLIC_HOLIDAY_API_BASE_URL: '',
   PUBLIC_HOLIDAY_CACHE_DIR: '',
   WEB_READER_BASE_URL: '',
+  // The durable wrappers (supervisor, strategist, visual) resolve their
+  // model eagerly at construction (`createDurableAgent` calls
+  // `agent.getModel()`), and importing the supervisor transitively imports
+  // the strategist/visual modules. Without a configured model the wrapper
+  // construction throws under this partial env mock. `getServerModel`
+  // only returns a router id string — no network access happens here.
+  LLM_BASE_URL: 'http://gateway.test',
+  LLM_API_KEY: 'test-key',
+  LLM_DEFAULT_MODEL: 'test-model',
 }));
 
 vi.mock('../../../config/env.js', () => ({ env: envMock }));
@@ -857,8 +866,10 @@ describe('Content Writer mode resolution (review issue #1)', () => {
   });
 
   it('defaultGenerateCanonical routes via the Supervisor with canonical mode and NO instructions override', async () => {
+    // Task D Fase 2: the workflow calls the durable supervisor wrapper;
+    // `requestContext` rides through `DurableAgentStreamOptions` unchanged.
     const spy = vi
-      .spyOn(socialMediaSupervisorAgent, 'generate')
+      .spyOn(durableSocialMediaSupervisorAgent, 'generate')
       .mockResolvedValue({ text: 'unit' } as never);
     try {
       await defaultGenerateCanonical('hello prompt');

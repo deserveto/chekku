@@ -1,0 +1,159 @@
+# Production overlay: the application containers, merged over the infra base.
+# Always invoked as:
+#   docker compose -f compose.yaml -f compose.prod.yaml ...
+# or through scripts/prod.sh, which passes this pair on every invocation and
+# fails closed on missing production values. Development never merges this
+# file (scripts/dev.sh pairs the base with compose.dev.yaml instead). The
+# merged production config publishes exactly two loopback ports: the client
+# (for the reverse proxy) and postgres (for host-run migrations/backups).
+services:
+  agent:
+    build:
+      context: .
+      dockerfile: agent/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      garage:
+        condition: service_healthy
+      searxng:
+        condition: service_healthy
+      reader:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 4111
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      MASTRA_TELEMETRY_DISABLED: ${MASTRA_TELEMETRY_DISABLED:-true}
+      WEB_URL: ${WEB_URL:-http://localhost:3000}
+      # Postgres lives on the Compose default network under service name `postgres`.
+      DATABASE_URL: postgresql://chekku:${POSTGRES_PASSWORD:-postgres}@postgres:5432/chekku_agent
+      # Single OpenAI-compatible model gateway (server-only credentials).
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_DEFAULT_MODEL: ${LLM_DEFAULT_MODEL:-}
+      LLM_DISPLAY_NAME: ${LLM_DISPLAY_NAME:-OpenAI-compatible endpoint}
+      LLM_MODELS: ${LLM_MODELS:-}
+      LLM_IMAGE_MODEL: ${LLM_IMAGE_MODEL:-}
+      LLM_IMAGE_ENDPOINT_PATH: ${LLM_IMAGE_ENDPOINT_PATH:-/images/generations}
+      # Garage object storage. The endpoint is fixed to the in-container
+      # service name (the dev-oriented 127.0.0.1:3900 from storage/.env.local
+      # must NOT reach the container). Region, bucket, and credentials come
+      # from storage/.env.local via the shell environment.
+      GARAGE_ENDPOINT: http://garage:3900
+      GARAGE_REGION: ${GARAGE_REGION:-}
+      GARAGE_BUCKET: ${GARAGE_BUCKET:-}
+      GARAGE_ACCESS_KEY_ID: ${GARAGE_ACCESS_KEY_ID:-}
+      GARAGE_SECRET_ACCESS_KEY: ${GARAGE_SECRET_ACCESS_KEY:-}
+      # SearXNG search; fixed to the in-container service (listens on 8080).
+      SEARXNG_BASE_URL: http://searxng:8080
+      SEARXNG_API_KEY: ${SEARXNG_API_KEY:-}
+      # Self-hosted Jina Reader (OSS image); fixed to the in-container service
+      # HTTP/1.1 endpoint. No API key — the local Reader is unauthenticated.
+      WEB_READER_BASE_URL: http://reader:8081
+      # Knowledge Base vector index (Qdrant). Fixed to the in-container
+      # service name. LLM_EMBEDDING_MODEL must be set for ingestion and
+      # retrieval to work; empty keeps every KB tool failing closed.
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-chekku_knowledge}
+      LLM_EMBEDDING_MODEL: ${LLM_EMBEDDING_MODEL:-}
+      PUBLIC_HOLIDAY_API_BASE_URL: ${PUBLIC_HOLIDAY_API_BASE_URL:-https://api-hari-libur.vercel.app/api}
+      CHEKKU_DEFAULT_AGENT_ID: ${CHEKKU_DEFAULT_AGENT_ID:-main-agent}
+      # Per-user daily token quota. Empty/unset falls back to the agent
+      # server's 500000 default; 0 disables enforcement.
+      TOKEN_DAILY_LIMIT: ${TOKEN_DAILY_LIMIT:-}
+      CHEKKU_LOCAL_USER_ID: ${CHEKKU_LOCAL_USER_ID:-local-user}
+      BROWSER_HEADLESS: ${BROWSER_HEADLESS:-true}
+      # Optional integrations (empty is safe; the server boots without them).
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_MODE: ${TELEGRAM_MODE:-webhook}
+      TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
+      TELEGRAM_WEBHOOK_SECRET_TOKEN: ${TELEGRAM_WEBHOOK_SECRET_TOKEN:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-Chekku <onboarding@resend.dev>}
+      SOCIAL_DRAFT_REVIEW_EMAIL: ${SOCIAL_DRAFT_REVIEW_EMAIL:-}
+      # Maestro (QA Android) stays host/device-only; never enabled in-container.
+      MAESTRO_ENABLED: "false"
+    # No published ports: the agent is reached only by the client over the
+    # Compose default network (AGENT_URL=http://agent:4111).
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4111/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 15s
+
+  client:
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+      # NEXT_PUBLIC_APP_URL is inlined by `next build`, so it must reach the
+      # builder stage as an arg (the runtime `environment:` below is not enough
+      # for client-bundle values). Operator sets it in client/.env.local.
+      args:
+        NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+    restart: unless-stopped
+    depends_on:
+      agent:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+      # Same-origin proxy targets the agent by its Compose service name.
+      AGENT_URL: http://agent:4111
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+      CHEKKU_LOCAL_USER_ID: ${CHEKKU_LOCAL_USER_ID:-local-user}
+      AGENT_SERVICE_TOKEN: ${AGENT_SERVICE_TOKEN:-}
+      # The Next.js server reads Garage objects for /reports/* and /social-posts/*
+      # through @chekku/storage, so it needs the same Garage credentials as agent.
+      # Endpoint is fixed to the in-container service name (see agent service).
+      GARAGE_ENDPOINT: http://garage:3900
+      GARAGE_REGION: ${GARAGE_REGION:-}
+      GARAGE_BUCKET: ${GARAGE_BUCKET:-}
+      GARAGE_ACCESS_KEY_ID: ${GARAGE_ACCESS_KEY_ID:-}
+      GARAGE_SECRET_ACCESS_KEY: ${GARAGE_SECRET_ACCESS_KEY:-}
+      # Better Auth (email/password + email verification). The secret and the
+      # public base URL come from client/.env.local through scripts/prod.sh.
+      # BETTER_AUTH_URL must match the browser-facing origin or verification
+      # links and session cookies break.
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:-}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:3000}
+      # Fixed to the in-container service name, exactly like the agent's
+      # DATABASE_URL above. AUTH_DATABASE_URL in client/.env.local keeps its
+      # 127.0.0.1 form because scripts/db-migrate.sh runs the Better Auth CLI
+      # on the host; that value must NOT reach the container.
+      AUTH_DATABASE_URL: postgresql://chekku:${POSTGRES_PASSWORD:-postgres}@postgres:5432/chekku_auth
+      # Verification email transport. Without a key the link is only logged to
+      # this container's stdout, so nobody can finish signup.
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-Chekku <onboarding@resend.dev>}
+      # Set to "true" only behind a reverse proxy that supplies a trustworthy
+      # x-forwarded-for; otherwise all anonymous auth traffic shares one bucket.
+      RATE_LIMIT_TRUST_PROXY: ${RATE_LIMIT_TRUST_PROXY:-}
+    ports:
+      # Loopback only; put a reverse proxy (Caddy/nginx) in front for TLS and
+      # public exposure. The host port is overridable for machines where 3000 is
+      # already taken; the container port stays 3000.
+      - "127.0.0.1:${CHEKKU_CLIENT_HOST_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 8s
+
+  postgres:
+    # Loopback publish for host-run maintenance: scripts/db-migrate.sh (the
+    # Better Auth CLI) and pg_dump reach Postgres through the 127.0.0.1:5432
+    # AUTH_DATABASE_URL form. A loopback binding is not a provisioned public
+    # port; the only public surface remains the client behind the reverse
+    # proxy. The host port is overridable; containers always talk to
+    # postgres:5432.
+    ports:
+      - "127.0.0.1:${CHEKKU_POSTGRES_HOST_PORT:-5432}:5432"

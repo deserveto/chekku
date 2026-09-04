@@ -4,8 +4,8 @@
   "description": "Chekku's Mastra agent runtime.",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "dev": "mastra dev",
-    "build": "mastra build",
+    "dev": "node ../scripts/mastra-dev.mjs",
+    "build": "mastra build && node ../scripts/fix-mastra-specifiers.mjs",
     "start": "mastra start"
   },
   "keywords": [
@@ -31,9 +31,11 @@
     "@mastra/memory": "^1.22.1",
     "@mastra/pg": "1.15.0",
     "@napi-rs/canvas": "^0.1.65",
+    "@qdrant/js-client-rest": "1.19.0",
     "chat": "4.34.0",
     "dotenv": "^17.3.1",
     "ipaddr.js": "^2.4.0",
+    "pdfjs-dist": "6.2.108",
     "zod": "3.25.76"
   },
   "devDependencies": {

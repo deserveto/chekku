@@ -7,9 +7,9 @@
 #   scripts/prod.sh down      stop and remove containers (keeps volumes)
 #
 # Development stays unchanged: scripts/dev.sh runs the agent and client as host
-# processes and only starts garage, searxng, and postgres. The agent and client
-# services in compose.yaml are gated behind the `prod` profile, so this script
-# is the only path that activates them.
+# processes and only starts the infra services. The agent and client services
+# live in compose.prod.yaml, so this script is the only path that merges the
+# prod overlay and brings the whole stack up as containers.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
@@ -85,13 +85,13 @@ require_env() {
 }
 
 # ----- Compose invocation ---------------------------------------------------
-# `--env-file storage/.env.local` is passed for parity with scripts/dev.sh and
-# keeps the infra services' ${VAR:?} interpolation resolving. Application values
-# arrive via the shell environment sourced above; compose reads them from there.
-COMPOSE=(docker compose --env-file storage/.env.local --profile prod)
+# `--env-file storage/.env.local` keeps the infra services' ${VAR:?}
+# interpolation resolving. The base + prod overlay pair is the production
+# config; application values arrive via the shell environment sourced above.
+COMPOSE=(docker compose --env-file storage/.env.local -f compose.yaml -f compose.prod.yaml)
 
 if ! "${COMPOSE[@]}" config --quiet >/dev/null 2>&1; then
-  echo "Production Compose configuration is invalid. Check compose.yaml and the env files." >&2
+  echo "Production Compose configuration is invalid. Check compose.yaml, compose.prod.yaml, and the env files." >&2
   exit 1
 fi
 
@@ -201,6 +201,7 @@ wait_healthy() {
 wait_healthy garage Garage
 wait_healthy searxng SearXNG
 wait_healthy reader Reader
+wait_healthy qdrant Qdrant
 wait_healthy postgres Postgres
 wait_healthy agent Agent
 wait_healthy client Client

@@ -184,7 +184,7 @@ beforeEach(async () => {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
-  HTMLElement.prototype.scrollIntoView = vi.fn();
+  HTMLElement.prototype.scrollTo = vi.fn();
 
   act(() => {
     root!.render(

@@ -1,12 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { mainAgent } from '../main-agent.js';
-import { pmAgent } from '../pm-agent.js';
-import { qaWebAgent } from '../qa-web-agent.js';
+import { mastra } from '../../mastra/index.js';
+import { durableMainAgent, mainAgent } from '../main-agent.js';
+import { durablePmAgent, pmAgent } from '../pm-agent.js';
+import { durableQaWebAgent, qaWebAgent } from '../qa-web-agent.js';
 import { qaAndroidAgent } from '../qa-android-agent.js';
 import { socialMediaContentWriter } from '../social-media-content-writer.js';
-import { socialMediaStrategistAgent } from '../social-media-strategist-agent.js';
-import { socialMediaSupervisorAgent } from '../social-media-supervisor-agent.js';
-import { visualContentAgent } from '../visual-content-agent.js';
+import { durableSocialMediaStrategistAgent, socialMediaStrategistAgent } from '../social-media-strategist-agent.js';
+import { durableSocialMediaSupervisorAgent, socialMediaSupervisorAgent } from '../social-media-supervisor-agent.js';
+import { durableVisualContentAgent, visualContentAgent } from '../visual-content-agent.js';
 
 describe('main-agent (general Chekku Assistant)', () => {
   it('has id main-agent', () => {
@@ -102,6 +103,105 @@ describe('pm-agent (weekly and competitive analysis)', () => {
   });
 });
 
+describe('pm-agent (durable execution pilot, N8_4)', () => {
+  it('wraps the plain agent with createDurableAgent and keeps its identity', () => {
+    // The public id must stay `pm-agent` so `getAgentById`, thread-id
+    // ownership, and the /runs surface resolve unchanged.
+    expect(durablePmAgent.id).toBe('pm-agent');
+    expect(durablePmAgent.name).toBe('PM Agent');
+  });
+
+  it('registers the durable instance in the composition root under the pmAgent key', () => {
+    const agents = mastra.listAgents();
+    expect(agents.pmAgent).toBe(durablePmAgent);
+    expect(agents.pmAgent).not.toBe(pmAgent);
+  });
+
+  it('resolves by public id through getAgentById', () => {
+    expect(mastra.getAgentById('pm-agent')).toBe(durablePmAgent);
+  });
+});
+
+describe('durable rollout (Task D, Fase 1: qa-web + main)', () => {
+  it('wraps qa-web-agent with createDurableAgent and keeps its identity', () => {
+    expect(durableQaWebAgent.id).toBe('qa-web-agent');
+    expect(durableQaWebAgent.name).toBe('QA Web Agent');
+  });
+
+  it('registers the durable qa-web instance in the composition root', () => {
+    const agents = mastra.listAgents();
+    expect(agents.qaWebAgent).toBe(durableQaWebAgent);
+    expect(agents.qaWebAgent).not.toBe(qaWebAgent);
+    expect(mastra.getAgentById('qa-web-agent')).toBe(durableQaWebAgent);
+  });
+
+  it('delegates the wrapped qa-web agent memory and tools', async () => {
+    await expect(durableQaWebAgent.getMemory()).resolves.toBe(
+      await qaWebAgent.getMemory(),
+    );
+    expect(Object.keys(await durableQaWebAgent.listTools()).sort()).toEqual(
+      Object.keys(await qaWebAgent.listTools()).sort(),
+    );
+  });
+
+  it('wraps main-agent with createDurableAgent and keeps its identity', () => {
+    expect(durableMainAgent.id).toBe('main-agent');
+    expect(durableMainAgent.name).toBe('Chekku Assistant');
+  });
+
+  it('registers the durable main instance in the composition root', () => {
+    const agents = mastra.listAgents();
+    expect(agents.mainAgent).toBe(durableMainAgent);
+    expect(agents.mainAgent).not.toBe(mainAgent);
+    expect(mastra.getAgentById('main-agent')).toBe(durableMainAgent);
+  });
+
+  it('keeps the excluded agents on plain instances', () => {
+    const agents = mastra.listAgents();
+    // social-media-content-writer: the wrapper does not carry Telegram
+    // channels; qa-android-agent: not production-ready; stored agents:
+    // hydration owned by MastraEditor.
+    expect(agents.socialMediaContentWriter).toBe(socialMediaContentWriter);
+    expect(agents.qaAndroidAgent).toBe(qaAndroidAgent);
+  });
+});
+
+describe('durable rollout (Task D, Fase 2: social cluster)', () => {
+  it('wraps the social trio and keeps their public identities', () => {
+    expect(durableSocialMediaSupervisorAgent.id).toBe('social-media-supervisor-agent');
+    expect(durableSocialMediaSupervisorAgent.name).toBe('Social Media Supervisor');
+    expect(durableVisualContentAgent.id).toBe('visual-content-agent');
+    expect(durableVisualContentAgent.name).toBe('Visual Content Agent');
+    expect(durableSocialMediaStrategistAgent.id).toBe('social-media-strategist-agent');
+  });
+
+  it('registers the durable social instances in the composition root', () => {
+    const agents = mastra.listAgents();
+    expect(agents.socialMediaSupervisorAgent).toBe(durableSocialMediaSupervisorAgent);
+    expect(agents.socialMediaSupervisorAgent).not.toBe(socialMediaSupervisorAgent);
+    expect(agents.visualContentAgent).toBe(durableVisualContentAgent);
+    expect(agents.visualContentAgent).not.toBe(visualContentAgent);
+    expect(agents.socialMediaStrategistAgent).toBe(durableSocialMediaStrategistAgent);
+    expect(agents.socialMediaStrategistAgent).not.toBe(socialMediaStrategistAgent);
+    expect(mastra.getAgentById('social-media-supervisor-agent')).toBe(durableSocialMediaSupervisorAgent);
+    expect(mastra.getAgentById('visual-content-agent')).toBe(durableVisualContentAgent);
+    expect(mastra.getAgentById('social-media-strategist-agent')).toBe(durableSocialMediaStrategistAgent);
+  });
+
+  it('delegates strategy and visual delegation targets to the durable wrappers', () => {
+    // The supervisor's `agents` field is the delegation surface; the
+    // Content Writer stays plain there because the durable wrapper does
+    // not carry its Telegram channels.
+    const supervisor = socialMediaSupervisorAgent as unknown as {
+      __getStaticAgents?: () => Record<string, unknown>;
+    };
+    const subAgents = supervisor.__getStaticAgents?.() ?? {};
+    expect(subAgents.socialMediaContentWriter).toBe(socialMediaContentWriter);
+    expect(subAgents.socialMediaStrategistAgent).toBe(durableSocialMediaStrategistAgent);
+    expect(subAgents.visualContentAgent).toBe(durableVisualContentAgent);
+  });
+});
+
 describe('agent differentiation', () => {
   it('main-agent and qa-web-agent have different ids', () => {
     expect(mainAgent.id).not.toBe(qaWebAgent.id);
@@ -162,12 +262,11 @@ describe('visual-content-agent (identity and tools)', () => {
     expect(await visualContentAgent.getMemory()).toBeDefined();
   });
 
-  it('binds generate_image, review_image, plus the dev-only preview_image', async () => {
+  it('binds generate_image, review_image, and preview_image', async () => {
     const tools = await visualContentAgent.listTools();
-    // Vitest runs with NODE_ENV='test' (non-production), so the dev-only
-    // post-less `previewImageTool` is also registered alongside
-    // `generateImageTool` and its companion `reviewImageTool`. Task tools
-    // arrive through `signals: createTaskSignals()`.
+    // `previewImageTool` is registered in every environment (production
+    // included) alongside `generateImageTool` and its companion
+    // `reviewImageTool`. Task tools arrive through `signals: createTaskSignals()`.
     expect(Object.keys(tools).sort()).toEqual([
       'generateImageTool',
       'previewImageTool',
@@ -180,21 +279,14 @@ describe('visual-content-agent (identity and tools)', () => {
   });
 });
 
-describe('social-media-supervisor-agent (instructions env gating)', () => {
-  it('production instructions never propose the dev-only preview_image tool', async () => {
+describe('social-media-supervisor-agent (instructions preview delegation)', () => {
+  it('instructions propose both preview_image and generate_image delegations', async () => {
     const { buildSupervisorInstructions } = await import('../social-media-supervisor-agent.js');
-    const text = buildSupervisorInstructions('production');
-    expect(text).not.toContain('preview_image');
-    expect(text).not.toContain('previewId');
-    expect(text).not.toContain('standalone preview');
-    // The production delegation rule still steers toward the registered tool.
-    expect(text).toContain('"Use generate_image with postId <id>"');
-  });
-
-  it('non-production instructions keep the ad-hoc preview delegation path', async () => {
-    const { buildSupervisorInstructions } = await import('../social-media-supervisor-agent.js');
-    const text = buildSupervisorInstructions('development');
+    const text = buildSupervisorInstructions();
+    // The Visual Content Agent registers `preview_image` in every environment,
+    // so the supervisor always knows both delegation prefixes.
     expect(text).toContain('"Use preview_image (no postId)"');
+    expect(text).toContain('"Use generate_image with postId <id>"');
     expect(text).toContain('standalone preview');
   });
 });
@@ -210,7 +302,10 @@ describe('social-media-supervisor-agent (three sub-agents and routing)', () => {
       'socialMediaStrategistAgent',
       'visualContentAgent',
     ]);
-    expect(subAgents.visualContentAgent).toBe(visualContentAgent);
+    // Task D Fase 2: the strategist and visual delegations run through the
+    // durable wrappers (identity assertions live in the Fase 2 describe
+    // block above); the Content Writer stays plain.
+    expect(subAgents.visualContentAgent).toBe(durableVisualContentAgent);
   });
 
   it('binds exactly the two research tools plus task tracking and nothing else', async () => {

@@ -31,7 +31,7 @@ Chekku is a focused interface for managing Mastra agents, running agent-specific
 - **Visual content agent** — image generation for approved social posts (on-demand via supervisor chat, or auto-triggered when the caption is approved in `/social-posts`).
 - **Scheduled social drafts** — a weekly Monday 09:00 Asia/Jakarta workflow.
 - **Shareable slide decks** — token-gated public URLs for competitive-analysis decks.
-- **Centralized Postgres** — agent definitions, versions, memory, and threads.
+- **Per-user Knowledge Base** — chat text/PDF uploads are parsed, chunked, embedded, and indexed into Qdrant; `search_knowledge_base` retrieves them; `/knowledge` manages documents.
 - **Same-origin proxy** — browser traffic routes through the Next.js proxy, never hitting the Mastra server directly.
 - **Email + time + calculator tools** — bound to stored and selected code-defined agents (email via Resend).
 
@@ -49,7 +49,8 @@ Next.js client :3000
   │                                       ├── Mastra Memory + PostgresStore
   │                                       ├── Garage / SearXNG / Web Reader MCP (optional)
   │                                       └── OpenAI-compatible gateway ──> LLM endpoint
-  └── /reports/* + /social-posts/* ──> server services ──> @chekku/storage ──> Garage/S3
+  └── /reports/* + /social-posts/* + /knowledge ──> server services ──> @chekku/storage ──> Garage/S3
+  (Knowledge ingestion additionally talks to Qdrant for the vector index)
 ```
 
 See [Architecture](docs/ARCHITECTURE.md) for runtime boundaries, data flow, and the Garage / SearXNG / Web Reader MCP contracts.
@@ -80,7 +81,7 @@ npm run setup
 
 This copies `.env.example` files into place, auto-generates local Garage and SearXNG secrets, generates `BETTER_AUTH_SECRET`, wires `AUTH_DATABASE_URL` into `client/.env.local`, and prompts for required values like `LLM_API_KEY`. Optional integrations (Telegram, Resend, Maestro, Web Reader) can be left empty and edited into `agent/.env` later; rerun `npm run setup` after editing so local Mastra receives the changes.
 
-Once Postgres is running (via `npm run dev:sh` or `docker compose up -d postgres`), apply the Better Auth schema once:
+Once Postgres is running (via `npm run dev:sh` or `docker compose -f compose.yaml -f compose.dev.yaml up -d postgres`), apply the Better Auth schema once:
 
 ```bash
 npm run db:migrate
@@ -97,7 +98,7 @@ npm run db:migrate
 
 These are optional; Chekku boots fine without them.
 
-### 3. Start Garage, SearXNG, and both application workspaces
+### 3. Start Garage, SearXNG, Qdrant, and both application workspaces
 
 ```bash
 npm run dev:sh
@@ -106,10 +107,11 @@ npm run dev:sh
 Open:
 
 - Studio: `http://localhost:3000`
-- Reports: `http://localhost:3000/reports`
+- Knowledge: `http://localhost:3000/knowledge`
 - Mastra health: `http://localhost:4111/healthz`
 - Model registry: `http://localhost:4111/models`
 - SearXNG health: `http://127.0.0.1:8888/healthz`
+- Qdrant readiness: `http://127.0.0.1:6333/readyz`
 
 ## Environment
 
@@ -138,6 +140,10 @@ Local file: `agent/.env`
 | `SEARXNG_BASE_URL` | Conditional | empty | Server-owned SearXNG base URL. `npm run dev:sh` supplies `http://127.0.0.1:8888`; set it explicitly for an external service. |
 | `SEARXNG_API_KEY` | No | empty | Optional server-only bearer token for an authenticated external SearXNG reverse proxy. |
 | `WEB_READER_BASE_URL` | Conditional | empty | Self-hosted Jina Reader base URL. `npm run setup` writes `http://127.0.0.1:8081` into `agent/.env.development`; compose uses `http://reader:8081`. No API key. |
+| `QDRANT_URL` | Conditional | empty | Knowledge Base vector index base URL. `npm run setup` writes `http://127.0.0.1:6333` into `agent/.env.development`; compose uses `http://qdrant:6333`. Empty/unset → Knowledge ingestion and search fail closed. |
+| `QDRANT_API_KEY` | No | empty | Optional bearer token for an authenticated Qdrant. Server-side only. |
+| `QDRANT_COLLECTION` | No | `chekku_knowledge` | Single shared Knowledge collection name. |
+| `LLM_EMBEDDING_MODEL` | Conditional | empty | Embeddings model served by the existing `LLM_BASE_URL` endpoint (no second key). Required for Knowledge ingestion and search; empty/unset → Knowledge tools fail closed. |
 | `TELEGRAM_BOT_TOKEN` | Conditional | empty | Bot token from [@BotFather](https://t.me/BotFather). Required when running `social-media-content-writer`. |
 | `TELEGRAM_MODE` | No | `polling` | Adapter mode: `polling` (dev, no tunnel), `webhook` (prod, public URL), or `auto`. |
 | `TELEGRAM_WEBHOOK_SECRET_TOKEN` | No | empty | Checked against `x-telegram-bot-api-secret-token`. Webhook mode only. |
@@ -173,7 +179,7 @@ Local file: `client/.env.local`
 | --- | --- |
 | `npm run setup` | Copy env examples, generate local Garage/SearXNG secrets + Better Auth env, prompt for required values. |
 | `npm run db:migrate` | Apply the Better Auth schema to `chekku_auth`. Requires Postgres running; safe to re-run. |
-| `npm run dev:sh` | Provision local Garage and SearXNG, then start agent and client workspaces. |
+| `npm run dev:sh` | Provision local Garage, SearXNG, Reader, Qdrant, and Postgres, then start agent and client workspaces. |
 | `npm run dev` | Start agent and client workspaces without provisioning local services. |
 | `npm run dev:agent` | Start only the Mastra server. |
 | `npm run dev:client` | Start only the Next.js client. |
@@ -181,22 +187,41 @@ Local file: `client/.env.local`
 | `npm run lint` | Run the client ESLint configuration. |
 | `npm test` | Run all Vitest tests. |
 | `npm run test:web-reader:live` | Optionally read `https://example.com/` through the self-hosted Reader container; requires `WEB_READER_BASE_URL` to resolve to a running `reader` service. |
+| `npm run test:e2e` | Run the local Playwright E2E suites (`e2e/`); type-checks the specs first. Requires Postgres running and a configured `client/.env.local` (see below). |
 | `npm run check` | Run typecheck, lint, and tests. |
 | `npm run build` | Build Mastra and Next.js for production. |
 | `npm run start` | Start the built Mastra and Next.js servers together. Requires a prior `npm run build`. |
 | `npm run start:agent` | Start only the built Mastra server. |
 | `npm run start:client` | Start only the built Next.js client. |
 | `npm run prod` | Build, then start both servers on the host. Does not provision local Garage or SearXNG. |
-| `npm run prod:sh` | Build the agent and client images and run the whole stack (Garage, SearXNG, Postgres, agent, client) in containers via the `prod` Compose profile. Recommended for production. |
+| `npm run prod:sh` | Build the agent and client images and run the whole stack (Garage, SearXNG, Reader, Qdrant, Postgres, agent, client) in containers by merging `compose.prod.yaml` over the infra base. Recommended for production. |
 | `npm run prod:build` | Build only the `agent` and `client` container images. |
 | `npm run prod:up` | Bring the containerized stack up without rebuilding. |
 | `npm run prod:down` | Stop and remove production containers (named volumes are preserved). |
 
 The client uses system font stacks, so `next build` does not download fonts from Google. Mastra production builds still install the generated server bundle dependencies and therefore require access to the configured npm registry.
 
+### End-to-end tests (Playwright)
+
+Local Playwright E2E suites live in `e2e/` (run on demand; they are not attached to CI and are separate from the Vitest suites). The auth module suite covers signup, email-verification gating and resend, sign-in, middleware redirects, the unauthenticated API 403 JSON boundary, session persistence across reloads, sign-out, and password-reset request/reset-link pages — test-case inventory (including one deliberately manual rate-limit case) lives in `e2e/auth-test-cases.csv`.
+
+Prerequisites, once per machine and repository: `npm run setup` and `npm run db:migrate` have been run at least once, and Postgres is up — the `docker compose --env-file` invocation below hard-errors until `storage/.env.local` and `searxng/.env.local` exist. The Playwright `webServer` starts `npm run dev:client` automatically (or reuses an already-running dev stack).
+
+```bash
+npx playwright install chromium   # once per machine; add --with-deps on fresh Linux hosts missing system libraries
+docker compose -f compose.yaml -f compose.dev.yaml --env-file storage/.env.local --env-file searxng/.env.local up -d postgres
+npm run test:e2e
+```
+
+Notes:
+
+- The client's auth rate limiter allows 5 POSTs per scope per 60 seconds; the suite runs serially with `workers: 1` and stays under the caps. If you re-run the suite within a minute of a previous run, wait ~60 seconds or restart the dev client first.
+- Email verification cannot be completed through a real mailbox in local dev, so the suite signs up through the UI and then flips `emailVerified` directly in `chekku_auth` via `e2e/helpers/auth-db.ts` (connection resolved from `AUTH_DATABASE_URL`; override with `CHEKKU_E2E_AUTH_DATABASE_URL`). Test users are deleted afterwards.
+- Point the suite at another origin with `CHEKKU_E2E_BASE_URL` (default `http://localhost:3000`). The override retargets the browser only; the target stack must already be running — the Playwright `webServer` readiness poll always checks the local origin.
+
 ## Production deployment
 
-For production, run the full stack inside containers so the host only needs Docker and a reverse proxy. The agent and client services in `compose.yaml` are gated behind the `prod` profile, so development is unaffected.
+For production, run the full stack inside containers so the host only needs Docker and a reverse proxy. The application containers live in `compose.prod.yaml`, merged over the infra base by `scripts/prod.sh`; development (`npm run dev:sh`) merges `compose.dev.yaml` instead and is unaffected.
 
 ```bash
 npm ci
@@ -276,7 +301,7 @@ npm run dev
 Stop the server, then recreate the Postgres volume (name is `<compose-project>_postgres-data`, project defaults to the repository directory name):
 
 ```bash
-docker compose down
+docker compose -f compose.yaml -f compose.dev.yaml down
 docker volume rm chekku_postgres-data
 ```
 

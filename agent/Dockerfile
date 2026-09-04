@@ -22,6 +22,11 @@ FROM node:22-bookworm-slim AS builder
 # regardless of NODE_ENV, while `next build`/`mastra build` must run under
 # the default production NODE_ENV (forcing development breaks prerendering).
 WORKDIR /app
+# Defensive: playwright@1.61.1 ships no install script, so `npm ci` downloads
+# no browsers either way. Skip the download should any playwright version in
+# the lock graph ever ship an install script; E2E never runs in the image and
+# the agent uses system Chromium.
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 # Copy workspace manifests first for a cacheable `npm ci` layer.
 COPY package.json package-lock.json ./
 COPY agent/package.json agent/
@@ -32,6 +37,11 @@ RUN npm ci
 # has no build step, so its source must be present when Mastra bundles it.
 COPY agent/ agent/
 COPY storage/ storage/
+# Repository-level build helpers the agent workspace build script invokes by
+# relative path ("mastra build && node ../scripts/fix-mastra-specifiers.mjs").
+# They live outside agent/, so they must be copied explicitly: without them the
+# builder fails with MODULE_NOT_FOUND on the entry point itself.
+COPY scripts/fix-mastra-specifiers.mjs scripts/
 # Emit the Mastra server bundle to agent/.mastra/output.
 RUN npm run build --workspace agent
 

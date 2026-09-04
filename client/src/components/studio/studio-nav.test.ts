@@ -37,7 +37,7 @@ beforeEach(() => {
 
 it('renders accessible report navigation with current-page state', () => {
   const markup = renderToStaticMarkup(createElement(StudioNav, { resourceId: 'user-1' }));
-  const reportLink = markup.match(/<a[^>]*href="\/reports"[^>]*>/)?.[0];
+  const reportLink = markup.match(/<a[^>]*href="\/reports\/weekly"[^>]*>/)?.[0];
 
   expect(markup).toContain('aria-label="Studio navigation"');
   expect(reportLink).toContain('aria-current="page"');
@@ -46,7 +46,7 @@ it('renders accessible report navigation with current-page state', () => {
 it('uses relevant shared icons for each primary destination', () => {
   const markup = renderToStaticMarkup(createElement(StudioNav, { resourceId: 'user-1' }));
 
-  expect(markup.match(/class="studio-agent-icon"/g)).toHaveLength(3);
+  expect(markup.match(/class="studio-agent-icon"/g)).toHaveLength(4);
   expect(markup).not.toContain('>◫<');
   expect(markup).not.toContain('>▤<');
   expect(markup).not.toContain('>▦<');
@@ -61,7 +61,7 @@ it.each([
   mocks.pathname = pathname;
 
   const markup = renderToStaticMarkup(createElement(StudioNav, { resourceId: 'user-1' }));
-  const reportLink = markup.match(/<a[^>]*href="\/reports"[^>]*>/)?.[0];
+  const reportLink = markup.match(/<a[^>]*href="\/reports\/weekly"[^>]*>/)?.[0];
 
   expect(reportLink).toContain('class="active"');
   expect(reportLink).toContain('aria-current="page"');
@@ -74,7 +74,7 @@ it('keeps Studio navigation available in the compact mobile header', () => {
   const markup = renderToStaticMarkup(createElement(StudioNav, { resourceId: 'user-1' }));
 
   expect(markup).toContain('href="/agents"');
-  expect(markup).toContain('href="/reports"');
+  expect(markup).toContain('href="/reports/weekly"');
   expect(navRule).toContain('display: flex');
   expect(navRule).not.toContain('display: none');
   expect(mobileRules).toMatch(

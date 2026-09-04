@@ -102,6 +102,21 @@ const envSchema = z.object({
   // No API key; the local Reader service is unauthenticated.
   WEB_READER_BASE_URL: z.string().default(''),
 
+  // Knowledge Base vector index (Qdrant). Empty/unset → every knowledge
+  // tool and the ingestion workflow fail closed with a fixed configuration
+  // error, exactly like SEARXNG_BASE_URL and WEB_READER_BASE_URL. The
+  // optional API key is only needed for Qdrant deployments with auth
+  // enabled; the local Compose service runs without one.
+  QDRANT_URL: optionalUrl.default(''),
+  QDRANT_API_KEY: z.string().default(''),
+  QDRANT_COLLECTION: z.string().default('chekku_knowledge'),
+  // Embedding model for Knowledge Base ingestion and query embedding,
+  // resolved against LLM_BASE_URL + LLM_API_KEY (/embeddings). Empty/unset
+  // → the Knowledge Base fails closed; no silent calls to an unconfigured
+  // model. Changing the model changes the vector dimension: the ingestion
+  // pipeline validates the configured collection and refuses to corrupt it.
+  LLM_EMBEDDING_MODEL: z.string().default(''),
+
   // Public Holiday Indonesia API base URL. Optional — when unset, the
   // weekly-social-drafts workflow falls back to the hardcoded SPECIAL_DAYS
   // calendar only (no movable feasts like Idul Fitri / Idul Adha).

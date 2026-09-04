@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { mastra } from '../../mastra/index.js';
 import {
   SOCIAL_MEDIA_STRATEGIST_AGENT_ID,
+  durableSocialMediaStrategistAgent,
   socialMediaStrategistAgent,
 } from '../social-media-strategist-agent.js';
 import { STRATEGY_BRIEF_TEMPLATE, CONTENT_PLAN_GUIDANCE } from '../social-media-strategist-agent.js';
@@ -88,7 +89,9 @@ describe('social-media-strategist-agent (registration and identity)', () => {
   it('is registered in the Mastra agents map', () => {
     const agents = mastra.listAgents();
     expect(Object.keys(agents)).toContain('socialMediaStrategistAgent');
-    expect(agents.socialMediaStrategistAgent).toBe(socialMediaStrategistAgent);
+    // Task D Fase 2: the composition root registers the durable wrapper;
+    // the plain instance stays exported for direct tests like this one.
+    expect(agents.socialMediaStrategistAgent).toBe(durableSocialMediaStrategistAgent);
   });
 });
 

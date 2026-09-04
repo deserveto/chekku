@@ -90,17 +90,32 @@ LLM_IMAGE_MODEL=gemini-3.1-flash-image
 #LLM_IMAGE_ENDPOINT_PATH=/images/generations
 ```
 
-`LLM_IMAGE_MODEL` is the fixed model id invoked by the Visual Content Agent's image tools — generation output in `generate_image` (and the dev-only `preview_image`) plus multimodal vision input in `review_image` (the self-review loop, capped server-side at `MAX_VISUAL_ASSETS_PER_POST = 3` assets per post); it never comes from tool or model input. Empty/unset fails closed with `Image generation is not configured.` without preventing other agent features from starting. `LLM_IMAGE_ENDPOINT_PATH` defaults to the OpenAI Images API standard path (`/images/generations`); override it only when the configured gateway exposes image generation under a different path. Both use the existing `LLM_BASE_URL` and `LLM_API_KEY`; no second key is required.
+`LLM_IMAGE_MODEL` is the fixed model id invoked by the Visual Content Agent's image tools — generation output in `generate_image` and `preview_image`, plus multimodal vision input in `review_image` (the self-review loop, capped server-side at `MAX_VISUAL_ASSETS_PER_POST = 3` assets per post); it never comes from tool or model input. Empty/unset fails closed with `Image generation is not configured.` without preventing other agent features from starting. `LLM_IMAGE_ENDPOINT_PATH` defaults to the OpenAI Images API standard path (`/images/generations`); override it only when the configured gateway exposes image generation under a different path. Both use the existing `LLM_BASE_URL` and `LLM_API_KEY`; no second key is required.
 
 The image-generation HTTP adapter assumes the OpenAI Images API standard contract (`POST {LLM_BASE_URL}/images/generations` with `response_format: b64_json`). If the live gateway does not implement that contract, only `agent/src/image-generation/client.ts` needs adjustment.
 
 Image generation runs in two user-driven paths: (1) on demand through the Social Media Supervisor chat (it delegates to the Visual Content Agent after the conversational concept approval), and (2) automatically when the user approves a caption in `/social-posts` (the `generate-social-post-visual` workflow). The tool verifies the post is `APPROVED` from persisted metadata, stores the image bytes in Garage, attaches the asset to the post's metadata, runs its self-review loop, and returns the asset id plus the application-facing image URL. Revisions generate a new asset and preserve the previous one (capped at `MAX_VISUAL_ASSETS_PER_POST = 3` per post). Images are served at `GET /api/storage/social-posts/<postId>/visuals/<assetId>`.
 
-Dev-only chat previews: outside production, the Visual Content Agent also exposes a `preview_image` tool for an ad-hoc chat visual that has no `postId`. It generates a standalone image through the same fixed model, stores it under an isolated `chat-previews/<previewId>.<ext>` prefix (never `social-posts/`, so the social-posts list is unaffected), and returns a URL. Previews are served at `GET /api/storage/chat-previews/[file]` (identity-checked, 404 in production). This lets the chat show a generated image directly without an approved post and without touching `/social-posts`.
+Chat previews (all environments): the Visual Content Agent also exposes a `preview_image` tool for an ad-hoc chat visual that has no `postId`. It generates a standalone image through the same fixed model, stores it under an isolated `chat-previews/<previewId>.<ext>` prefix (never `social-posts/`, so the social-posts list is unaffected), and returns a URL. Previews are served at `GET /api/storage/chat-previews/[file]` (identity-checked, available in production). This lets the chat show a generated image directly without an approved post and without touching `/social-posts`.
 
 The weekly workflow creates posts in the `DRAFT` status with canonical content only. `/social-posts` runs a 2-stage approval: "Approve Canonical" (`PATCH /api/storage/social-posts/[postId]` with `{ status: 'CANONICAL_APPROVED' }`) fires the caption generation workflow in the background — the page polls until the Instagram caption appears; "Approve Caption" (`{ status: 'APPROVED' }`) fires the visual generation workflow the same way. The full lifecycle is `DRAFT → CANONICAL_APPROVED → APPROVED → PUBLISHED` (future). A failed caption run leaves the post `DRAFT` (click approve again); a failed visual run leaves it `APPROVED` without a visual (retry manually through the supervisor chat). The `generate_image` tool still rejects any post that is not `APPROVED`.
 
 Legacy `DRAFT` posts drafted before the two-stage split: a post whose `post.md` still embeds both the canonical unit and a legacy caption block goes through the normal flow — "Approve Canonical" regenerates a fresh caption into `caption.md` (the embedded legacy caption is ignored, not migrated). A pre-canonical-contract caption-only `DRAFT` (no canonical delimiter at all) can never enter the caption stage; its detail page shows an explanatory legacy notice instead of an approve button.
+
+#### Knowledge Base (Qdrant + embeddings)
+
+The per-user Knowledge Base indexes uploaded documents for semantic retrieval. Server-owned configuration in `agent/.env`:
+
+```dotenv
+LLM_EMBEDDING_MODEL=
+QDRANT_URL=
+QDRANT_API_KEY=
+QDRANT_COLLECTION=chekku_knowledge
+```
+
+`LLM_EMBEDDING_MODEL` is the fixed embedding model invoked by Knowledge Base ingestion and query embedding through the existing `LLM_BASE_URL` + `LLM_API_KEY` (`POST {LLM_BASE_URL}/embeddings`); it never comes from tool or model input. `QDRANT_URL` points at the local Qdrant container (`http://127.0.0.1:6333` in dev, `http://qdrant:6333` in compose prod); `QDRANT_API_KEY` is optional and only needed for Qdrant deployments with auth. Empty/unset `LLM_EMBEDDING_MODEL` or `QDRANT_URL` keeps every Knowledge tool and workflow failing closed with a fixed configuration error without preventing other agent features from starting.
+
+Changing the embedding model changes the vector dimension. The ingestion pipeline validates the configured collection before writing and refuses with an actionable error when the dimension differs — restore the previous model, or delete the Qdrant volume/collection to reindex from scratch (raw documents stay in Garage, so reindexing is a per-document retry).
 
 ### `client/.env.local`
 
@@ -128,7 +143,7 @@ Chekku resolves identity from a Better Auth email/password session instead of a 
 
 After setup, apply the Better Auth schema once Postgres is running:
 
-    docker compose up -d postgres
+    docker compose -f compose.yaml -f compose.dev.yaml up -d postgres
     npm run db:migrate
 
 `npm run db:migrate` runs `@better-auth/cli migrate` against `AUTH_DATABASE_URL` and is safe to re-run.
@@ -216,12 +231,13 @@ Browser-facing endpoints derive identity from the Better Auth session:
 
 Operational limits to know:
 
-- The run registry is in-memory and single-instance. Restarting the agent server (dev or the `agent` container) kills in-flight runs; clients then see no active run and render the persisted Mastra Memory messages. Partial output of an interrupted run is not persisted (Mastra skips persistence on abort).
+- The run registry is in-memory and single-instance. Restarting the agent server (dev or the `agent` container) kills in-flight runs; clients then see no active run and render the persisted Mastra Memory messages. When a run is **stopped**, the execution driver reconstructs the partial turn (user message, tool calls with bounded results, streamed text clamped head+tail with a stop marker) from registry events and persists it to Memory best-effort, so the thread stays readable and prompting again in the same thread resumes from that context. Image attachments of a stopped multimodal turn are not retained (only a placeholder note), and a **failed** run still persists nothing.
+- `pm-agent` and the other durable-wrapped agents (`main-agent`, `qa-web-agent`, the social strategist/supervisor/visual agents, and every stored agent) execute through Mastra's durable workflow engine. Their snapshots persist in Postgres via the shared `PostgresStore`, but no automatic recovery runs at boot (unavailable in the pinned core version), so restarting the agent server still abandons an in-flight durable run. After a stop, prompting again in the same thread continues from the last persisted Memory context. Known engine limitation: an in-flight tool call is not interrupted by a stop — it runs to completion (tool calls are individually bounded, e.g. Reader reads cap at 30 seconds) and the abort lands at the next step; the chat UI flips pending tool cards to `interrupted` immediately on stop.
 - Mastra persists a turn's user message only when the turn completes. While a run is in flight, the chat UI shows the user turn and live tool/text progress from the run record (`prompt` + event replay), not from Memory.
 - Terminal runs stay replayable for 30 minutes; afterwards only Memory messages remain and tool-timeline detail for that run is gone.
 - Run event buffers are capped at 4 MiB / 10,000 events per run. Extremely long runs may replay with a gap in the middle; the run summary carries `evicted: true` when that happened.
 - Concurrent running runs are capped at 4 per user and 64 across the server (registry constants, no environment override). A start above either cap receives `429` with a fixed message and the registry stays intact; a duplicate start on a busy thread still receives `409` so the client can attach.
-- A running run older than 30 minutes is force-failed by the registry watchdog (fixed message `The run exceeded the maximum duration and was stopped.`), which aborts its execution signal and releases the thread's active-run lock even when the model gateway stream hangs. Any run API touch performs the reap; there is no background timer.
+- A running run older than 30 minutes is force-failed by the registry watchdog (fixed message `The run exceeded the maximum duration and was stopped.`), which aborts its execution signal and releases the thread's active-run lock even when the model gateway stream hangs. The force-fail also latches the cancel intent, so the execution driver persists the partial turn once the stream unwinds; the run's terminal status stays `failed` with the watchdog message. Any run API touch performs the reap; there is no background timer.
 - Foreign or malformed run IDs collapse to `404`; unauthenticated calls to `/api/runs/*` return `403`.
 
 ## SearXNG search
@@ -253,7 +269,7 @@ Errors are fixed and bounded for missing/invalid configuration, unavailable serv
 To stop local Garage and SearXNG safely while preserving their named volumes:
 
 ```bash
-docker compose --env-file storage/.env.local --env-file searxng/.env.local down
+docker compose -f compose.yaml -f compose.dev.yaml --env-file storage/.env.local --env-file searxng/.env.local down
 ```
 
 Do not add `--volumes` or run `docker volume rm` during normal shutdown or application/database reset. SearXNG cache and all Garage objects remain available for the next startup.
@@ -327,9 +343,31 @@ Completed Markdown sections are:
 ## Sources
 ```
 
+
 If minimum evidence cannot be met within budget, PM Agent returns `Incomplete Competitive Analysis: <anchor product>`, identifies missing evidence and suggested user action, and does not save or emit `Saved analysisId:`. Complete work saves once. Save failure does not discard completed analysis; response adds one short safe failure line.
 
 Chat retrieval phrases should explicitly distinguish domains, for example `list saved competitive analyses` or `view pca_...`. Generic `list saved reports` remains weekly for compatibility. `pca_...` selects competitive detail; `pmr_...` selects weekly detail.
+
+## Knowledge Base
+
+The Knowledge Base lets users upload text files and PDFs in chat; Chekku persists the raw document, parses and chunks the text, embeds it, and indexes it into Qdrant so the Main Agent can retrieve it later through `search_knowledge_base`. The `/knowledge` page lists the user's documents with status (`Processing`, `Ready`, `Failed`), indexed chunk counts, and actions (Open original, Retry indexing for failed/stale documents, Delete).
+
+Local setup: `npm run dev:sh` starts the `qdrant` Compose service (pinned `qdrant/qdrant` image, persistent `qdrant-data` volume, loopback port `127.0.0.1:6333`, container health check over TCP) and `scripts/setup-env.sh` writes `QDRANT_URL=http://127.0.0.1:6333` into `agent/.env.development`. In compose prod the agent resolves `http://qdrant:6333` on the internal network; Qdrant is never exposed beyond loopback or the internal Compose network, and the browser never talks to it. Set `LLM_EMBEDDING_MODEL` in `agent/.env` to enable ingestion and retrieval; both fail closed when unset.
+
+Supported documents: text formats `txt`, `md`, `csv`, `tsv`, `json`, `log`, `xml`, `yml`, `yaml` (raw cap 2 MiB) and `application/pdf` (raw cap 16 MiB — aligned with the Garage binary read bound; the production nginx `client_max_body_size` is 17m and must stay above it). A user's registry holds at most 500 documents (`MAX_KNOWLEDGE_DOCUMENTS_PER_USER`); further uploads are rejected until deletion. Images are never indexed — they keep flowing through the multimodal chat path. PDFs are extracted server-side with pdfjs-dist (capped at 200 parsed pages); scanned image-only PDFs fail with `No extractable text found in this document.`
+
+Lifecycle and consistency:
+
+1. Upload (`POST /api/storage/knowledge/documents`) writes `original.<ext>` then `metadata.json` (status `processing`) to `kb/users/<resourceId>/documents/<documentId>/` and fires the `knowledge-document-ingestion` workflow. The chat run is never blocked or waited on.
+2. Ingestion is mutually exclusive per document: `begin` refuses a fresh `processing` record (only records older than the 15-minute stale window re-begin) and refuses `ready`. The pipeline purges partial vectors and records `failed` with a fixed bounded reason only when `begin` succeeded — a racing loser leaves the winner's index and status untouched; the raw document is always preserved.
+3. Retry (`POST .../retry`) is allowed for `failed` documents and for `processing` records older than 15 minutes (abandoned runs, e.g. an agent-server restart).
+4. Delete (`DELETE .../[documentId]`) fires `knowledge-document-deletion`: Qdrant vectors first (retrieval stops immediately), then Garage objects, then the metadata record — followed by one final idempotent vector sweep so an ingestion racing the deletion cannot leave orphaned searchable chunks. Steps are idempotent; retry a failed deletion from the page.
+
+Ownership is structural: every registry key is scoped under the session user's id, every list/read/delete validates that id, and every Qdrant search or delete carries a mandatory `resourceId` payload filter backed by a keyword index. The retrieval tool derives the tenant from the run context, never from model input.
+
+No-config smoke: start the server without `QDRANT_URL`/`LLM_EMBEDDING_MODEL`, upload a document, and confirm the Knowledge page shows it as `Failed` with `Knowledge indexing is not configured…` (or `...could not be started`) rather than hanging in `Processing`. Deterministic tests require no live Qdrant or embedding endpoint.
+
+Security note: the dev-stack Qdrant runs keyless (loopback-only publish) and holds every tenant's chunks in plaintext — an accepted local-first trade-off. Production deployments must set `QDRANT_API_KEY` (and configure the matching key on Qdrant) or front Qdrant with an authenticated proxy.
 
 ## Chat slash-command picker
 
@@ -350,7 +388,7 @@ DATABASE_URL=postgresql://chekku:postgres@localhost:5432/chekku_agent
 Before resetting data, stop the agent process. Reset local Postgres state by recreating its volume (this removes stored agents and conversation history):
 
 ```bash
-docker compose down
+docker compose -f compose.yaml -f compose.dev.yaml down
 docker volume rm chekku_postgres-data
 ```
 
@@ -361,7 +399,7 @@ The next `npm run dev:sh` recreates the container and re-runs the init script. T
 Local Garage runs image `dxflrs/garage:v2.3.0` with persistent Docker volumes and generic bucket `chekku-objects`. Compose publishes only the S3 API at `127.0.0.1:3900`; RPC, admin, and metrics ports stay inside the Docker network. Stop application processes before changing credentials. To stop local services without deleting their volumes:
 
 ```bash
-docker compose --env-file storage/.env.local --env-file searxng/.env.local down
+docker compose -f compose.yaml -f compose.dev.yaml --env-file storage/.env.local --env-file searxng/.env.local down
 ```
 
 Do not commit or paste contents from `storage/.env.local`, `storage/.garage/`, `searxng/.env.local`, or generated `agent/.env.development`. Removing Garage volumes destroys local agent objects and is intentionally not part of normal reset instructions; removing SearXNG cache is also unnecessary for application reset.
@@ -386,7 +424,7 @@ Generated IDs and all repository, PM tool, and public report boundaries use `pmr
 
 Report interfaces:
 
-- `/reports` groups weekly and competitive report views.
+- `/reports` redirects permanently to `/reports/weekly`.
 - `/reports/weekly` lists weekly report ID, created time, risk rating, and status newest first.
 - `/reports/[reportId]` renders saved analysis, metadata, then original weekly input.
 - `GET /api/storage/pm-reports` returns `{ reports }` after server identity validation.
@@ -550,18 +588,18 @@ Run from repository root with Docker responsive and both loopback ports free:
 
 ```bash
 docker compose version
-docker compose --env-file storage/.env.local --env-file searxng/.env.local ps garage searxng
+docker compose -f compose.yaml -f compose.dev.yaml --env-file storage/.env.local --env-file searxng/.env.local ps garage searxng
 ```
 
-`npm run dev:sh` reports whether Garage port `3900` or SearXNG port `8888` is occupied. Stop the conflicting process or container; do not edit the pinned Compose ports without a reviewed configuration change. If Compose configuration is invalid, remove no volumes: inspect tracked `compose.yaml`, `searxng/settings.yml`, and generated file permissions, then rerun the launcher.
+`npm run dev:sh` reports whether Garage port `3900` or SearXNG port `8888` is occupied. Stop the conflicting process or container; do not edit the pinned Compose ports without a reviewed configuration change. If Compose configuration is invalid, remove no volumes: inspect tracked `compose.yaml`/`compose.dev.yaml`, `searxng/settings.yml`, and generated file permissions, then rerun the launcher.
 
 ### Local service readiness times out
 
 Default readiness timeout is 30 seconds. First inspect health and logs without printing environment values:
 
 ```bash
-docker compose --env-file storage/.env.local --env-file searxng/.env.local ps garage searxng
-docker compose --env-file storage/.env.local --env-file searxng/.env.local logs garage searxng
+docker compose -f compose.yaml -f compose.dev.yaml --env-file storage/.env.local --env-file searxng/.env.local ps garage searxng
+docker compose -f compose.yaml -f compose.dev.yaml --env-file storage/.env.local --env-file searxng/.env.local logs garage searxng
 ```
 
 For a slow Docker host, retry with `CHEKKU_READY_TIMEOUT_SECONDS` set from 1 to 300. `CHEKKU_READY_INTERVAL_SECONDS` must be a positive integer and is capped at 5. These launcher settings do not change `search_web`'s fixed 12-second request deadline.
@@ -576,11 +614,28 @@ For local operation, call `curl --fail http://127.0.0.1:8888/healthz` and inspec
 
 ### Web Reader is not configured
 
-For local development, ensure the `reader` Compose service is up (`docker compose ps reader`) and `WEB_READER_BASE_URL` resolves to it. `scripts/setup-env.sh` writes the canonical dev URL (`http://127.0.0.1:8081`) into `agent/.env.development`; in compose prod the service name resolves it (`http://reader:8081`). Restart the agent after changing env. Server should remain healthy while tool fails closed.
+For local development, ensure the `reader` Compose service is up (`docker compose -f compose.yaml -f compose.dev.yaml ps reader`) and `WEB_READER_BASE_URL` resolves to it. `scripts/setup-env.sh` writes the canonical dev URL (`http://127.0.0.1:8081`) into `agent/.env.development`; in compose prod the service name resolves it (`http://reader:8081`). Restart the agent after changing env. Server should remain healthy while tool fails closed.
 
 ### Web Reader is unavailable or times out
 
-Reader is a self-hosted container. Confirm `docker compose ps reader` shows it healthy and `WEB_READER_BASE_URL` points at the right host:port. Inspect container logs (`docker compose logs reader`) for outbound fetcher errors. Request deadline stays fixed at 30 seconds. Do not add configurable timeout, retries, anonymous fallback, or raw provider diagnostics.
+Reader is a self-hosted container. Confirm `docker compose -f compose.yaml -f compose.dev.yaml ps reader` shows it healthy and `WEB_READER_BASE_URL` points at the right host:port. Inspect container logs (`docker compose -f compose.yaml -f compose.dev.yaml logs reader`) for outbound fetcher errors. Request deadline stays fixed at 30 seconds. Do not add configurable timeout, retries, anonymous fallback, or raw provider diagnostics.
+
+
+### Knowledge indexing is not configured
+
+`/knowledge` shows a document as `Failed` with `Knowledge indexing is not configured…`. Confirm the `qdrant` Compose service is up (`docker compose -f compose.yaml -f compose.dev.yaml ps qdrant`) and `QDRANT_URL` resolves to it, and set `LLM_EMBEDDING_MODEL` in `agent/.env` to an embeddings-capable model on the configured gateway. Restart the agent after changing env; then use Retry indexing on the document. The chat composer keeps working — only ingestion and `search_knowledge_base` fail closed.
+
+### Knowledge document is stuck in Processing
+
+`Processing` older than 15 minutes means the ingestion run died (typically an agent-server restart). Use Retry indexing on the document; the pipeline deletes any partial vectors before re-upserting, so the retry never duplicates chunks. Verify the agent server is running, since ingestion executes there as a workflow, not in the Next.js process.
+
+### Knowledge deletion does not finish
+
+Deletion runs as a fire-and-forget workflow: vectors first, Garage objects next, metadata last. If the record still appears after a refresh, reopen `/knowledge` and press Delete again — every step is idempotent and tolerates missing objects. A persistent failure usually means Qdrant or Garage is unreachable; fix the backing service first.
+
+### Knowledge retrieval returns nothing for an uploaded document
+
+Confirm the document shows `Ready` on `/knowledge` (a `Failed` record is not searchable), that the question is asked to the Main Agent (the only agent with `search_knowledge_base`), and that the document belongs to the signed-in account — records are tenant-isolated by the session user id and are never cross-account visible.
 
 ### Garage MCP reports missing identity
 
@@ -605,8 +660,8 @@ Confirm all five `GARAGE_*` application values are available to the agent proces
 Check Docker and local health without exposing environment values:
 
 ```bash
-docker compose --env-file storage/.env.local --env-file searxng/.env.local ps garage
-docker inspect --format '{{.State.Health.Status}}' "$(docker compose --env-file storage/.env.local --env-file searxng/.env.local ps -q garage)"
+docker compose -f compose.yaml -f compose.dev.yaml --env-file storage/.env.local --env-file searxng/.env.local ps garage
+docker inspect --format '{{.State.Health.Status}}' "$(docker compose -f compose.yaml -f compose.dev.yaml --env-file storage/.env.local --env-file searxng/.env.local ps -q garage)"
 ```
 
 ### Model access denied
@@ -687,6 +742,26 @@ npm run build --workspace agent
 
 The Next.js client uses system font stacks and does not require a Google Fonts download during production builds.
 
+### Windows emits `ERR_INVALID_MODULE_SPECIFIER` for a backslashed specifier
+
+On win32, Mastra's bundler emits module specifiers with
+native path separators (observed with `pdfjs-dist\legacy\build\pdf.mjs`), which
+the Node ESM loader rejects with `ERR_INVALID_MODULE_SPECIFIER` whenever the
+built bundle starts. Both affected flows are covered:
+
+- `npm run build --workspace agent` runs
+  `../scripts/fix-mastra-specifiers.mjs` after `mastra build`, rewriting
+  backslashed specifiers across `agent/.mastra/output` (a no-op on
+  Linux/macOS output).
+- `npm run dev --workspace agent` goes through
+  `../scripts/mastra-dev.mjs`, which preloads a Node module-resolution hook
+  (`scripts/win-esm-specifier-hook.mjs`, registered via `NODE_OPTIONS`)
+  because `mastra dev` re-bundles into `agent/.mastra/output` itself and
+  starts the server before any post-build step could run.
+
+If a future Mastra upgrade fixes the upstream emission, drop both steps
+without further changes.
+
 ## Verification
 
 Run before merging:
@@ -699,6 +774,15 @@ git diff --check
 ```
 
 The test suite covers model routing, model discovery, prompt normalization, all five built-in agents, Telegram roles and slash commands, email delivery, weekly and competitive PM skills/tools/repositories, report APIs/pages and accessible tables, stored-agent payloads and fixed Garage/SearXNG/Web Reader hydration, bounded search and self-hosted reading transports with safe errors, stored-model migration, thread ownership, proxy paths, UI structure, namespaced storage, Garage adapter safety, Maestro flow runner, char-budget guard, and launcher behavior.
+
+### Local Playwright E2E tests
+
+`npm run test:e2e` runs the Playwright end-to-end suites from `e2e/` on demand (not part of `npm run check`, not attached to CI). Prerequisites: `npm run setup` and `npm run db:migrate` ran at least once, Postgres is up (`docker compose -f compose.yaml -f compose.dev.yaml --env-file storage/.env.local --env-file searxng/.env.local up -d postgres` — the dev overlay carries the `5432` loopback publish), and the Chromium browser is installed (`npx playwright install chromium`; add `--with-deps` on fresh Linux hosts missing system libraries). Playwright starts `npm run dev:client` itself or reuses an already-running dev stack; override the browser's target origin with `CHEKKU_E2E_BASE_URL` (the `webServer` readiness poll stays on the local origin, so a remote target must already be up).
+
+Two operational constraints matter when running the auth suite:
+
+- The in-process auth rate limiter caps each scope (signin / signup / resend / password-reset) at 5 POSTs per 60 seconds and, without `RATE_LIMIT_TRUST_PROXY`, all anonymous clients share one bucket. The suite is serial with `workers: 1` and budgets its POSTs under the caps; re-running within a minute of a previous run can trip 429s — wait ~60 seconds or restart the dev client.
+- Local dev cannot verify email through a real mailbox (without `RESEND_API_KEY` the verification link only prints to the dev server console). The suite therefore flips `emailVerified` directly in `chekku_auth` through `e2e/helpers/auth-db.ts`, resolving `AUTH_DATABASE_URL` from `client/.env.local` (override: `CHEKKU_E2E_AUTH_DATABASE_URL`), and deletes the test users afterwards.
 
 ## Production run
 
@@ -728,7 +812,7 @@ See Production notes below for the durable `DATABASE_URL`, deployed origin, and 
 
 ## Containerized production
 
-`npm run prod:sh` (or `bash scripts/prod.sh`) is the recommended way to run the full Chekku stack in containers. It activates the `prod` Compose profile so Garage, SearXNG, Postgres, the agent, and the client all run as containers; nothing application-level runs on the host.
+`npm run prod:sh` (or `bash scripts/prod.sh`) is the recommended way to run the full Chekku stack in containers. It merges `-f compose.yaml -f compose.prod.yaml` so Garage, SearXNG, Reader, Qdrant, Postgres, the agent, and the client all run as containers; nothing application-level runs on the host.
 
 ```bash
 npm run setup        # generates storage/.env.local, searxng/.env.local; prompts for LLM_* in agent/.env
@@ -737,7 +821,7 @@ npm run prod:sh      # build images, bring the stack up, wait for every service 
 
 Subcommands:
 
-- `npm run prod:sh` — build (if needed), bring everything up, wait for all five services to become healthy.
+- `npm run prod:sh` — build (if needed), bring everything up, wait for all seven services to become healthy.
 - `npm run prod:build` — build only the `agent` and `client` images.
 - `npm run prod:up` — bring the stack up without rebuilding.
 - `npm run prod:down` — stop and remove containers (named volumes are preserved).
@@ -750,14 +834,14 @@ In-container wiring is fixed by Compose and differs from local development:
 - `DATABASE_URL` is constructed as `postgresql://chekku:${POSTGRES_PASSWORD}@postgres:5432/chekku_agent` (service name `postgres`, not `127.0.0.1`).
 - SearXNG is reached at `http://searxng:8080` (the container's internal port), not the loopback `8888` used in development.
 - Reader is reached at `http://reader:8081` (the container's HTTP/1.1 port), not the loopback `8081` host publish used in development.
-- Every published port is loopback-only. The client publishes `127.0.0.1:3000`; put a reverse proxy (Caddy/nginx — a ready nginx template lives at [`ops/nginx/chekku.conf`](../ops/nginx/chekku.conf)) in front for TLS and public exposure. Garage, SearXNG, Reader, and Postgres also keep their development publishes, because `scripts/dev.sh` runs the agent and client as host processes against them and `scripts/db-migrate.sh` runs the Better Auth CLI on the host against `127.0.0.1:5432`.
-- Each of those host ports is overridable for shared hosts where the default is already taken by another stack: `CHEKKU_CLIENT_HOST_PORT` (default 3000, set in `client/.env.local`), and `CHEKKU_GARAGE_HOST_PORT` / `CHEKKU_SEARXNG_HOST_PORT` / `CHEKKU_READER_HOST_PORT` / `CHEKKU_POSTGRES_HOST_PORT` (defaults 3900 / 8888 / 8081 / 5432, set in `agent/.env`). Leaving them empty keeps the defaults. They move the host side of the publish only — containers always reach each other at `garage:3900`, `searxng:8080`, `reader:8081`, `postgres:5432`, and `agent:4111`. `scripts/prod.sh` merges those files into its shell, so the overrides apply to the containerized stack; `scripts/dev.sh` reads `storage/.env.local` instead and is unaffected. Point the reverse proxy at whatever `CHEKKU_CLIENT_HOST_PORT` resolves to.
+- Every published port is loopback-only, and the containerized stack has exactly two. The client publishes `127.0.0.1:3000`; put a reverse proxy (Caddy/nginx — a ready nginx template lives at [`ops/nginx/chekku.conf`](../ops/nginx/chekku.conf)) in front for TLS and public exposure. Postgres publishes `127.0.0.1:5432` because `scripts/db-migrate.sh` runs the Better Auth CLI on the host. The dev-only publishes (Garage `3900`, SearXNG `8888`, Reader `8081`, Qdrant `6333`) live only in `compose.dev.yaml` for the host-run development launcher and never apply to the containerized stack.
+- Each production host port is overridable for shared hosts where the default is already taken by another stack: `CHEKKU_CLIENT_HOST_PORT` (default 3000, set in `client/.env.local`) and `CHEKKU_POSTGRES_HOST_PORT` (default 5432, set in any dotenv file `scripts/prod.sh` parses). The dev-only `CHEKKU_GARAGE_HOST_PORT` / `CHEKKU_SEARXNG_HOST_PORT` / `CHEKKU_READER_HOST_PORT` / `CHEKKU_QDRANT_HOST_PORT` overrides apply only to `scripts/dev.sh`. Leaving them empty keeps the defaults. Overrides move the host side of the publish only — containers always reach each other at `garage:3900`, `searxng:8080`, `reader:8081`, `postgres:5432`, and `agent:4111`. Point the reverse proxy at whatever `CHEKKU_CLIENT_HOST_PORT` resolves to.
 - Better Auth values reach the client container from `client/.env.local`: `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, and `RATE_LIMIT_TRUST_PROXY`. `BETTER_AUTH_URL` must equal the public browser origin or session cookies and verification links break. Set `RATE_LIMIT_TRUST_PROXY=true` only when a reverse proxy supplies a trustworthy `x-forwarded-for`. `AUTH_DATABASE_URL` is **not** forwarded: Compose pins it to `postgresql://chekku:${POSTGRES_PASSWORD}@postgres:5432/chekku_auth`, leaving the `127.0.0.1` value in `client/.env.local` free for the host-side `npm run db:migrate`.
 - The Compose project network is named `chekku-network` rather than the generated `chekku_default`, so it is identifiable on a host running several stacks.
 - The QA Web Agent works in production because the agent image installs system Chromium and points the agent browser at it with `BROWSER_EXECUTABLE_PATH=/usr/bin/chromium`. Leave that variable empty outside the container: host development uses Playwright's own downloaded browser, and an empty value correctly falls back to it. The QA Android Agent (Maestro) stays host/device-only: `MAESTRO_ENABLED` is forced to `false` in the agent container.
 - `NEXT_PUBLIC_APP_URL` is a **build-time** value for the client image. Next.js inlines `NEXT_PUBLIC_*` into the browser bundle during `next build`, so `scripts/prod.sh` forwards it from `client/.env.local` to the builder stage as a `build.args` entry. Before building for a real domain, set `NEXT_PUBLIC_APP_URL=https://studio.example.com` in `client/.env.local` and rebuild (`npm run prod:sh`); overriding it at runtime will not reach the already-built browser bundle. This mirrors the host-`prod` gotcha documented above.
 
-Readiness timeout defaults to 60 seconds and is configurable via `CHEKKU_READY_TIMEOUT_SECONDS` (1–600). The launcher reports each service as it becomes healthy (`Garage ready`, `SearXNG ready`, `Postgres ready`, `Agent ready`, `Client ready`) and aborts with a bounded message if any service fails to become healthy.
+Readiness timeout defaults to 60 seconds and is configurable via `CHEKKU_READY_TIMEOUT_SECONDS` (1–600). The launcher reports each service as it becomes healthy (`Garage ready`, `SearXNG ready`, `Reader ready`, `Qdrant ready`, `Postgres ready`, `Agent ready`, `Client ready`) and aborts with a bounded message if any service fails to become healthy.
 
 ### Containerized production troubleshooting
 
@@ -767,14 +851,14 @@ Direct `docker compose` invocations (for `ps`, `logs`, `exec`, etc.) need `SEARX
 set -a; source storage/.env.local; source searxng/.env.local; set +a
 ```
 
-`npm run prod:sh` / `prod:up` / `prod:down` do not need this step — `scripts/prod.sh` parses every env file internally.
+`npm run prod:sh` / `prod:up` / `prod:down` do not need this step — `scripts/prod.sh` parses every env file internally. Manual commands against the production stack merge `-f compose.yaml -f compose.prod.yaml`; manual commands during development merge `-f compose.yaml -f compose.dev.yaml`.
 
-- **`Production Compose configuration is invalid`** — inspect `compose.yaml` and the local env files; rerun `npm run setup` if a file is missing.
+- **`Production Compose configuration is invalid`** — inspect `compose.yaml`, `compose.prod.yaml`, and the local env files; rerun `npm run setup` if a file is missing.
 - **`... is empty in ...`** — fill the named value in the named file (e.g. `LLM_API_KEY` in `agent/.env`) and rerun `npm run prod:sh`.
-- **`Agent did not become healthy within ... seconds`** — inspect logs without printing secrets: `docker compose --profile prod logs agent` (after sourcing the env files as above). Confirm `HOST=0.0.0.0`, a reachable `DATABASE_URL`, and valid `LLM_*` values.
-- **Client cannot reach the agent** — confirm the client container's `AGENT_URL=http://agent:4111` and that the agent container is healthy (`docker compose --profile prod ps`).
+- **`Agent did not become healthy within ... seconds`** — inspect logs without printing secrets: `docker compose -f compose.yaml -f compose.prod.yaml logs agent` (after sourcing the env files as above). Confirm `HOST=0.0.0.0`, a reachable `DATABASE_URL`, and valid `LLM_*` values.
+- **Client cannot reach the agent** — confirm the client container's `AGENT_URL=http://agent:4111` and that the agent container is healthy (`docker compose -f compose.yaml -f compose.prod.yaml ps`).
 - **`next build` fails on `/_global-error` prerendering inside the container** — the builder stage must NOT set `NODE_ENV=development`; `next build` needs the default production `NODE_ENV`. `npm ci` installs devDependencies regardless of `NODE_ENV`, so the builder leaves it unset.
-- **Reset production data** — same Postgres volume reset as development, but scoped to the prod profile:
+- **Reset production data** — same Postgres volume reset as development, but scoped to the production stack (`npm run prod:down` passes the `-f compose.yaml -f compose.prod.yaml` pair):
   ```bash
   npm run prod:down
   docker volume rm chekku_postgres-data

@@ -66,8 +66,8 @@ async function handler(request: NextRequest, context: { params: Promise<{ path: 
   let url: string;
   let authorizationPath: string[];
   try {
-    authorizationPath = normalizeAgentProxyPath(path);
-    url = buildAgentProxyUrl(process.env.AGENT_URL ?? 'http://localhost:4111', authorizationPath, request.nextUrl.search);
+    authorizationPath = normalizeAgentProxyPath(path, request.method);
+    url = buildAgentProxyUrl(process.env.AGENT_URL ?? 'http://localhost:4111', authorizationPath, request.nextUrl.search, request.method);
   }
   catch (error) { return new Response(error instanceof Error ? error.message : 'Invalid path', { status: 400 }); }
   if (isBlockedNativeAgentRoute(authorizationPath)) {

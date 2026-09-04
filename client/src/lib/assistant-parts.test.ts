@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   appendTextDelta,
   groupAssistantParts,
+  interruptRunningToolParts,
   mergeAdjacentAssistantTurns,
   restoreAssistantParts,
   textFromAssistantParts,
@@ -51,6 +52,34 @@ describe('appendTextDelta', () => {
   it('ignores empty deltas', () => {
     const parts: AssistantPart[] = [textPart('hi')];
     expect(appendTextDelta(parts, '')).toBe(parts);
+  });
+});
+
+describe('interruptRunningToolParts', () => {
+  it('flips running tool cards to interrupted and leaves everything else alone', () => {
+    const parts: AssistantPart[] = [
+      toolPart('running-1'),
+      { ...toolPart('done-1'), status: 'complete' },
+      textPart('narration'),
+    ];
+
+    const interrupted = interruptRunningToolParts(parts);
+
+    expect(interrupted[0]).toMatchObject({
+      type: 'tool',
+      toolCallId: 'running-1',
+      status: 'interrupted',
+    });
+    expect(interrupted[1]).toMatchObject({
+      type: 'tool',
+      toolCallId: 'done-1',
+      status: 'complete',
+    });
+    expect(interrupted[2]).toBe(parts[2]);
+  });
+
+  it('is safe on an empty timeline', () => {
+    expect(interruptRunningToolParts([])).toEqual([]);
   });
 });
 
@@ -313,6 +342,113 @@ describe('restoreAssistantParts', () => {
     ]);
     expect(restored!.parts[2]).toMatchObject({ result: 'selector not found' });
     expect(restored!.text).toBe('');
+  });
+
+  it('renders bridge-persisted interrupted tool results as interrupted, not errors', () => {
+    // The abort persistence bridge pairs an in-flight tool-call with a
+    // synthetic error-text result plus `interrupted: true`; without the
+    // marker check a page refresh showed the stopped tool as failed.
+    const restored = restoreAssistantParts(
+      {
+        format: 2,
+        parts: [
+          { type: 'tool-call', toolCallId: 'tc-1', toolName: 'search_web' },
+          {
+            type: 'tool-result',
+            toolCallId: 'tc-1',
+            toolName: 'search_web',
+            output: { type: 'json', value: { results: [] } },
+          },
+          { type: 'tool-call', toolCallId: 'tc-2', toolName: 'read_web_page' },
+          {
+            type: 'tool-result',
+            toolCallId: 'tc-2',
+            toolName: 'read_web_page',
+            output: {
+              type: 'error-text',
+              value:
+                'Tool call was interrupted before completing (run stopped by the user).',
+            },
+            interrupted: true,
+          },
+          {
+            type: 'tool-result',
+            toolCallId: 'tc-3',
+            toolName: 'browser_click',
+            output: { type: 'error-text', value: 'selector not found' },
+          },
+        ],
+      },
+      'msg-bridge',
+    );
+
+    const byId = new Map(
+      restored!.parts
+        .filter((part) => part.type === 'tool')
+        .map((part) => [part.toolCallId, part]),
+    );
+    expect(byId.get('tc-1')).toMatchObject({ status: 'complete' });
+    expect(byId.get('tc-2')).toMatchObject({ status: 'interrupted' });
+    expect(byId.get('tc-3')).toMatchObject({ status: 'error' });
+  });
+
+  it('renders tool-invocation interrupted markers as interrupted, not errors', () => {
+    // The abort persistence bridge persists cancelled-turn tools as
+    // `tool-invocation` parts: an unresolved call carries `state:
+    // 'output-error'` with a synthetic `errorText` (provider-request
+    // validity) plus `interrupted: true` inside the invocation — the marker
+    // must win over the error state after a page refresh.
+    const restored = restoreAssistantParts(
+      {
+        format: 2,
+        parts: [
+          {
+            type: 'tool-invocation',
+            toolInvocation: {
+              toolCallId: 'tc-done',
+              toolName: 'search_web',
+              args: { query: 'x' },
+              state: 'result',
+              result: 'evidence',
+            },
+          },
+          {
+            type: 'tool-invocation',
+            toolInvocation: {
+              toolCallId: 'tc-stopped',
+              toolName: 'read_web_page',
+              args: { url: 'https://x' },
+              state: 'output-error',
+              errorText:
+                'Tool call was interrupted before completing (run stopped by the user).',
+              interrupted: true,
+            },
+          },
+          {
+            type: 'tool-invocation',
+            toolInvocation: {
+              toolCallId: 'tc-failed',
+              toolName: 'browser_click',
+              state: 'output-error',
+              errorText: 'selector not found',
+            },
+          },
+        ],
+      },
+      'msg-invocation',
+    );
+
+    const byId = new Map(
+      restored!.parts
+        .filter((part) => part.type === 'tool')
+        .map((part) => [part.toolCallId, part]),
+    );
+    expect(byId.get('tc-done')).toMatchObject({
+      status: 'complete',
+      result: 'evidence',
+    });
+    expect(byId.get('tc-stopped')).toMatchObject({ status: 'interrupted' });
+    expect(byId.get('tc-failed')).toMatchObject({ status: 'error' });
   });
 
   it('skips reasoning, step-start, and other non-timeline parts', () => {

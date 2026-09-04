@@ -28,6 +28,11 @@ if ! docker compose version >/dev/null 2>&1; then
   exit 1
 fi
 
+# Every Compose invocation merges the port-less infra base with the dev
+# overlay: the overlay is what publishes the loopback ports the host-run
+# agent, client, and migration CLI reach services through.
+DEV_COMPOSE=(docker compose --env-file storage/.env.local -f compose.yaml -f compose.dev.yaml)
+
 STORAGE_ENV_FILE="$ROOT/storage/.env.local"
 SEARXNG_ENV_FILE="$ROOT/searxng/.env.local"
 GARAGE_CONFIG_FILE="$ROOT/storage/.garage/garage.toml"
@@ -57,8 +62,8 @@ if [[ "$TOML_HASH" != "$APPLIED_HASH" ]]; then
   export GARAGE_CONFIG_CHANGED=1
 fi
 
-if ! docker compose --env-file storage/.env.local config --quiet >/dev/null 2>&1; then
-  echo "Local services Compose configuration is invalid. Check compose.yaml and generated service configuration." >&2
+if ! "${DEV_COMPOSE[@]}" config --quiet >/dev/null 2>&1; then
+  echo "Local services Compose configuration is invalid. Check compose.yaml, compose.dev.yaml, and generated service configuration." >&2
   exit 1
 fi
 
@@ -178,11 +183,12 @@ ensure_service_ready() {
     postgres) required_port=5432 ;;
     searxng) required_port=8888 ;;
     reader) required_port=8081 ;;
+    qdrant) required_port=6333 ;;
     *) echo "Unsupported development service." >&2; exit 1 ;;
   esac
 
   set +e
-  service_id="$(run_with_timeout "$ready_timeout_seconds" docker compose --env-file storage/.env.local ps -q "$service")"
+  service_id="$(run_with_timeout "$ready_timeout_seconds" "${DEV_COMPOSE[@]}" ps -q "$service")"
   health_status=$?
   set -e
   if [[ "$health_status" == 124 ]]; then docker_health_timeout "$display_name"; fi
@@ -204,7 +210,7 @@ ensure_service_ready() {
     start_args=(up -d "$service")
   fi
 
-  if ! docker compose --env-file storage/.env.local "${start_args[@]}"; then
+  if ! "${DEV_COMPOSE[@]}" "${start_args[@]}"; then
     conflicts="$(service_port_conflicts "$test_ports")"
     if [[ -n "$conflicts" ]]; then
       echo "$display_name Compose failed because required port ${conflicts// /, } is occupied (required: $required_port)." >&2
@@ -223,7 +229,7 @@ ensure_service_ready() {
       if [[ "$first_ready_poll" == true ]]; then remaining_seconds=1; else break; fi
     fi
     set +e
-    service_id="$(run_with_timeout "$remaining_seconds" docker compose --env-file storage/.env.local ps -q "$service")"
+    service_id="$(run_with_timeout "$remaining_seconds" "${DEV_COMPOSE[@]}" ps -q "$service")"
     health_status=$?
     set -e
     if [[ "$health_status" == 124 ]]; then docker_health_timeout "$display_name"; fi
@@ -282,6 +288,10 @@ printf 'Reader ready\n  base URL: http://127.0.0.1:%s\n' "${CHEKKU_READER_HOST_P
 ensure_service_ready postgres Postgres "${CHEKKU_POSTGRES_PORTS:-5432}"
 
 printf 'Postgres ready\n  database: chekku_agent\n'
+
+ensure_service_ready qdrant Qdrant "${CHEKKU_QDRANT_PORTS:-6333}"
+
+printf 'Qdrant ready\n  base URL: http://127.0.0.1:%s\n' "${CHEKKU_QDRANT_HOST_PORT:-6333}"
 
 garage_app_cleanup='for garage_name in ${!GARAGE_@}; do case "$garage_name" in GARAGE_ENDPOINT|GARAGE_REGION|GARAGE_BUCKET|GARAGE_ACCESS_KEY_ID|GARAGE_SECRET_ACCESS_KEY) ;; *) unset "$garage_name" ;; esac; done'
 searxng_agent_cleanup='for searxng_name in ${!SEARXNG_@}; do case "$searxng_name" in SEARXNG_BASE_URL|SEARXNG_API_KEY) ;; *) unset "$searxng_name" ;; esac; done'

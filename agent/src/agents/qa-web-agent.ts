@@ -1,4 +1,5 @@
 import { Agent, type AgentConfig, type ToolsInput } from '@mastra/core/agent';
+import { createDurableAgent } from '@mastra/core/agent/durable';
 
 import { browser } from '../mastra/browsers.js';
 import { gatewayCompatibilityProcessor } from '../mastra/processors/gateway-compatibility.js';
@@ -31,3 +32,23 @@ Never expose secrets or credentials. If a site blocks automation or needs user a
 };
 
 export const qaWebAgent = new Agent(qaWebAgentConfig);
+
+/**
+ * Durable rollout (Task D, Fase 1): the QA Web Agent runs the studio's
+ * longest interactive jobs (`maxSteps: 80` browser sessions), so it runs
+ * through `createDurableAgent` alongside the pm-agent pilot. Same contract
+ * as `durablePmAgent`: in-process PubSub and in-memory event cache (no
+ * Redis), public id stays `qa-web-agent` and the composition key stays
+ * `qaWebAgent`, so `getAgentById`, thread-id ownership, and the `/runs`
+ * surface are unchanged. Stop flows through the run registry's
+ * AbortController; the execution driver calls `cleanup()` on terminal
+ * states. Known engine limitation (pinned `@mastra/core` 1.50.1): an
+ * in-flight browser action is not interrupted by the abort signal — it
+ * runs to completion and the abort lands at the next LLM step; the client
+ * compensates by flipping running tool cards to `interrupted` on stop.
+ * Crash recovery is not available in this version. No workflow or channel
+ * calls this agent directly — the chat run surface is its only caller.
+ */
+export const durableQaWebAgent = createDurableAgent({
+  agent: qaWebAgent as Agent<string, ToolsInput, undefined>,
+});
