@@ -41,8 +41,8 @@ describe('agent server routes', () => {
       'weeklySocialDrafts',
       'repurposeSocialPost',
       'generateSocialPostVisual',
-      // Internal engine workflow auto-registered by the pm-agent durable
-      // pilot (`createDurableAgent`); not an application workflow.
+      // Internal engine workflow auto-registered by durable execution; not an
+      // application workflow.
       'knowledgeDocumentIngestion',
       'knowledgeDocumentDeletion',
       'durable-agentic-loop',

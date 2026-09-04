@@ -1,6 +1,6 @@
 import { Agent, type AgentConfig, type ToolsInput } from '@mastra/core/agent';
-import { createDurableAgent } from '@mastra/core/agent/durable';
 
+import { createDescriptionForwardingDurableAgent } from '../mastra/durable-agent.js';
 import { createAgentContextLimiter, createAgentMemory, createCharBudgetGuard } from '../mastra/processors/context-limit.js';
 import { createTaskNudgeProcessor } from '../mastra/tasks/task-nudge-processor.js';
 import { TASK_GUIDANCE, createTaskSignals } from '../mastra/tasks/task-signals.js';
@@ -324,6 +324,6 @@ export const socialMediaStrategistAgent = new Agent(socialMediaStrategistAgentCo
  * crash recovery unavailable in the pinned `@mastra/core` 1.50.1). The
  * plain instance stays exported for tests.
  */
-export const durableSocialMediaStrategistAgent = createDurableAgent({
+export const durableSocialMediaStrategistAgent = createDescriptionForwardingDurableAgent({
   agent: socialMediaStrategistAgent as Agent<string, ToolsInput, undefined>,
 });
