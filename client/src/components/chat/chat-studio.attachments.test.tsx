@@ -674,3 +674,155 @@ describe('ChatStudio knowledge reconciliation', () => {
     expect(fetchMock.mock.calls.length).toBe(callsAtUnmount);
   });
 });
+
+describe('ChatStudio pdf cards and viewer', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function stubListEndpoint(
+    documents: Array<{ id: string; status: string; error?: string | null }>,
+  ): void {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(JSON.stringify({ documents }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    );
+  }
+
+  async function attachPdfAndSend(
+    uploadImplementation?: () => Promise<unknown>,
+  ): Promise<void> {
+    if (uploadImplementation) {
+      knowledgeUpload.mockImplementationOnce(uploadImplementation);
+    } else {
+      knowledgeUpload.mockResolvedValueOnce({
+        ok: true,
+        document: { id: 'kbd_20260101000000_deadbeef', status: 'processing' },
+      });
+    }
+    await attachFiles([
+      new File([new Uint8Array([1, 2, 3])], 'report.pdf', {
+        type: 'application/pdf',
+      }),
+    ]);
+    await submitComposer();
+  }
+
+  it('opens the original-PDF viewer while the upload is still indexing', async () => {
+    stubListEndpoint([
+      { id: 'kbd_20260101000000_deadbeef', status: 'processing' },
+    ]);
+    await attachPdfAndSend();
+
+    const card = container.querySelector<HTMLButtonElement>('.chat-pdf-card');
+    expect(card).not.toBeNull();
+    expect(card!.disabled).toBe(false);
+    await act(async () => {
+      card!.click();
+      await Promise.resolve();
+    });
+
+    const frame = container.querySelector<HTMLIFrameElement>('.chat-pdf-frame');
+    expect(frame).not.toBeNull();
+    // The original-bytes route is available the moment the upload POST
+    // succeeded — indexing state must not block the viewer.
+    expect(frame!.getAttribute('src')).toBe(
+      '/api/storage/knowledge/documents/kbd_20260101000000_deadbeef/original',
+    );
+  });
+
+  it('still opens the original-PDF viewer after indexing fails', async () => {
+    stubListEndpoint([
+      {
+        id: 'kbd_20260101000000_deadbeef',
+        status: 'failed',
+        error: 'The knowledge index is currently unreachable. Check the Qdrant service and retry.',
+      },
+    ]);
+    await attachPdfAndSend();
+
+    const card = container.querySelector<HTMLButtonElement>('.chat-pdf-card');
+    expect(card!.disabled).toBe(false);
+    await act(async () => {
+      card!.click();
+      await Promise.resolve();
+    });
+    expect(
+      container.querySelector<HTMLIFrameElement>('.chat-pdf-frame')?.getAttribute('src'),
+    ).toBe('/api/storage/knowledge/documents/kbd_20260101000000_deadbeef/original');
+  });
+
+  it('renders a disabled card before the upload resolves', async () => {
+    await attachPdfAndSend(() => new Promise<never>(() => undefined));
+
+    const card = container.querySelector<HTMLButtonElement>('.chat-pdf-card');
+    expect(card).not.toBeNull();
+    expect(card!.disabled).toBe(true);
+    expect(card!.getAttribute('title')).toContain('opens once the upload finishes');
+  });
+
+  it('opens the grouped-page viewer for a restored multi-page pdf and closes on Escape', async () => {
+    listThreadMessages.mockResolvedValue([
+      {
+        id: 'msg-pdf-restore',
+        role: 'user',
+        content: 'the report',
+        createdAt: 1,
+        attachments: [
+          {
+            mimeType: 'application/pdf',
+            filename: 'restored.pdf',
+            dataUrl: 'data:image/jpeg;base64,UDDE=',
+            pageCount: 2,
+            pages: ['data:image/jpeg;base64,UDDE=', 'data:image/jpeg;base64,UDDF='],
+          },
+        ],
+      },
+    ]);
+    // Re-render the same harness with the restored thread loaded.
+    await act(async () => {
+      root?.unmount();
+      document.body.innerHTML = '';
+      container = document.createElement('div');
+      document.body.appendChild(container);
+      root = createRoot(container);
+      root.render(
+        <ChatStudio
+          resourceId="local-user"
+          initialAgentId="main-agent"
+          initialThreadId={activeThreadId}
+        />,
+      );
+    });
+    await flushEffects();
+
+    const card = container.querySelector<HTMLButtonElement>('.chat-pdf-card');
+    expect(card).not.toBeNull();
+    expect(card!.disabled).toBe(false);
+    await act(async () => {
+      card!.click();
+      await Promise.resolve();
+    });
+
+    // No documentId survives restore: the grouped-page viewer opens.
+    expect(container.querySelector('.chat-pdf-frame')).toBeNull();
+    expect(container.querySelectorAll('.chat-pdf-page img')).toHaveLength(2);
+    expect(container.textContent).toContain('restored.pdf');
+
+    // Escape closes through the native cancel path.
+    const dialog = container.querySelector('dialog.chat-pdf-viewer');
+    expect(dialog).not.toBeNull();
+    await act(async () => {
+      dialog!.dispatchEvent(
+        new Event('cancel', { bubbles: false, cancelable: true }),
+      );
+      await Promise.resolve();
+    });
+    expect(container.querySelector('dialog.chat-pdf-viewer')).toBeNull();
+  });
+});

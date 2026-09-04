@@ -3540,6 +3540,158 @@ dialog.chat-task-dock-dialog[open] {
   border-style: solid;
 }
 
+.chat-pdf-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 240px;
+  padding: 6px 10px 6px 6px;
+  border: 1px solid var(--studio-line-strong);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+
+.chat-pdf-card:hover:not(:disabled) {
+  border-color: var(--studio-accent);
+}
+
+.chat-pdf-card:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.chat-pdf-card-cover {
+  width: 40px;
+  height: 54px;
+  object-fit: cover;
+  border: 1px solid var(--studio-line);
+  border-radius: 2px;
+  flex: none;
+}
+
+.chat-pdf-card-cover-empty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--studio-muted);
+  font: 16px var(--font-dm-mono);
+}
+
+.chat-pdf-card-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+
+.chat-pdf-card-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 11px var(--font-dm-mono);
+  color: var(--studio-body);
+}
+
+.chat-pdf-card-sub {
+  font: 9px var(--font-dm-mono);
+  color: var(--studio-muted);
+  white-space: nowrap;
+}
+
+.chat-pdf-viewer {
+  width: min(860px, 92vw);
+  height: min(86vh, 920px);
+  max-width: none;
+  border: 1px solid var(--studio-line-strong);
+  border-radius: 6px;
+  padding: 0;
+  background: var(--studio-bg, #fff);
+  color: var(--studio-body);
+}
+
+.chat-pdf-viewer::backdrop {
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.chat-pdf-viewer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--studio-line);
+}
+
+.chat-pdf-viewer-title {
+  margin: 0;
+  font: 13px var(--font-dm-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-pdf-viewer-title small {
+  color: var(--studio-muted);
+  font-weight: normal;
+}
+
+.chat-pdf-viewer-close {
+  border: 1px solid var(--studio-line);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--studio-body);
+  padding: 3px 8px;
+  cursor: pointer;
+  font: 11px var(--font-dm-mono);
+}
+
+.chat-pdf-viewer-close:hover {
+  border-color: var(--studio-accent);
+}
+
+.chat-pdf-viewer-body {
+  height: calc(100% - 45px);
+  overflow: auto;
+}
+
+.chat-pdf-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.chat-pdf-pages {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px;
+}
+
+.chat-pdf-page {
+  margin: 0;
+}
+
+.chat-pdf-page img {
+  max-width: 100%;
+  border: 1px solid var(--studio-line);
+  border-radius: 2px;
+}
+
+.chat-pdf-page figcaption {
+  margin-top: 4px;
+  font: 9px var(--font-dm-mono);
+  color: var(--studio-muted);
+}
+
+.chat-pdf-card:focus-visible,
+.chat-pdf-viewer-close:focus-visible {
+  outline: 2px solid var(--studio-accent);
+  outline-offset: 1px;
+}
+
 .chat-knowledge-status[data-knowledge-state='failed'] {
   color: var(--studio-warning);
   border-style: solid;

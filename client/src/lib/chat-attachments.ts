@@ -451,6 +451,7 @@ export function toAttachmentView(
       filename: attachment.filename,
       mimeType: 'application/pdf',
       pageCount: attachment.pages.length,
+      byteSize: attachment.byteSize,
       ...(cover
         ? { dataUrl: `data:image/jpeg;base64,${cover}` }
         : {}),

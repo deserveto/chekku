@@ -25,6 +25,10 @@ import { MarkdownMessage } from '@/components/markdown-message';
 import { ResizableSidebar } from '@/components/studio/resizable-sidebar';
 import { BrandMark } from '@/components/ui/brand-mark';
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
+import {
+  PdfAttachmentCard,
+  PdfViewerDialog,
+} from '@/components/chat/attachment-pdf';
 import { AgentIcon } from '@/components/agents/agent-icon';
 import { defaultAgentIcon } from '@/lib/agent-icons';
 import {
@@ -97,9 +101,10 @@ import {
 } from '@/lib/assistant-parts';
 import {
   MAIN_AGENT_ID,
-  QA_WEB_AGENT_ID,
-  QA_ANDROID_AGENT_ID,
+  type ChatAttachmentView,
   type ChatMessage,
+  QA_ANDROID_AGENT_ID,
+  QA_WEB_AGENT_ID,
   type ChekkuAgentSummary,
   type ToolAssistantPart,
   type ToolEventStatus,
@@ -177,13 +182,28 @@ function appendErrorDetail(message: ChatMessage, detail: string): ChatMessage {
 
 function messageFromMemory(value: StudioMemoryMessage): ChatMessage {
   const { attachments: restored, ...base } = value;
-  const attachments = restored?.map((attachment, index) => ({
-    id: `${value.id}-att-${index}`,
-    kind: 'image' as const,
-    filename: attachment.filename ?? `attachment-${index + 1}`,
-    mimeType: attachment.mimeType,
-    dataUrl: attachment.dataUrl,
-  }));
+  const attachments = restored?.map((attachment, index) => {
+    // Restored PDF page groups map to pdf views that open the grouped-page
+    // viewer (no documentId linkage survives restore by design).
+    if (attachment.pages && attachment.pages.length > 0) {
+      return {
+        id: `${value.id}-pdf-${index}`,
+        kind: 'pdf' as const,
+        filename: attachment.filename ?? `document-${index + 1}.pdf`,
+        mimeType: 'application/pdf',
+        pageCount: attachment.pageCount ?? attachment.pages.length,
+        pages: attachment.pages,
+        dataUrl: attachment.dataUrl,
+      };
+    }
+    return {
+      id: `${value.id}-att-${index}`,
+      kind: 'image' as const,
+      filename: attachment.filename ?? `attachment-${index + 1}`,
+      mimeType: attachment.mimeType,
+      dataUrl: attachment.dataUrl,
+    };
+  });
   return {
     ...base,
     ...(attachments && attachments.length > 0 ? { attachments } : {}),
@@ -356,11 +376,25 @@ export function ChatStudio({
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [activeRun, setActiveRun] = useState<AgentRunSummary | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<StudioThread>();
+  const [deletingThreadId, setDeletingThreadId] = useState<string>();
+  const [pdfPreview, setPdfPreview] = useState<{
+    view: ChatAttachmentView;
+    documentId?: string;
+  } | null>(null);
   // id of the assistant placeholder the active subscription streams into;
   // gates per-message UI (typing indicator) to the streaming turn only.
   const [activeAssistantId, setActiveAssistantId] = useState<string | null>(
     null,
   );
+  // Latest authoritative task snapshot for the viewed thread; null while the
+  // thread has no task list. Canonical state stays server-side (Mastra task
+  // store + run events); this only mirrors the newest snapshot.
+  const [threadTasks, setThreadTasks] = useState<ThreadTaskState | null>(null);
+  const [taskNotice, setTaskNotice] = useState<string | null>(null);
+  const [taskDockOpen, setTaskDockOpen] = useState(false);
+  // Bounded last task-tool failure surfaced inside the dock; cleared by
+  // the next snapshot and on thread switches.
   const [subscriptionState, setSubscriptionState] = useState<
     'idle' | 'connecting' | 'connected'
   >('idle');
@@ -372,19 +406,10 @@ export function ChatStudio({
   >({});
   const [error, setError] = useState<string>();
   const [modelReady, setModelReady] = useState(false);
-  const [pendingDelete, setPendingDelete] = useState<StudioThread>();
-  const [deletingThreadId, setDeletingThreadId] = useState<string>();
-  // Latest authoritative task snapshot for the viewed thread; null while the
-  // thread has no task list. Canonical state stays server-side (Mastra task
-  // store + run events); this only mirrors the newest snapshot.
-  const [threadTasks, setThreadTasks] = useState<ThreadTaskState | null>(null);
-  // Bounded last task-tool failure surfaced inside the dock; cleared by
-  // the next snapshot and on thread switches.
-  const [taskNotice, setTaskNotice] = useState<string | null>(null);
-  const [taskDockOpen, setTaskDockOpen] = useState(false);
 
   useEffect(() => () => {
     mountedRef.current = false;
+    if (titleRefreshTimerRef.current) window.clearTimeout(titleRefreshTimerRef.current);
   }, []);
   const agentId = initialAgentId;
   const threadId = initialThreadId;
@@ -1799,7 +1824,23 @@ export function ChatStudio({
                             <Fragment
                               key={attachment.id || `${message.id}-att-${index}`}
                             >
-                              {attachment.dataUrl ? (
+                              {attachment.kind === 'pdf' ? (
+                                <PdfAttachmentCard
+                                  filename={attachment.filename}
+                                  pageCount={attachment.pageCount ?? 0}
+                                  byteSize={attachment.byteSize}
+                                  coverUrl={attachment.dataUrl}
+                                  canOpen={
+                                    Boolean(knowledgeStatus[attachment.id]?.documentId)
+                                    || Boolean(attachment.pages)
+                                  }
+                                  onOpen={() =>
+                                    setPdfPreview({
+                                      view: attachment,
+                                      documentId: knowledgeStatus[attachment.id]?.documentId,
+                                    })}
+                                />
+                              ) : attachment.dataUrl ? (
                                 // Data-URL thumbnails cannot use next/image without
                                 // per-origin configuration; a plain img is correct here.
                                 // eslint-disable-next-line @next/next/no-img-element
@@ -1938,6 +1979,16 @@ export function ChatStudio({
         onCancel={() => setPendingDelete(undefined)}
         onConfirm={() => void deleteThread()}
       />
+      {pdfPreview && (
+        <PdfViewerDialog
+          open
+          filename={pdfPreview.view.filename}
+          pageCount={pdfPreview.view.pageCount ?? 0}
+          documentId={pdfPreview.documentId}
+          pages={pdfPreview.view.pages}
+          onClose={() => setPdfPreview(null)}
+        />
+      )}
     </div>
   );
 }

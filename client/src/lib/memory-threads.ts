@@ -20,6 +20,10 @@ export interface StudioMemoryAttachment {
   mimeType: string;
   dataUrl: string;
   filename?: string;
+  /** Present on grouped PDF page attachments (restored messages only). */
+  pageCount?: number;
+  /** Grouped page data URLs in page order (restored messages only). */
+  pages?: string[];
 }
 
 export interface StudioMemoryMessage {
@@ -47,6 +51,10 @@ const MAX_RESTORED_ATTACHMENTS = 24;
 const MAX_RESTORED_ATTACHMENT_CHARS = 8 * 1024 * 1024;
 const MAX_RESTORED_MESSAGE_ATTACHMENT_CHARS = 8 * 1024 * 1024;
 const MAX_RESTORED_THREAD_ATTACHMENT_CHARS = 24 * 1024 * 1024;
+/** Persisted PDF page images carry this filename shape from the live send
+ * path; restored messages group consecutive complete runs back into one
+ * pdf attachment. */
+const PDF_PAGE_NAME = /^(.*) \(page (\d+) of (\d+)\)$/;
 /**
  * Display text cap per restored message. Live user bubbles only ever show the
  * typed prompt; legacy rows without attachment sentinels can still carry the
@@ -131,26 +139,98 @@ function attachmentsFromContent(
 ): StudioMemoryAttachment[] {
   const attachments: StudioMemoryAttachment[] = [];
   let messageTotal = 0;
-  for (const part of partsFromContent(content)) {
-    if (!part || typeof part !== 'object') continue;
+  const parts = partsFromContent(content);
+
+  const asImagePart = (
+    part: unknown,
+  ): { mimeType: string; data: string; filename?: string } | undefined => {
+    if (!part || typeof part !== 'object') return undefined;
     const record = part as Record<string, unknown>;
-    if (record.type !== 'file') continue;
+    if (record.type !== 'file') return undefined;
     const mimeType = typeof record.mimeType === 'string' ? record.mimeType : '';
-    if (!mimeType.startsWith('image/')) continue;
+    if (!mimeType.startsWith('image/')) return undefined;
     const data = typeof record.data === 'string' ? record.data : '';
-    if (!data) continue;
-    const chars = data.length;
+    if (!data) return undefined;
+    const filename =
+      typeof record.filename === 'string' && record.filename
+        ? record.filename
+        : undefined;
+    return { mimeType, data, filename };
+  };
+
+  const toDataUrl = (mimeType: string, data: string) =>
+    data.startsWith('data:') ? data : `data:${mimeType};base64,${data}`;
+
+  const budgetAllows = (chars: number) =>
+    chars <= MAX_RESTORED_ATTACHMENT_CHARS &&
+    messageTotal + chars <= MAX_RESTORED_MESSAGE_ATTACHMENT_CHARS &&
+    budget.remaining - chars >= 0;
+
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = asImagePart(parts[index]);
+    if (!part) continue;
+
+    // Group a complete, sequential run of PDF page images (filenames of the
+    // shape "{name} (page i of n)") into ONE pdf attachment. Broken or
+    // partial runs degrade to individual images — data is never dropped.
+    const match = part.filename ? PDF_PAGE_NAME.exec(part.filename) : undefined;
+    if (match && match[2] === '1') {
+      const base = match[1];
+      const total = Number.parseInt(match[3] ?? '', 10);
+      if (base && Number.isSafeInteger(total) && total >= 2) {
+        const run: Array<{ mimeType: string; data: string }> = [part];
+        let complete = true;
+        for (let page = 2; page <= total; page += 1) {
+          const next = asImagePart(parts[index + page - 1]);
+          const nextMatch = next?.filename
+            ? PDF_PAGE_NAME.exec(next.filename)
+            : undefined;
+          if (
+            !next ||
+            !nextMatch ||
+            nextMatch[1] !== base ||
+            nextMatch[2] !== String(page) ||
+            nextMatch[3] !== match[3]
+          ) {
+            complete = false;
+            break;
+          }
+          run.push(next);
+        }
+        if (complete) {
+          const chars = run.reduce((n, page) => n + page.data.length, 0);
+          if (budgetAllows(chars)) {
+            messageTotal += chars;
+            budget.remaining -= chars;
+            attachments.push({
+              mimeType: 'application/pdf',
+              filename: base,
+              dataUrl: toDataUrl(run[0]!.mimeType, run[0]!.data),
+              pageCount: total,
+              pages: run.map((page) => toDataUrl(page.mimeType, page.data)),
+            });
+            if (attachments.length >= MAX_RESTORED_ATTACHMENTS) break;
+            index += total - 1;
+            continue;
+          }
+          // Oversized group: skip it whole rather than emitting broken
+          // partial pages.
+          index += total - 1;
+          continue;
+        }
+      }
+    }
+
+    const chars = part.data.length;
     if (chars > MAX_RESTORED_ATTACHMENT_CHARS) continue;
     if (messageTotal + chars > MAX_RESTORED_MESSAGE_ATTACHMENT_CHARS) break;
     if (budget.remaining - chars < 0) break;
     messageTotal += chars;
     budget.remaining -= chars;
     attachments.push({
-      mimeType,
-      dataUrl: data.startsWith('data:') ? data : `data:${mimeType};base64,${data}`,
-      ...(typeof record.filename === 'string' && record.filename
-        ? { filename: record.filename }
-        : {}),
+      mimeType: part.mimeType,
+      dataUrl: toDataUrl(part.mimeType, part.data),
+      ...(part.filename ? { filename: part.filename } : {}),
     });
     if (attachments.length >= MAX_RESTORED_ATTACHMENTS) break;
   }

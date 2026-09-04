@@ -1047,7 +1047,116 @@ describe('agent-scoped memory threads', () => {
       'local-user',
     );
 
-    expect(messages[0]?.attachments).toHaveLength(24);
+    // A complete consecutive page run groups into ONE pdf attachment; the
+    // 24-attachment cap counts groups, not pages.
+    expect(messages[0]?.attachments).toHaveLength(1);
+    expect(messages[0]?.attachments?.[0]).toMatchObject({
+      mimeType: 'application/pdf',
+      filename: 'doc.pdf',
+      pageCount: 30,
+    });
+    expect(messages[0]?.attachments?.[0]?.pages).toHaveLength(30);
+  });
+
+  it('groups a complete restored page run into one pdf attachment', async () => {
+    threadListMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'msg-pdf',
+          role: 'user',
+          createdAt: '2026-08-19T10:06:00.000Z',
+          content: {
+            format: 2,
+            parts: [
+              { type: 'text', text: 'the report' },
+              { type: 'file', mimeType: 'image/jpeg', data: 'UDE=', filename: 'report.pdf (page 1 of 3)' },
+              { type: 'file', mimeType: 'image/jpeg', data: 'UDI=', filename: 'report.pdf (page 2 of 3)' },
+              { type: 'file', mimeType: 'image/jpeg', data: 'UDM=', filename: 'report.pdf (page 3 of 3)' },
+            ],
+          },
+        },
+      ],
+    });
+
+    const messages = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    expect(messages[0]?.attachments).toHaveLength(1);
+    const pdf = messages[0]?.attachments?.[0];
+    expect(pdf).toMatchObject({
+      mimeType: 'application/pdf',
+      filename: 'report.pdf',
+      pageCount: 3,
+    });
+    expect(pdf?.pages).toHaveLength(3);
+  });
+
+  it('degrades a broken page run to individual images without dropping data', async () => {
+    threadListMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'msg-broken-pdf',
+          role: 'user',
+          createdAt: '2026-08-19T10:07:00.000Z',
+          content: {
+            format: 2,
+            parts: [
+              { type: 'text', text: 'broken' },
+              { type: 'file', mimeType: 'image/jpeg', data: 'UDE=', filename: 'report.pdf (page 1 of 3)' },
+              { type: 'file', mimeType: 'image/jpeg', data: 'UDM=', filename: 'report.pdf (page 3 of 3)' },
+            ],
+          },
+        },
+      ],
+    });
+
+    const messages = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    // Page 2 is missing: the run is incomplete, so every page survives as
+    // an individual image attachment.
+    expect(messages[0]?.attachments).toHaveLength(2);
+    for (const attachment of messages[0]?.attachments ?? []) {
+      expect(attachment.mimeType).toBe('image/jpeg');
+      expect(attachment.pages).toBeUndefined();
+    }
+  });
+
+  it('skips an oversized page group whole instead of materializing partial pages', async () => {
+    threadListMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          id: 'msg-huge-pdf',
+          role: 'user',
+          createdAt: '2026-08-19T10:08:00.000Z',
+          content: {
+            format: 2,
+            parts: [
+              { type: 'text', text: 'huge' },
+              { type: 'file', mimeType: 'image/jpeg', data: 'x'.repeat(5 * 1024 * 1024), filename: 'big.pdf (page 1 of 2)' },
+              { type: 'file', mimeType: 'image/jpeg', data: 'x'.repeat(5 * 1024 * 1024), filename: 'big.pdf (page 2 of 2)' },
+              { type: 'file', mimeType: 'image/png', data: 'QUJD' },
+            ],
+          },
+        },
+      ],
+    });
+
+    const messages = await listThreadMessages(
+      'main-agent',
+      'main-agent-local-user-a',
+      'local-user',
+    );
+
+    // The 10 MB group is skipped WHOLE; the small image after it still renders.
+    expect(messages[0]?.attachments).toHaveLength(1);
+    expect(messages[0]?.attachments?.[0]?.mimeType).toBe('image/png');
   });
 
   it('skips oversized attachment payloads instead of materializing them', async () => {
