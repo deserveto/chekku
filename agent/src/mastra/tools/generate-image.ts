@@ -317,6 +317,9 @@ export function createGenerateImageTool(options: GenerateImageToolOptions = {}) 
       try {
         await store.createBytes(built.objectKey, composed, finalMime);
       } catch (error) {
+        console.warn(
+          `[generate_image] visual storage failed: ${describeImageGenerationFailure(error)}`,
+        );
         if (error instanceof ObjectStorageError) {
           throw new Error(SAFE_ERRORS.storage);
         }
@@ -327,6 +330,9 @@ export function createGenerateImageTool(options: GenerateImageToolOptions = {}) 
       try {
         updated = await attachVisualAsset(store, postId, built.asset);
       } catch (error) {
+        console.warn(
+          `[generate_image] metadata attach failed: ${describeImageGenerationFailure(error)}`,
+        );
         if (error instanceof ObjectStorageError) {
           throw new Error(SAFE_ERRORS.storage);
         }

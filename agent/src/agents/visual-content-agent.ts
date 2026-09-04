@@ -347,7 +347,7 @@ Keep replies concise. No preamble like "Sure!" — lead with the tool call, then
 
 When the request asks for a visual but does NOT name an approved \`postId\`, do not demand one and do not fail. Use the \`preview_image\` tool instead — it generates a standalone preview image (no post required) and returns a URL you can hand back to the user. Use \`generate_image\` ONLY when the request explicitly names an approved post by \`postId\`; never use \`preview_image\` when a postId is supplied.
 
-The same VisualBrief contract applies to \`preview_image\`: assemble \`contentPillar\`, the new visual fields (\`visualIdentity\`, \`artDirection\`, etc.), \`headline\`, \`facts\`, optional \`context\`, \`source\`, and \`logoPosition\`. The compositor overlays the headline, facts, source, and the real Rafiqspace logo from \`agent/src/assets/image.png\` — do NOT request text or logos in the visual generation fields.
+The same VisualBrief contract applies to \`preview_image\`: assemble \`contentPillar\`, \`imagePrompt\`, the new visual fields (\`visualIdentity\`, \`artDirection\`, etc.), \`headline\`, \`facts\`, optional \`context\`, \`source\`, and \`logoPosition\`. The compositor overlays the headline, facts, source, and the real Rafiqspace logo from \`agent/src/assets/image.png\` — do NOT request text or logos in the visual generation fields.
 
 Reporting preview results clearly (critical):
 - \`preview_image\` is NOT part of the self-review loop. Never call \`review_image\` on a \`previewId\` — \`review_image\` only accepts a \`postId\` + \`assetId\` from a \`generate_image\` result. After \`preview_image\` succeeds, reply immediately with a ONE-LINE confirmation that INCLUDES the imageUrl — for example: "Gambar preview sudah jadi: <imageUrl>". Never reply with only the bare URL, and never claim a technical failure / apologize when the tool actually returned an imageUrl.
@@ -358,16 +358,20 @@ Reporting preview results clearly (critical):
 export const visualContentAgent = new Agent(visualContentAgentConfig);
 
 /**
- * Durable rollout (Task D, Fase 2): the Visual Content Agent has two
- * callers, both now routed through this wrapper — the supervisor's
- * delegation field (ad-hoc chat visuals after concept approval) and the
- * approval-driven `generate-social-post-visual` workflow (`.generate()`).
- * Same contract as `durablePmAgent` (in-process PubSub, no Redis, public
- * id `visual-content-agent` unchanged, crash recovery unavailable in the
- * pinned `@mastra/core` 1.50.1). Known engine limitation: an abort does
- * not interrupt an in-flight image generation — it runs to completion and
- * the abort lands at the next LLM step. The plain instance stays exported
- * for tests.
+ * Durable rollout (Task D, Fase 2): the wrapper's remaining direct caller is
+ * the approval-driven `generate-social-post-visual` workflow, which invokes
+ * `.generate()` with `createDurableRunMemoryOptions('visual-content-agent')`
+ * so the durable run carries a thread. The supervisor's delegation field
+ * deliberately targets the PLAIN instance — core 1.50.1's network delegation
+ * wrapper reads `messageList` and `text` off the sub-agent's stream result,
+ * which `DurableAgent.stream()` does not expose, so delegating to this
+ * wrapper always fails with `Failed agent tool execution for <subAgent>`
+ * AFTER the sub-run completes. Same contract as `durablePmAgent` (in-process
+ * PubSub, no Redis, public id `visual-content-agent` unchanged, crash
+ * recovery unavailable in the pinned `@mastra/core` 1.50.1). Known engine
+ * limitation: an abort does not interrupt an in-flight image generation —
+ * it runs to completion and the abort lands at the next LLM step. The plain
+ * instance stays exported for tests.
  */
 export const durableVisualContentAgent = createDurableAgent({
   agent: visualContentAgent as Agent<string, ToolsInput, undefined>,

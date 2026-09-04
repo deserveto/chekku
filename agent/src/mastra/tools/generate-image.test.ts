@@ -411,59 +411,73 @@ describe('generate_image tool — ordering and failure handling', () => {
   });
 
   it('does not update metadata when the upload fails', async () => {
-    const client = stubClient();
-    const root = createRootStore();
-    const seeded = seedPost(root);
-    await seeded.write();
+    // The storage catch logs the failure cause server-side before throwing
+    // the safe message — silence it so the fixture error stays off stderr.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const client = stubClient();
+      const root = createRootStore();
+      const seeded = seedPost(root);
+      await seeded.write();
 
-    const failingRoot: ObjectStorage = {
-      ...root,
-      async createBytes() {
-        const error = new Error('upload failed');
-        Object.assign(error, { code: 'unavailable' });
-        throw error;
-      },
-    };
+      const failingRoot: ObjectStorage = {
+        ...root,
+        async createBytes() {
+          const error = new Error('upload failed');
+          Object.assign(error, { code: 'unavailable' });
+          throw error;
+        },
+      };
 
-    const tool = makeTool({
-      imageClient: client,
-      storeFactory: () => failingRoot,
-      now: FIXED_NOW,
-    });
+      const tool = makeTool({
+        imageClient: client,
+        storeFactory: () => failingRoot,
+        now: FIXED_NOW,
+      });
 
-    await expect(tool.execute!(
-      { postId: seeded.metadata.postId, ...makeBrief() } as never,
-      {} as never,
-    )).rejects.toThrow();
+      await expect(tool.execute!(
+        { postId: seeded.metadata.postId, ...makeBrief() } as never,
+        {} as never,
+      )).rejects.toThrow();
 
-    const { getSocialPost } = await import('@chekku/storage');
-    const post = await getSocialPost(createSocialPostStorage(root), seeded.metadata.postId);
-    expect(post.metadata.visualAssets).toBeUndefined();
+      const { getSocialPost } = await import('@chekku/storage');
+      const post = await getSocialPost(createSocialPostStorage(root), seeded.metadata.postId);
+      expect(post.metadata.visualAssets).toBeUndefined();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('never leaks provider details through safe errors', async () => {
-    const failingClient: ImageGenerationClient = {
-      async generate() {
-        throw Object.assign(new Error('https://llm.internal token=secret body'), {
-          credential: 'private-token',
-        });
-      },
-    };
-    const root = createRootStore();
-    const seeded = seedPost(root);
-    await seeded.write();
-    const tool = makeTool({
-      imageClient: failingClient,
-      storeFactory: () => root,
-      now: FIXED_NOW,
-    });
+    // The warn path prints the failure cause to the server console; spy it
+    // out so the fixture secret never reaches stderr in test output.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const failingClient: ImageGenerationClient = {
+        async generate() {
+          throw Object.assign(new Error('https://llm.internal token=secret body'), {
+            credential: 'private-token',
+          });
+        },
+      };
+      const root = createRootStore();
+      const seeded = seedPost(root);
+      await seeded.write();
+      const tool = makeTool({
+        imageClient: failingClient,
+        storeFactory: () => root,
+        now: FIXED_NOW,
+      });
 
-    const error: unknown = await tool.execute!(
-      { postId: seeded.metadata.postId, ...makeBrief() } as never,
-      {} as never,
-    ).catch((e: unknown) => e);
+      const error: unknown = await tool.execute!(
+        { postId: seeded.metadata.postId, ...makeBrief() } as never,
+        {} as never,
+      ).catch((e: unknown) => e);
 
-    expect(JSON.stringify(error)).not.toMatch(/llm\.internal|private-token|token=secret/);
+      expect(JSON.stringify(error)).not.toMatch(/llm\.internal|private-token|token=secret/);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

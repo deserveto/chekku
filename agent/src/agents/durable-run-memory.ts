@@ -3,10 +3,13 @@ import { randomUUID } from 'node:crypto';
 /**
  * Memory threading for direct durable-agent `.generate()` calls.
  *
- * The pinned `@mastra/core` 1.50.1 durable engine runs every configured
- * input processor's `computeStateSignal` at each LLM step, and the built-in
- * task-state processor (created by `signals: createTaskSignals()`) requires
- * a memory thread — a durable run invoked without one fails its LLM step.
+ * The pinned `@mastra/core` 1.50.1 durable engine computes state signals
+ * (every configured input processor's `computeStateSignal`, including the
+ * task-state processor from `signals: createTaskSignals()`) at each LLM step
+ * and hard-fails a run without a memory thread. Plain `.generate()` runs
+ * tolerate running threadless even though plain agents bind the same
+ * signals — the hard fail is durable-engine-specific, which is why only the
+ * direct durable call sites need these options.
  * The two workflow call sites that invoke durable wrappers directly
  * (`weekly-social-drafts` → supervisor, `generate-social-post-visual` →
  * Visual Content Agent) pass these options so their runs always carry a
