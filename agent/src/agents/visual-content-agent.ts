@@ -130,6 +130,7 @@ Context line: Memperkuat infrastruktur compute untuk AI lokal.
 Source attribution: "Sumber: DetikInet"
 Logo placement: bottom-right`;
   const briefFields = `  "contentPillar": "TECHNOLOGY",
+  "imagePrompt": "wide-angle interior of a modern AI data center, symmetrical rows of server racks receding into the distance, deep navy ambience with subtle electric-blue light",
   "visualIdentity": "premium technology magazine aesthetic",
   "artDirection": "technology journalism editorial photography, credible, calm",
   "heroSubject": "modern AI data-center interior, long symmetrical rows of server racks receding into the distance",
@@ -188,7 +189,7 @@ ${workflowStepOne}
 
 2. Build the tool args by mapping each delegation field to the schema field:
    - "Content pillar: TECHNOLOGY" → \`contentPillar: "TECHNOLOGY"\`
-   - "Visual style: ..." → populate \`visualIdentity\`, \`artDirection\`, \`heroSubject\`, \`composition\`, \`lighting\`, \`cameraDirection\`, \`typographyStyle\`, \`informationHierarchy\`, \`decorativeElements\`, and \`forbiddenElements\` fields (see below)
+   - "Visual style: ..." → distil it into the REQUIRED \`imagePrompt\` field (one concise pure-visual scene sentence: subject, setting, lighting, mood — no text, no logos) AND populate \`visualIdentity\`, \`artDirection\`, \`heroSubject\`, \`composition\`, \`lighting\`, \`cameraDirection\`, \`typographyStyle\`, \`informationHierarchy\`, \`decorativeElements\`, and \`forbiddenElements\` fields (see below)
    - "Hero number: ..." or strongest number from the verified facts → \`heroNumber: "..."\` (omit if canonical has no decisive number)
    - "Date badge: ..." → \`date: "..."\` (omit if absent)
    - "Headline on image: ..." or "Headline: ..." → \`headline: "..."\` (verbatim)
@@ -205,7 +206,8 @@ ${workedExample}
 
 ## Pure-visual image prompt construction
 
-Instead of a single \`imagePrompt\`, you now construct a structured \`VisualBrief\` (a rich editorial-grade visual direction) by filling these fields in the tool call:
+Every tool call carries BOTH a concise \`imagePrompt\` (REQUIRED — the tool schema rejects the call without it, so never omit it) and the structured \`VisualBrief\` fields that enrich it with editorial-grade visual direction:
+- \`imagePrompt\`: one concise pure-visual scene sentence distilled from the delegation's "Visual style" line — subject, environment, lighting, mood. No text, no typography, no logos.
 - \`visualIdentity\`: premium branding feeling, editorial style (e.g. Bloomberg/Wired/NVIDIA)
 - \`artDirection\`: overall aesthetic and emotional goal
 - \`heroSubject\`: the central hero composition/object
@@ -309,6 +311,8 @@ You MUST NOT:
 - Strengthen a fact ("planned" → "completed", "using Nvidia tech" → "Nvidia-owned", "target" → "achieved").
 
 If the brief carries more than 3 verified facts, pick the 3 most decisive — the compositor only has room for 3 fact columns. If a number appears as the hero number, do NOT repeat it verbatim in a fact column (that duplicates information); rephrase the fact column to carry context instead (e.g. hero number "360 MW" → fact "Total kapasitas terpasang").
+
+If a fact line from the delegation exceeds 80 characters (e.g. long "Short Title: description" entries), shorten it: keep the "Short Title" and trim the description so the whole line fits within 80 characters. Shortening is layout compression, not a fact change — never drop a qualifier that carries the fact's meaning ("target", "planned", "klaim perusahaan"), and never split one fact into two entries.
 
 ## Source attribution rule
 
