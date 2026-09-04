@@ -38,9 +38,9 @@
   transition: width 160ms ease;
 }
 
-/* Stored width/collapse land one frame after mount. With the (studio)
-   persistent layout the sidebar lives across route changes, so a single
-   is-ready suppresses the first paint only. Navigation never remounts. */
+/* Stored width/collapse land one frame after mount and `is-ready` one
+   frame after that: the first paint of the persisted layout never
+   animates, and later toggles animate as usual. */
 .studio-resizable-sidebar:not(.is-ready),
 .studio-resizable-sidebar:not(.is-ready) * {
   transition: none !important;

@@ -63,16 +63,24 @@ export function ResizableSidebar({
   const preferencesReady = useRef(false);
 
   useEffect(() => {
-    const frame = window.requestAnimationFrame(() => {
+    // Two-frame hydration: frame 1 paints the persisted width/collapse
+    // while `.is-ready` is still absent (transitions suppressed), frame 2
+    // enables transitions with no width change — so the persisted layout
+    // never animates on mount.
+    let second = 0;
+    const first = window.requestAnimationFrame(() => {
       const preference = readPreference(storageKey);
       lastExpandedWidth.current = preference.width;
       setWidth(preference.width);
       setCollapsed(preference.collapsed);
       preferencesReady.current = true;
-      setReady(true);
+      second = window.requestAnimationFrame(() => setReady(true));
     });
 
-    return () => window.cancelAnimationFrame(frame);
+    return () => {
+      window.cancelAnimationFrame(first);
+      window.cancelAnimationFrame(second);
+    };
   }, [storageKey]);
 
   useEffect(() => {

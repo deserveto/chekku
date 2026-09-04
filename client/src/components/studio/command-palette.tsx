@@ -4,17 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { AgentIcon } from '@/components/agents/agent-icon';
+import { useStudioNavigation } from '@/components/studio/studio-navigation';
 import { resolveAgentChatThreadId } from '@/lib/agent-chat-entry';
 import { listAllAgents } from '@/lib/stored-agents';
 import { buildChatHref } from '@/lib/chat-route';
 import type { AgentIconId } from '@/lib/agent-icons';
 import type { ChekkuAgentSummary } from '@/lib/types';
 
-/**
- * Optional dirty-state gate for pages with unsaved work: return false to
- * block the navigation this component is about to perform.
- */
-export type NavigationGuard = (href: string) => boolean;
 
 interface PaletteCommand {
   id: string;
@@ -29,14 +25,9 @@ interface PaletteCommand {
  * semantics, same entry path as the catalog) or navigate the studio.
  * Navigation-only by design — no state mutation from the palette.
  */
-export function CommandPalette({
-  resourceId,
-  guard,
-}: {
-  resourceId: string;
-  guard?: NavigationGuard;
-}) {
+export function CommandPalette({ resourceId }: { resourceId: string }) {
   const router = useRouter();
+  const { canNavigate } = useStudioNavigation();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [agents, setAgents] = useState<ChekkuAgentSummary[]>([]);
@@ -89,10 +80,10 @@ export function CommandPalette({
 
   const guardedPush = useCallback(
     (href: string) => {
-      if (guard && !guard(href)) return;
+      if (!canNavigate(href)) return;
       router.push(href);
     },
-    [guard, router],
+    [canNavigate, router],
   );
   const commands = useMemo<PaletteCommand[]>(() => {
     const agentCommands: PaletteCommand[] = agents.map((agent) => ({
@@ -106,7 +97,7 @@ export function CommandPalette({
         try {
           const threadId = await resolveAgentChatThreadId(resourceId, agent);
           const href = buildChatHref(agent.id, threadId);
-          if (guard && !guard(href)) {
+          if (!canNavigate(href)) {
             setBusyId(null);
             return;
           }
@@ -155,8 +146,7 @@ export function CommandPalette({
       },
     ];
     return [...agentCommands, ...navigation];
-  }, [agents, guardedPush, resourceId]);
-
+  }, [agents, canNavigate, guardedPush, resourceId, router]);
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();

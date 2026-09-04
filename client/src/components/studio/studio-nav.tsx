@@ -4,10 +4,10 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { AgentIcon } from '@/components/agents/agent-icon';
+import { CommandPalette } from '@/components/studio/command-palette';
 import {
-  CommandPalette,
-  type NavigationGuard,
-} from '@/components/studio/command-palette';
+  useStudioNavigation,
+} from '@/components/studio/studio-navigation';
 import { ResizableSidebar } from '@/components/studio/resizable-sidebar';
 import { BrandMark } from '@/components/ui/brand-mark';
 import {
@@ -20,14 +20,7 @@ import { listAllAgents } from '@/lib/stored-agents';
 import { createOwnedThreadId } from '@/lib/thread-id';
 import { MAIN_AGENT_ID } from '@/lib/types';
 
-export function StudioNav({
-  resourceId,
-  guard,
-}: {
-  resourceId: string;
-  /** Unsaved-work gate: return false to block the navigation. */
-  guard?: NavigationGuard;
-}) {
+export function StudioNav({ resourceId }: { resourceId: string }) {
   const pathname = usePathname();
   const router = useRouter();
   const { data: session } = authClient.useSession();
@@ -60,12 +53,13 @@ export function StudioNav({
 
   const [creatingChat, setCreatingChat] = useState(false);
 
-  // Sidebar links are client-side navigations; the optional guard lets a
-  // page with unsaved work (agent builder) intercept them the same way as
-  // its in-page links.
+  // Sidebar links are client-side navigations; the shared navigation
+  // provider lets a page with unsaved work (agent builder) intercept
+  // them the same way as its in-page links.
+  const { canNavigate } = useStudioNavigation();
   const guardedClick =
     (href: string) => (event: MouseEvent<HTMLAnchorElement>) => {
-      if (guard && !guard(href)) event.preventDefault();
+      if (!canNavigate(href)) event.preventDefault();
     };
 
   const startChat = async () => {
@@ -83,7 +77,7 @@ export function StudioNav({
       }
       const threadId = createOwnedThreadId(agentId, resourceId);
       const href = buildChatHref(agentId, threadId);
-      if (guard && !guard(href)) return;
+      if (!canNavigate(href)) return;
       router.push(href);
     } finally {
       setCreatingChat(false);
@@ -230,9 +224,9 @@ export function StudioNav({
                 </div>
                 <Link
                   href="/settings"
-                  onClick={() => {
-                    if (guard && !guard('/settings')) return;
-                    setAccountOpen(false);
+                  onClick={(event) => {
+                    if (canNavigate('/settings')) setAccountOpen(false);
+                    else event.preventDefault();
                   }}
                 >
                   <span aria-hidden="true">⚙</span>
@@ -245,7 +239,7 @@ export function StudioNav({
               </div>
             </div>
           ) : null}
-          <CommandPalette resourceId={resourceId} guard={guard} />
+          <CommandPalette resourceId={resourceId} />
         </>
       )}
     </ResizableSidebar>
