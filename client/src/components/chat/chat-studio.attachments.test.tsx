@@ -501,7 +501,7 @@ describe('ChatStudio knowledge reconciliation', () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     const chip = container.querySelector('.chat-knowledge-status');
-    expect(chip?.textContent).toContain('Indexing knowledge…');
+    expect(chip?.textContent).toContain('Indexing…');
   }
 
   afterEach(() => {
@@ -521,7 +521,7 @@ describe('ChatStudio knowledge reconciliation', () => {
     });
     // Document still processing: chip keeps indexing and polling continues.
     expect(container.querySelector('.chat-knowledge-status')?.textContent).toContain(
-      'Indexing knowledge…',
+      'Indexing…',
     );
     const callsAfterFirstTick = fetchMock.mock.calls.length;
     expect(callsAfterFirstTick).toBeGreaterThanOrEqual(1);
@@ -584,11 +584,11 @@ describe('ChatStudio knowledge reconciliation', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(16 * 60 * 1_000);
     });
-    // ...and stops terminal-expired: the chip keeps showing "Indexing…"
-    // (the record may genuinely still be indexing server-side) while
-    // automatic polling ceases.
+    // ...and stops terminal-expired: the chip shows the "still indexing"
+    // guidance (the record may genuinely still be indexing server-side)
+    // while automatic polling ceases.
     const chip = container.querySelector('.chat-knowledge-status');
-    expect(chip?.textContent).toContain('Indexing knowledge…');
+    expect(chip?.textContent).toContain('Still indexing');
     const callsAtExpiry = fetchMock.mock.calls.length;
     await act(async () => {
       await vi.advanceTimersByTimeAsync(9_000);

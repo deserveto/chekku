@@ -3528,16 +3528,51 @@ dialog.chat-task-dock-dialog[open] {
 .chat-knowledge-status {
   display: inline-flex;
   align-items: center;
-  padding: 2px 6px;
+  gap: 5px;
+  padding: 2px 7px;
   border: 1px dashed var(--studio-line);
-  border-radius: 3px;
+  border-radius: 999px;
   color: var(--studio-muted);
   font: 9px var(--font-dm-mono);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.chat-knowledge-status::before {
+  content: '';
+  display: none;
+}
+
+/* Minimalist indexing indicator: a small spinning arc, nothing else. */
+.chat-knowledge-status[data-knowledge-state='indexing']::before {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border: 1px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: chat-knowledge-spin 700ms linear infinite;
+}
+
+@keyframes chat-knowledge-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .chat-knowledge-status[data-knowledge-state='added'] {
   color: var(--studio-ok, var(--studio-body));
   border-style: solid;
+}
+
+.chat-knowledge-status[data-knowledge-state='added']::before {
+  content: '\2713';
+  display: inline-block;
+}
+
+.chat-knowledge-status[data-knowledge-state='failed']::before {
+  content: '!';
+  display: inline-block;
 }
 
 .chat-pdf-card {
@@ -3602,18 +3637,39 @@ dialog.chat-task-dock-dialog[open] {
 }
 
 .chat-pdf-viewer {
-  width: min(860px, 92vw);
-  height: min(86vh, 920px);
+  /* Right sidebar sheet, not a centered modal: PDFs stay open beside the
+   * conversation while the chat keeps its scroll position. */
+  position: fixed;
+  inset: 0 0 0 auto;
+  width: min(560px, 94vw);
+  height: 100dvh;
   max-width: none;
+  margin: 0;
   border: 1px solid var(--studio-line-strong);
-  border-radius: 6px;
+  border-radius: 0;
   padding: 0;
   background: var(--studio-bg, #fff);
   color: var(--studio-body);
+  display: flex;
+  flex-direction: column;
+  animation: chat-pdf-viewer-in 160ms ease-out;
+}
+
+@keyframes chat-pdf-viewer-in {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
 }
 
 .chat-pdf-viewer::backdrop {
-  background: rgba(0, 0, 0, 0.55);
+  background: rgba(0, 0, 0, 0.45);
+}
+
+@media (max-width: 720px) {
+  .chat-pdf-viewer {
+    width: 100vw;
+  }
 }
 
 .chat-pdf-viewer-header {
@@ -3623,6 +3679,7 @@ dialog.chat-task-dock-dialog[open] {
   gap: 12px;
   padding: 10px 14px;
   border-bottom: 1px solid var(--studio-line);
+  flex: 0 0 auto;
 }
 
 .chat-pdf-viewer-title {
@@ -3653,7 +3710,8 @@ dialog.chat-task-dock-dialog[open] {
 }
 
 .chat-pdf-viewer-body {
-  height: calc(100% - 45px);
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
 }
 

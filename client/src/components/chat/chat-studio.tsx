@@ -218,8 +218,8 @@ type KnowledgeUploadStatus = {
    * raw document survives Qdrant failure (the PDF viewer needs it). */
   documentId?: string;
   detail?: string;
-  /** Set when automatic polling gave up (16-minute budget); the chip keeps
-   * showing "Indexing…" while polling stops for this entry. */
+  /** Set when automatic polling gave up (16-minute budget); the chip shows
+   * the "still indexing" guidance while polling stops for this entry. */
   pollingExpired?: boolean;
 };
 
@@ -227,9 +227,14 @@ type KnowledgeUploadStatus = {
  * (mirrors the server stale-processing window). */
 const KNOWLEDGE_POLLING_INTERVAL_MS = 3_000;
 const KNOWLEDGE_POLLING_BUDGET_MS = 16 * 60 * 1000;
-/** One-shot delayed thread-list refresh after a run completes, so a title
- * that lands just after the terminal event surfaces without polling. */
-const TITLE_REFRESH_DELAY_MS = 2_000;
+/** Bounded title-refresh retries after a run completes. The server
+ * generates the first-turn title AFTER the terminal event (best-effort),
+ * so a slow title LLM call lands seconds later; each retry re-checks from
+ * fresh data and stops the moment the thread is titled. */
+const TITLE_REFRESH_DELAYS_MS = [2_000, 4_000, 8_000, 16_000, 32_000];
+/** Bounded re-fetch schedule for a thread that restored empty right after
+ * its first turn completed (Memory serves the new rows seconds later). */
+const RESTORE_RETRY_DELAYS_MS = [1_500, 3_000, 4_500, 6_000];
 type PendingUpload = {
   id: string;
   filename: string;
@@ -361,10 +366,15 @@ export function ChatStudio({
   const knowledgePollingStartRef = useRef(0);
   const mountedRef = useRef(true);
   const titleRefreshTimerRef = useRef(0);
+  const restoreRetryTimerRef = useRef(0);
+  // Mirror for timer callbacks: a scheduled restore retry must not clobber
+  // a timeline an active-run attach populated in the meantime.
+  const activeAssistantIdRef = useRef<string | null>(null);
 
   useEffect(() => () => {
     mountedRef.current = false;
     if (titleRefreshTimerRef.current) window.clearTimeout(titleRefreshTimerRef.current);
+    if (restoreRetryTimerRef.current) window.clearTimeout(restoreRetryTimerRef.current);
   }, []);
 
   const [dragOver, setDragOver] = useState(false);
@@ -410,6 +420,7 @@ export function ChatStudio({
   useEffect(() => () => {
     mountedRef.current = false;
     if (titleRefreshTimerRef.current) window.clearTimeout(titleRefreshTimerRef.current);
+    if (restoreRetryTimerRef.current) window.clearTimeout(restoreRetryTimerRef.current);
   }, []);
   const agentId = initialAgentId;
   const threadId = initialThreadId;
@@ -437,8 +448,8 @@ export function ChatStudio({
     const startedAt = knowledgePollingStartRef.current;
     const timer = setInterval(async () => {
       if (Date.now() - startedAt > KNOWLEDGE_POLLING_BUDGET_MS) {
-        // Terminal for this window: the chip keeps showing "Indexing…"
-        // while automatic polling stops for these entries.
+        // Terminal for this window: the chip shows the "still indexing"
+        // guidance while automatic polling stops for these entries.
         setKnowledgeStatus((current) => {
           let changed = false;
           const next: Record<string, KnowledgeUploadStatus> = { ...current };
@@ -683,6 +694,88 @@ export function ChatStudio({
     }
   }, []);
 
+  /** Applies a restored message list: timeline messages plus the task
+   * snapshot rebuilt from persisted task tool results (Mastra Memory is the
+   * source of truth once the run registry no longer holds the run; last
+   * valid snapshot wins, matching the live event stream's semantics). A
+   * restored list re-opens the dock on wide screens unless the user
+   * explicitly collapsed it before. */
+  const applyStoredMessages = useCallback(
+    (storedMessages: StudioMemoryMessage[]) => {
+      setMessages(storedMessages.map(messageFromMemory));
+      let restoredTasks = null as ThreadTaskState['tasks'] | null;
+      for (const message of storedMessages) {
+        const snapshot = tasksFromRestoredParts(message.parts);
+        if (snapshot) restoredTasks = snapshot;
+      }
+      setThreadTasks(restoredTasks ? { tasks: restoredTasks } : null);
+      hasTaskSnapshotRef.current = restoredTasks !== null;
+      setTaskDockOpen(
+        restoredTasks !== null &&
+          !readTaskDockCollapsedPreference() &&
+          window.innerWidth > 1080,
+      );
+    },
+    [],
+  );
+
+  /**
+   * Re-fetches a thread that restored empty right after its first turn
+   * completed (bounded backoff; Memory serves the new rows a few seconds
+   * after the terminal event). Each attempt checks that the thread is still
+   * the one being viewed before applying anything.
+   */
+  const scheduleEmptyThreadRestoreRetry = useCallback(
+    (
+      agentId: string,
+      threadId: string,
+      resourceId: string,
+      attempt: number,
+    ) => {
+    const delay = RESTORE_RETRY_DELAYS_MS[attempt];
+    if (delay === undefined) return;
+    restoreRetryTimerRef.current = window.setTimeout(() => {
+      restoreRetryTimerRef.current = 0;
+      if (!mountedRef.current || threadRef.current !== threadId) return;
+      if (activeAssistantIdRef.current) return;
+      void listThreadMessages(agentId, threadId, resourceId)
+        .then((storedMessages) => {
+          if (!mountedRef.current || threadRef.current !== threadId) return;
+          // While a run streams into this thread the timeline holds live
+          // optimistic content; re-applying the persisted snapshot would
+          // clobber it. Defer until the subscription ends.
+          if (activeAssistantIdRef.current || subscriptionRef.current) {
+            scheduleEmptyThreadRestoreRetry(
+              agentId,
+              threadId,
+              resourceId,
+              attempt + 1,
+            );
+            return;
+          }
+          if (storedMessages.length === 0) {
+            scheduleEmptyThreadRestoreRetry(
+              agentId,
+              threadId,
+              resourceId,
+              attempt + 1,
+            );
+            return;
+          }
+          applyStoredMessages(storedMessages);
+        })
+        .catch(() => {
+          // Transient restore failure: the thread stays on the empty view.
+        });
+    }, delay);
+    },
+    [applyStoredMessages],
+  );
+
+  useEffect(() => {
+    activeAssistantIdRef.current = activeAssistantId;
+  }, [activeAssistantId]);
+
   const finalizeTerminalMessage = useCallback((assistantId: string) => {
     const terminal = lastTerminalRef.current;
     if (terminal !== 'cancelled' && terminal !== 'error') return;
@@ -706,6 +799,31 @@ export function ChatStudio({
     );
   }, []);
 
+  /**
+   * Re-fetches the thread list on a bounded backoff schedule until the
+   * current thread's first-turn title lands (or the retries run out). The
+   * immediate post-terminal fetch usually sees the title already; each
+   * retry decides from fresh data, never from the stale snapshot.
+   */
+  const scheduleTitleRefresh = useCallback(
+    (attempt: number) => {
+      const delay = TITLE_REFRESH_DELAYS_MS[attempt];
+      if (delay === undefined) return;
+      if (titleRefreshTimerRef.current) window.clearTimeout(titleRefreshTimerRef.current);
+      titleRefreshTimerRef.current = window.setTimeout(() => {
+        titleRefreshTimerRef.current = 0;
+        void refreshThreads().then((fresh) => {
+          if (!mountedRef.current) return;
+          const current = fresh.find((thread) => thread.id === threadRef.current);
+          if (!current || current.title === UNTITLED_THREAD_LABEL) {
+            scheduleTitleRefresh(attempt + 1);
+          }
+        });
+      }, delay);
+    },
+    [refreshThreads],
+  );
+
   const beginSubscription = useCallback(
     (runId: string, assistantId: string) => {
       // Supersede any previous observation; this never cancels the run.
@@ -728,22 +846,18 @@ export function ChatStudio({
         setActiveAssistantId(null);
         finalizeTerminalMessage(assistantId);
         // The title LLM call lands right AFTER the terminal event: decide
-        // from the FRESHLY fetched list whether one delayed refresh is
-        // needed. Already-titled threads (the common case) schedule nothing.
+        // from the FRESHLY fetched list whether retries are needed.
+        // Already-titled threads (the common case) schedule nothing.
         void refreshThreads().then((fresh) => {
           if (!mountedRef.current) return;
           const current = fresh.find((thread) => thread.id === threadRef.current);
           if (current && current.title !== UNTITLED_THREAD_LABEL) return;
-          if (titleRefreshTimerRef.current) window.clearTimeout(titleRefreshTimerRef.current);
-          titleRefreshTimerRef.current = window.setTimeout(() => {
-            titleRefreshTimerRef.current = 0;
-            void refreshThreads();
-          }, TITLE_REFRESH_DELAY_MS);
+          scheduleTitleRefresh(0);
         });
         textareaRef.current?.focus();
       });
     },
-    [applyRunEvent, finalizeTerminalMessage, refreshThreads],
+    [applyRunEvent, finalizeTerminalMessage, refreshThreads, scheduleTitleRefresh],
   );
 
   /**
@@ -883,7 +997,7 @@ export function ChatStudio({
         setAgents(agentList);
         setModelReady(modelRegistry.configured);
 
-        await refreshThreads();
+        const freshThreads = await refreshThreads();
 
         try {
           const storedMessages = await listThreadMessages(
@@ -891,6 +1005,21 @@ export function ChatStudio({
             threadId,
             resourceId,
           );
+          // A thread whose first turn JUST completed can read back empty for
+          // a short window after the terminal event (the run finished and
+          // the thread row exists, but Memory has not served the new rows
+          // yet). Schedule a bounded background re-fetch so a refresh in
+          // that window still restores the persisted attachments; the
+          // initial render never blocks on it. The thread row exists in the
+          // threads list only after the first run started, so never-used
+          // new chats schedule nothing.
+          if (
+            !cancelled
+            && storedMessages.length === 0
+            && freshThreads.some((thread) => thread.id === threadId)
+          ) {
+            scheduleEmptyThreadRestoreRetry(agentId, threadId, resourceId, 0);
+          }
           if (!cancelled) {
             setMessages(storedMessages.map(messageFromMemory));
             // Rebuild historical task state from the persisted task tool
@@ -972,8 +1101,19 @@ export function ChatStudio({
         window.clearTimeout(titleRefreshTimerRef.current);
         titleRefreshTimerRef.current = 0;
       }
+      if (restoreRetryTimerRef.current) {
+        window.clearTimeout(restoreRetryTimerRef.current);
+        restoreRetryTimerRef.current = 0;
+      }
     };
-  }, [agentId, attachToRun, refreshThreads, resourceId, threadId]);
+  }, [
+    agentId,
+    attachToRun,
+    refreshThreads,
+    resourceId,
+    scheduleEmptyThreadRestoreRetry,
+    threadId,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1871,7 +2011,7 @@ export function ChatStudio({
                                   data-knowledge-state={knowledgeStatus[attachment.id].state}
                                 >
                                   {knowledgeStatus[attachment.id].state === 'indexing'
-                                    ? 'Indexing knowledge…'
+                                    ? knowledgeStatus[attachment.id].detail ?? 'Indexing…'
                                     : knowledgeStatus[attachment.id].state === 'added'
                                       ? 'Added to Knowledge'
                                       : knowledgeStatus[attachment.id].detail ?? 'Knowledge indexing failed'}
@@ -1941,7 +2081,7 @@ export function ChatStudio({
               {!modelReady && !loading && <div className="studio-alert studio-alert-error">The agent server returned no models. Set <code>LLM_BASE_URL</code>, <code>LLM_API_KEY</code>, and <code>LLM_DEFAULT_MODEL</code> in <code>agent/.env</code>, then restart the agent server.</div>}
               <form className={`chat-composer${dragOver ? ' drag-over' : ''}`} onSubmit={submit} onDragOver={dragOverForm} onDragEnter={dragEnterForm} onDragLeave={dragLeaveForm} onDrop={dropForm}>
                 <div className="chat-composer__input">
-                  {uploads.length > 0 && <div className="chat-upload-row" role="list" aria-label="Pending attachments">{uploads.map((upload) => <span className={`chat-upload-chip ${upload.status}`} key={upload.id} role="listitem"><span aria-hidden="true">{upload.kind === 'image' ? '▣' : upload.kind === 'pdf' ? '⎘' : '≡'}</span><span className="chat-upload-name">{upload.filename}{upload.prepared?.kind === 'pdf' ? ` (${upload.prepared.pages.length} pages)` : ''}</span>{upload.status === 'preparing' && <small>processing…</small>}{upload.status === 'ready' && upload.kind !== 'image' && knowledgeStatus[upload.id] !== undefined && <small className="chat-knowledge-status" data-knowledge-state={knowledgeStatus[upload.id].state}>{knowledgeStatus[upload.id].state === 'indexing' ? 'Indexing knowledge…' : knowledgeStatus[upload.id].state === 'added' ? 'Added to Knowledge' : knowledgeStatus[upload.id].detail ?? 'Knowledge indexing failed'}</small>}{upload.status === 'error' && upload.error && <small>{upload.error}</small>}<button type="button" onClick={() => removeUpload(upload.id)} aria-label={`Remove ${upload.filename}`}>×</button></span>)}</div>}
+                  {uploads.length > 0 && <div className="chat-upload-row" role="list" aria-label="Pending attachments">{uploads.map((upload) => <span className={`chat-upload-chip ${upload.status}`} key={upload.id} role="listitem"><span aria-hidden="true">{upload.kind === 'image' ? '▣' : upload.kind === 'pdf' ? '⎘' : '≡'}</span><span className="chat-upload-name">{upload.filename}{upload.prepared?.kind === 'pdf' ? ` (${upload.prepared.pages.length} pages)` : ''}</span>{upload.status === 'preparing' && <small>processing…</small>}{upload.status === 'ready' && upload.kind !== 'image' && knowledgeStatus[upload.id] !== undefined && <small className="chat-knowledge-status" data-knowledge-state={knowledgeStatus[upload.id].state}>{knowledgeStatus[upload.id].state === 'indexing' ? knowledgeStatus[upload.id].detail ?? 'Indexing…' : knowledgeStatus[upload.id].state === 'added' ? 'Added to Knowledge' : knowledgeStatus[upload.id].detail ?? 'Knowledge indexing failed'}</small>}{upload.status === 'error' && upload.error && <small>{upload.error}</small>}<button type="button" onClick={() => removeUpload(upload.id)} aria-label={`Remove ${upload.filename}`}>×</button></span>)}</div>}
                   {commandOpen && filteredSkills.length > 0 ? <CommandMenu commands={filteredSkills} activeIndex={commandIndex} onSelect={applySelection} /> : null}
                   <textarea ref={textareaRef} value={input} onChange={(event) => { const value = event.target.value; setInput(value); const isCommand = isCommandInput(value); setCommandOpen(isCommand); if (isCommand) setCommandIndex(0); }} onKeyDown={keyDown} onPaste={paste} role="combobox" aria-expanded={commandOpen && filteredSkills.length > 0} aria-controls={commandOpen && filteredSkills.length > 0 ? 'chat-command-menu' : undefined} aria-autocomplete="list" placeholder={modelReady ? `Message ${currentAgent?.name || agentId}…` : 'Configure the server model first…'} disabled={!modelReady || runActive} rows={1} />
                 </div>

@@ -51,10 +51,15 @@ const MAX_RESTORED_ATTACHMENTS = 24;
 const MAX_RESTORED_ATTACHMENT_CHARS = 8 * 1024 * 1024;
 const MAX_RESTORED_MESSAGE_ATTACHMENT_CHARS = 8 * 1024 * 1024;
 const MAX_RESTORED_THREAD_ATTACHMENT_CHARS = 24 * 1024 * 1024;
-/** Persisted PDF page images carry this filename shape from the live send
- * path; restored messages group consecutive complete runs back into one
- * pdf attachment. */
-const PDF_PAGE_NAME = /^(.*) \(page (\d+) of (\d+)\)$/;
+/**
+ * Mastra's persistence path strips `filename` from file parts, but the
+ * sentinel-wrapped attachments text part survives verbatim. The live send
+ * path labels every image there — `[Attached image 3 of 9: doc.pdf — page
+ * 2 of 18]` — so restore groups PDF page runs off that surviving manifest.
+ */
+const ATTACHMENT_SENTINEL_BEGIN = '<!-- chekku-attachments-begin -->';
+const IMAGE_LABEL =
+  /\[Attached image \d+ of \d+: ([^\]]+?)(?: — page (\d+) of (\d+))?\]/g;
 /**
  * Display text cap per restored message. Live user bubbles only ever show the
  * typed prompt; legacy rows without attachment sentinels can still carry the
@@ -132,6 +137,42 @@ function normalizeThread(
     updatedAt: toTimestamp(row.updatedAt, toTimestamp(row.createdAt)),
   };
 }
+type RestoredImagePart = { mimeType: string; data: string };
+
+type RestoredImageLabel = {
+  name: string;
+  page?: number;
+  pageCount?: number;
+};
+
+function imageLabelsFromContent(parts: unknown[]): RestoredImageLabel[] {
+  for (const part of parts) {
+    if (!part || typeof part !== 'object') continue;
+    const record = part as Record<string, unknown>;
+    if (record.type !== 'text') continue;
+    const text = typeof record.text === 'string' ? record.text : '';
+    if (!text.includes(ATTACHMENT_SENTINEL_BEGIN)) continue;
+
+    const labels: RestoredImageLabel[] = [];
+    for (const match of text.matchAll(IMAGE_LABEL)) {
+      const name = (match[1] ?? '').trim();
+      if (!name) continue;
+      const page = Number.parseInt(match[2] ?? '', 10);
+      const pageCount = Number.parseInt(match[3] ?? '', 10);
+      labels.push({
+        name,
+        ...(Number.isSafeInteger(page) && Number.isSafeInteger(pageCount)
+          ? { page, pageCount }
+          : {}),
+      });
+    }
+    // One sentinel block per message; its label order matches the image
+    // part order one-to-one (text attachments emit `[Attached file: …]`
+    // blocks, which the label regex ignores).
+    return labels;
+  }
+  return [];
+}
 
 function attachmentsFromContent(
   content: unknown,
@@ -141,98 +182,101 @@ function attachmentsFromContent(
   let messageTotal = 0;
   const parts = partsFromContent(content);
 
-  const asImagePart = (
-    part: unknown,
-  ): { mimeType: string; data: string; filename?: string } | undefined => {
-    if (!part || typeof part !== 'object') return undefined;
-    const record = part as Record<string, unknown>;
-    if (record.type !== 'file') return undefined;
-    const mimeType = typeof record.mimeType === 'string' ? record.mimeType : '';
-    if (!mimeType.startsWith('image/')) return undefined;
-    const data = typeof record.data === 'string' ? record.data : '';
-    if (!data) return undefined;
-    const filename =
-      typeof record.filename === 'string' && record.filename
-        ? record.filename
-        : undefined;
-    return { mimeType, data, filename };
-  };
-
   const toDataUrl = (mimeType: string, data: string) =>
     data.startsWith('data:') ? data : `data:${mimeType};base64,${data}`;
 
-  const budgetAllows = (chars: number) =>
-    chars <= MAX_RESTORED_ATTACHMENT_CHARS &&
-    messageTotal + chars <= MAX_RESTORED_MESSAGE_ATTACHMENT_CHARS &&
-    budget.remaining - chars >= 0;
 
-  for (let index = 0; index < parts.length; index += 1) {
-    const part = asImagePart(parts[index]);
-    if (!part) continue;
+  const imageParts: RestoredImagePart[] = [];
+  for (const part of parts) {
+    if (!part || typeof part !== 'object') continue;
+    const record = part as Record<string, unknown>;
+    if (
+      record.type === 'file'
+      && typeof record.mimeType === 'string'
+      && record.mimeType.startsWith('image/')
+      && typeof record.data === 'string'
+      && record.data
+    ) {
+      imageParts.push({ mimeType: record.mimeType, data: record.data });
+    }
+  }
+  const labels = imageLabelsFromContent(parts);
+  // Grouping requires the surviving manifest to align one-to-one with the
+  // persisted image parts; any drift degrades to individual images so data
+  // is never dropped or mis-grouped.
+  const grouped = labels.length === imageParts.length && labels.length > 0;
 
-    // Group a complete, sequential run of PDF page images (filenames of the
-    // shape "{name} (page i of n)") into ONE pdf attachment. Broken or
-    // partial runs degrade to individual images — data is never dropped.
-    const match = part.filename ? PDF_PAGE_NAME.exec(part.filename) : undefined;
-    if (match && match[2] === '1') {
-      const base = match[1];
-      const total = Number.parseInt(match[3] ?? '', 10);
-      if (base && Number.isSafeInteger(total) && total >= 2) {
-        const run: Array<{ mimeType: string; data: string }> = [part];
-        let complete = true;
-        for (let page = 2; page <= total; page += 1) {
-          const next = asImagePart(parts[index + page - 1]);
-          const nextMatch = next?.filename
-            ? PDF_PAGE_NAME.exec(next.filename)
-            : undefined;
-          if (
-            !next ||
-            !nextMatch ||
-            nextMatch[1] !== base ||
-            nextMatch[2] !== String(page) ||
-            nextMatch[3] !== match[3]
-          ) {
-            complete = false;
-            break;
-          }
-          run.push(next);
+  for (let position = 0; position < imageParts.length; position += 1) {
+    if (attachments.length >= MAX_RESTORED_ATTACHMENTS) break;
+    const part = imageParts[position]!;
+    const label = grouped ? labels[position] : undefined;
+
+    // A complete, sequential page run (same name, pages 1..n in order)
+    // collapses into ONE pdf attachment. Broken or partial runs fall
+    // through to individual images.
+    if (
+      label?.page === 1 &&
+      typeof label.pageCount === 'number' &&
+      label.pageCount >= 2 &&
+      position + label.pageCount <= imageParts.length
+    ) {
+      const run: RestoredImagePart[] = [part];
+      let complete = true;
+      for (let page = 2; page <= label.pageCount; page += 1) {
+        const nextPart = imageParts[position + page - 1];
+        const nextLabel = labels[position + page - 1];
+        if (
+          !nextPart ||
+          nextLabel?.name !== label.name ||
+          nextLabel.page !== page ||
+          nextLabel.pageCount !== label.pageCount
+        ) {
+          complete = false;
+          break;
         }
-        if (complete) {
-          const chars = run.reduce((n, page) => n + page.data.length, 0);
-          if (budgetAllows(chars)) {
-            messageTotal += chars;
-            budget.remaining -= chars;
-            attachments.push({
-              mimeType: 'application/pdf',
-              filename: base,
-              dataUrl: toDataUrl(run[0]!.mimeType, run[0]!.data),
-              pageCount: total,
-              pages: run.map((page) => toDataUrl(page.mimeType, page.data)),
-            });
-            if (attachments.length >= MAX_RESTORED_ATTACHMENTS) break;
-            index += total - 1;
-            continue;
-          }
-          // Oversized group: skip it whole rather than emitting broken
-          // partial pages.
-          index += total - 1;
+        run.push(nextPart);
+      }
+      if (complete) {
+        const chars = run.reduce((total, page) => total + page.data.length, 0);
+        const withinBudget =
+          chars <= MAX_RESTORED_ATTACHMENT_CHARS &&
+          messageTotal + chars <= MAX_RESTORED_MESSAGE_ATTACHMENT_CHARS &&
+          budget.remaining - chars >= 0;
+        if (withinBudget) {
+          messageTotal += chars;
+          budget.remaining -= chars;
+          attachments.push({
+            mimeType: 'application/pdf',
+            filename: label.name,
+            dataUrl: toDataUrl(run[0]!.mimeType, run[0]!.data),
+            pageCount: label.pageCount,
+            pages: run.map((page) => toDataUrl(page.mimeType, page.data)),
+          });
+          position += label.pageCount - 1;
           continue;
         }
+        // Oversized group: skip it whole rather than emitting broken
+        // partial pages.
+        position += label.pageCount - 1;
+        continue;
       }
     }
 
     const chars = part.data.length;
     if (chars > MAX_RESTORED_ATTACHMENT_CHARS) continue;
-    if (messageTotal + chars > MAX_RESTORED_MESSAGE_ATTACHMENT_CHARS) break;
-    if (budget.remaining - chars < 0) break;
+    if (
+      messageTotal + chars > MAX_RESTORED_MESSAGE_ATTACHMENT_CHARS ||
+      budget.remaining - chars < 0
+    ) {
+      break;
+    }
     messageTotal += chars;
     budget.remaining -= chars;
     attachments.push({
       mimeType: part.mimeType,
       dataUrl: toDataUrl(part.mimeType, part.data),
-      ...(part.filename ? { filename: part.filename } : {}),
+      ...(grouped && label?.name ? { filename: label.name } : {}),
     });
-    if (attachments.length >= MAX_RESTORED_ATTACHMENTS) break;
   }
   return attachments;
 }

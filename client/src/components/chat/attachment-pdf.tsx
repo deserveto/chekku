@@ -132,6 +132,11 @@ export function PdfViewerDialog({
         event.preventDefault();
         onClose();
       }}
+      onClick={(event) => {
+        // Clicks on the ::backdrop land on the dialog element itself; a
+        // sidebar click on the content never matches the dialog target.
+        if (event.target === dialogRef.current) onClose();
+      }}
     >
       <header className="chat-pdf-viewer-header">
         <h2 id={titleId} className="chat-pdf-viewer-title">

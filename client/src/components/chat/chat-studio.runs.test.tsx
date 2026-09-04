@@ -450,7 +450,7 @@ describe('ChatStudio delayed title refresh', () => {
     vi.useRealTimers();
   });
 
-  it('schedules exactly one delayed refresh when the freshly fetched thread is still untitled', async () => {
+  it('retries the delayed refresh on a bounded backoff while the thread stays untitled', async () => {
     listAgentThreads.mockResolvedValue(untitledThreads);
     let resolveObservation: (() => void) | undefined;
     observeRunEvents.mockImplementationOnce(
@@ -463,28 +463,34 @@ describe('ChatStudio delayed title refresh', () => {
     await submitComposer();
 
     // Install fake timers BEFORE resolving the subscription so the delayed
-    // refresh lands on the fake clock.
+    // refreshes land on the fake clock.
     vi.useFakeTimers();
     let callsAfterCompletion = 0;
     await act(async () => {
       resolveObservation?.();
-      // Advance exactly to the 2s delay: the microtask chain resolves the
-      // subscription, runs the completion refresh, schedules the one-shot
-      // delay, and the fake clock then fires it.
+      // Advance exactly to the first 2s delay: the microtask chain resolves
+      // the subscription, runs the completion refresh, and schedules the
+      // backoff chain that the fake clock then fires.
       await vi.advanceTimersByTimeAsync(0);
       callsAfterCompletion = listAgentThreads.mock.calls.length;
-      console.log('DEBUG resolver assigned', typeof resolveObservation);
-      console.log('DEBUG timers after completion flush', vi.getTimerCount(), 'calls', callsAfterCompletion);
+      // One refresh per backoff window while the list stays untitled.
       await vi.advanceTimersByTimeAsync(2_000);
-      console.log('DEBUG timers after 2s', vi.getTimerCount(), 'calls', listAgentThreads.mock.calls.length);
+      expect(listAgentThreads.mock.calls.length).toBe(callsAfterCompletion + 1);
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(listAgentThreads.mock.calls.length).toBe(callsAfterCompletion + 2);
+      await vi.advanceTimersByTimeAsync(8_000);
+      expect(listAgentThreads.mock.calls.length).toBe(callsAfterCompletion + 3);
+      await vi.advanceTimersByTimeAsync(16_000);
+      expect(listAgentThreads.mock.calls.length).toBe(callsAfterCompletion + 4);
+      await vi.advanceTimersByTimeAsync(32_000);
+      expect(listAgentThreads.mock.calls.length).toBe(callsAfterCompletion + 5);
     });
-    expect(listAgentThreads.mock.calls.length).toBe(callsAfterCompletion + 1);
 
-    // One-shot: no further refresh is scheduled by the delayed refresh.
+    // Bounded: the retry chain stops after the last backoff window.
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(60_000);
     });
-    expect(listAgentThreads.mock.calls.length).toBe(callsAfterCompletion + 1);
+    expect(listAgentThreads.mock.calls.length).toBe(callsAfterCompletion + 5);
   });
 
   it('does not schedule a refresh when the freshly fetched thread already carries a title', async () => {
