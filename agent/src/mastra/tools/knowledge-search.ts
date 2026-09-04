@@ -1,4 +1,5 @@
 import { createTool } from '@mastra/core/tools';
+import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
 import { z } from 'zod';
 
 import { createEmbeddingsClient, EmbeddingsError, type EmbeddingsClient } from '../../knowledge/embeddings.js';
@@ -12,12 +13,14 @@ import {
  * Semantic retrieval over the requesting user's Knowledge Base.
  *
  * Tenant isolation is structural: the tool derives the trusted `resourceId`
- * from the agent execution context (`context.agent.resourceId`, populated by
- * Mastra from the run's memory options — the same trusted seam the Garage
- * MCP uses for `agentId`), never from tool input. The input schema has no
- * user/document-selection fields at all, so the model cannot address another
- * tenant's knowledge even by trying. Every Qdrant search carries a mandatory
- * `resourceId` equality filter backed by a payload index.
+ * from the server-owned run context — the reserved
+ * `MASTRA_RESOURCE_ID_KEY` requestContext entry the run driver passes on
+ * every stream (`runExecution`), with the framework-assembled
+ * `context.agent.resourceId` as defense-in-depth fallback — never from tool
+ * input. The input schema has no user/document-selection fields at all, so
+ * the model cannot address another tenant's knowledge even by trying. Every
+ * Qdrant search carries a mandatory `resourceId` equality filter backed by a
+ * payload index.
  */
 
 const querySchema = z.string().refine(
@@ -83,9 +86,15 @@ export function createSearchKnowledgeBaseTool(deps: SearchKnowledgeBaseDeps = {}
       openWorldHint: false,
     } },
     execute: async (input, context) => {
-      // Trusted tenant identity — captured from the server-owned run context.
-      const resourceId = context?.agent?.resourceId;
-      if (!resourceId) {
+      // Trusted tenant identity — the explicitly server-owned
+      // RequestContext identity takes precedence over the
+      // framework-assembled context.agent value.
+      const requestContext = context?.requestContext as
+        | { get?: (key: string) => unknown }
+        | undefined;
+      const resourceId =
+        requestContext?.get?.(MASTRA_RESOURCE_ID_KEY) ?? context?.agent?.resourceId;
+      if (typeof resourceId !== 'string' || !resourceId) {
         throw new Error('Knowledge search requires an authenticated run context.');
       }
       // Lazy init failures are configuration errors; let their fixed messages

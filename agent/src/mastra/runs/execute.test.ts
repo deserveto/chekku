@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { Agent } from '@mastra/core/agent';
 import { createDurableAgent } from '@mastra/core/agent/durable';
 import { MessageList } from '@mastra/core/agent/message-list';
+import { MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
 import { RunRegistry, createRunId, type AgentRunEvent } from './run-registry.js';
 import {
   buildCancelledTurnMessages,
@@ -50,6 +51,7 @@ function makeAgent(chunks: Chunk[], memory?: MemoryAccess) {
     threadId?: string;
     resourceId?: string;
     aborted?: AbortSignal;
+    requestContext?: { get(key: string): unknown };
   } = {};
   const agent: RunnableAgent = {
     stream: async (prompt, options) => {
@@ -58,6 +60,7 @@ function makeAgent(chunks: Chunk[], memory?: MemoryAccess) {
       calls.threadId = options.memory.thread;
       calls.resourceId = options.memory.resource;
       calls.aborted = options.abortSignal;
+      calls.requestContext = options.requestContext;
       if (options.abortSignal.aborted) {
         throw new Error('This operation was aborted');
       }
@@ -487,6 +490,28 @@ describe('runExecution', () => {
     // execution.
     expect(memoryCalls.created).toBe(0);
   });
+  it('passes a server-owned requestContext carrying the authenticated resource id', async () => {
+    const registry = new RunRegistry();
+    const { memory } = makeMemory(true);
+    const { agent, calls } = makeAgent([], memory);
+    const run = registry.createRun({
+      id: createRunId(),
+      ...TUPLE,
+      prompt: 'who am I',
+      requestAbort: () => undefined,
+    });
+
+    await runExecution(registry, agent, {
+      runId: run.id,
+      ...TUPLE,
+      prompt: 'who am I',
+      abortSignal: new AbortController().signal,
+    });
+
+    expect(calls.requestContext).toBeDefined();
+    expect(calls.requestContext?.get(MASTRA_RESOURCE_ID_KEY)).toBe(TUPLE.resourceId);
+  });
+
 
   it('passes transient multimodal content to the agent stream', async () => {
     const registry = new RunRegistry();

@@ -1,5 +1,5 @@
+import { RequestContext, MASTRA_RESOURCE_ID_KEY } from '@mastra/core/request-context';
 import { describe, expect, it } from 'vitest';
-
 import { createSearchKnowledgeBaseTool } from './knowledge-search.js';
 import type { EmbeddingsClient } from '../../knowledge/embeddings.js';
 import type { KnowledgeVectorIndex } from '../../knowledge/qdrant-index.js';
@@ -103,6 +103,36 @@ describe('search_knowledge_base tool', () => {
       { agent: { resourceId: 'user-a' } } as never,
     ) as { error?: unknown } | undefined;
     expect(validation?.error).toBeTruthy();
+  });
+
+  it('prefers the server-owned requestContext identity over context.agent', async () => {
+    const { index, searches } = createFakeIndex([hit('user-a')]);
+    const { embeddings } = createFakeEmbeddings();
+    const tool = createSearchKnowledgeBaseTool({ embeddingsFactory: () => embeddings, indexFactory: () => index });
+    const requestContext = new RequestContext([
+      [MASTRA_RESOURCE_ID_KEY, 'owner-user'],
+    ]);
+
+    await tool.execute?.(
+      { query: 'x' },
+      {
+        requestContext,
+        // A disagreeing framework-assembled value must lose.
+        agent: { resourceId: 'attacker-user' },
+      } as never,
+    );
+
+    expect(searches[0]?.resourceId).toBe('owner-user');
+  });
+
+  it('falls back to context.agent.resourceId when no requestContext is present', async () => {
+    const { index, searches } = createFakeIndex([hit('user-a')]);
+    const { embeddings } = createFakeEmbeddings();
+    const tool = createSearchKnowledgeBaseTool({ embeddingsFactory: () => embeddings, indexFactory: () => index });
+
+    await tool.execute?.({ query: 'x' }, { agent: { resourceId: 'user-a' } } as never);
+
+    expect(searches[0]?.resourceId).toBe('user-a');
   });
 
   it('fails closed with the fixed configuration error when unconfigured', async () => {

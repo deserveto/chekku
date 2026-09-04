@@ -1,4 +1,8 @@
 import { isDurableAgent } from '@mastra/core/agent/durable';
+import {
+  MASTRA_RESOURCE_ID_KEY,
+  RequestContext,
+} from '@mastra/core/request-context';
 
 import {
   type AgentRunEvent,
@@ -38,6 +42,9 @@ export interface RunnableAgent {
       memory: { thread: string; resource: string };
       runId: string;
       abortSignal: AbortSignal;
+      /** Mastra's RequestContext: the server-owned channel that carries
+       * the authenticated resource id into tool execution. */
+      requestContext?: RequestContext;
     },
   ): Promise<StreamResult>;
   getMemory(): Promise<MemoryAccess | undefined>;
@@ -724,10 +731,18 @@ export async function runExecution(
     const streamInput: RunStreamInput = params.content
       ? [{ role: 'user', content: params.content }]
       : params.prompt;
+    // Server-owned tenant identity rides the reserved RequestContext key so
+    // tools (e.g. search_knowledge_base) resolve the tenant deterministically
+    // instead of relying on framework-assembled context members. The value
+    // equals the memory option's resource, so core's precedence is harmless.
+    const requestContext: RequestContext = new RequestContext([
+      [MASTRA_RESOURCE_ID_KEY, params.resourceId],
+    ]);
     const output = await agent.stream(streamInput, {
       memory: { thread: params.threadId, resource: params.resourceId },
       runId: params.runId,
       abortSignal: params.abortSignal,
+      requestContext,
     });
     cleanup = output.cleanup;
 
