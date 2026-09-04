@@ -104,7 +104,7 @@ describe('pm-agent (weekly and competitive analysis)', () => {
 });
 
 describe('pm-agent (durable execution pilot, N8_4)', () => {
-  it('wraps the plain agent with the description-forwarding durable factory and keeps its identity', () => {
+  it('keeps the durable wrapper identity', () => {
     // The public id must stay `pm-agent` so `getAgentById`, thread-id
     // ownership, and the /runs surface resolve unchanged.
     expect(durablePmAgent.id).toBe('pm-agent');
@@ -123,7 +123,7 @@ describe('pm-agent (durable execution pilot, N8_4)', () => {
 });
 
 describe('durable rollout (Task D, Fase 1: qa-web + main)', () => {
-  it('wraps qa-web-agent with the description-forwarding durable factory and keeps its identity', () => {
+  it('keeps the durable qa-web-agent identity', () => {
     expect(durableQaWebAgent.id).toBe('qa-web-agent');
     expect(durableQaWebAgent.name).toBe('QA Web Agent');
   });
@@ -144,7 +144,7 @@ describe('durable rollout (Task D, Fase 1: qa-web + main)', () => {
     );
   });
 
-  it('wraps main-agent with the description-forwarding durable factory and keeps its identity', () => {
+  it('keeps the durable main-agent identity', () => {
     expect(durableMainAgent.id).toBe('main-agent');
     expect(durableMainAgent.name).toBe('Chekku Assistant');
   });

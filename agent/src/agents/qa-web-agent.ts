@@ -37,10 +37,10 @@ export const qaWebAgent = new Agent(qaWebAgentConfig);
  * Durable rollout (Task D, Fase 1): the QA Web Agent runs the studio's
  * longest interactive jobs (`maxSteps: 80` browser sessions), so it runs
  * through `createDescriptionForwardingDurableAgent` alongside the pm-agent
- * pilot. Same contract
- * as `durablePmAgent`: in-process PubSub and in-memory event cache (no
- * Redis), public id stays `qa-web-agent` and the composition key stays
- * `qaWebAgent`, so `getAgentById`, thread-id ownership, and the `/runs`
+ * pilot. It has the same contract as `durablePmAgent`: in-process PubSub and
+ * in-memory event cache (no Redis), public id stays `qa-web-agent`, and the
+ * composition key stays `qaWebAgent`, so `getAgentById`, thread-id ownership,
+ * and the `/runs`
  * surface are unchanged. Stop flows through the run registry's
  * AbortController; the execution driver calls `cleanup()` on terminal
  * states. Known engine limitation (pinned `@mastra/core` 1.50.1): an

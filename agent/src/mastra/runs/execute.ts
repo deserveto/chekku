@@ -46,10 +46,9 @@ export interface RunnableAgent {
 export interface StreamResult {
   fullStream: ReadableStream<StreamChunk>;
   /**
-   * Present when the agent runs through durable execution
-   * (`createDurableAgent`): releases the durable run's PubSub subscription
-   * and engine registry entry. Called by the driver once the run is
-   * terminal — regular agents leave it undefined.
+   * Present when the agent runs through durable execution: releases the
+   * durable run's PubSub subscription and engine registry entry. Called by
+   * the driver once the run is terminal; regular agents leave it undefined.
    */
   cleanup?: () => void;
 }
