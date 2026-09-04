@@ -92,6 +92,45 @@ describe('KnowledgeDocumentList', () => {
     expect(buttons).toContain('Retry indexing');
   });
 
+  it('aligns header columns with row cells and renders chunk counts in their own column', () => {
+    const container = render(
+      <KnowledgeDocumentList
+        initialDocuments={[
+          doc(),
+          doc({
+            id: 'kbd_20260828120001_cafe0001',
+            filename: 'notes.txt',
+            mimeType: 'text/plain',
+            kind: 'text',
+            sizeBytes: 512,
+            status: 'processing',
+            chunkCount: undefined,
+          }),
+        ]}
+      />,
+    );
+    const headerCount = container.querySelectorAll('thead th').length;
+    for (const row of container.querySelectorAll('tbody tr')) {
+      expect(row.querySelectorAll('td')).toHaveLength(headerCount);
+    }
+    const rows = [...container.querySelectorAll('tbody tr')];
+    // Ready row: the "Indexed chunks" column (6th) carries the count.
+    expect(rows[0]?.querySelectorAll('td')[5]?.textContent).toBe('12');
+    // Processing row: no count yet — an em dash placeholder, and Actions stay last.
+    expect(rows[1]?.querySelectorAll('td')[5]?.textContent).toBe('—');
+    expect(rows[1]?.querySelectorAll('td')[6]?.textContent).toContain('Delete');
+  });
+
+  it('shows an em dash chunk placeholder for failed documents', () => {
+    const container = render(
+      <KnowledgeDocumentList
+        initialDocuments={[doc({ status: 'failed', error: 'boom', chunkCount: undefined })]}
+      />,
+    );
+    const row = container.querySelector('tbody tr');
+    expect(row?.querySelectorAll('td')[5]?.textContent).toBe('—');
+  });
+
   it('does not offer retry for ready documents', () => {
     const container = render(<KnowledgeDocumentList initialDocuments={[doc()]} />);
     const buttons = [...container.querySelectorAll('button')].map((button) => button.textContent);

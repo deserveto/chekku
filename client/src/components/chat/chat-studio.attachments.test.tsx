@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
+  knowledgeUpload,
   listAgentSkills,
   listAgentThreads,
   listThreadMessages,
@@ -16,6 +17,7 @@ const {
   browserImageDeps,
   browserPdfDeps,
 } = vi.hoisted(() => ({
+  knowledgeUpload: vi.fn(),
   listAgentSkills: vi.fn(),
   listAgentThreads: vi.fn(),
   listThreadMessages: vi.fn(),
@@ -71,6 +73,13 @@ vi.mock('@/lib/chat-attachments-browser', () => ({
   browserImageDeps,
   browserPdfDeps,
 }));
+vi.mock('@/lib/knowledge', async () => {
+  const actual = await vi.importActual<object>('@/lib/knowledge');
+  return {
+    ...actual,
+    uploadKnowledgeDocument: knowledgeUpload,
+  };
+});
 vi.mock('@/lib/memory-threads', () => ({
   listAgentThreads,
   listThreadMessages,
@@ -189,13 +198,13 @@ function sentMessages(): SentMessage[] {
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  knowledgeUpload.mockResolvedValue({ ok: false, message: 'Knowledge upload unavailable in test.' });
   listAgentSkills.mockResolvedValue([]);
   listAgentThreads.mockResolvedValue([]);
   listThreadMessages.mockResolvedValue([]);
   startRun.mockResolvedValue({
     id: 'run_20260101000000_00000001',
     resourceId: 'local-user',
-    agentId: 'main-agent',
     threadId: activeThreadId,
     prompt: 'attachment',
     status: 'running',
@@ -449,5 +458,218 @@ describe('ChatStudio file uploads', () => {
     expect(assistant?.textContent).not.toContain(
       'Generation ended before a final response was produced',
     );
+  });
+});
+
+describe('ChatStudio knowledge reconciliation', () => {
+  const documentView = (overrides: Partial<{ id: string; status: string; error: string | null }> = {}) => ({
+    id: 'kbd_20260101000000_deadbeef',
+    status: 'processing',
+    error: null,
+    ...overrides,
+  });
+
+  type ListResponse = { status: number; documents: Array<{ id: string; status: string; error?: string | null }> };
+  let fetchMock: ReturnType<typeof vi.fn>;
+  function stubListEndpoint(respond: () => ListResponse): void {
+    fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify(respond()), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+  }
+
+  // Installs fake timers BEFORE the submit so the component's polling
+  // interval is created against the fake scheduler (an interval created on
+  // the real clock would never advance under fake timers).
+  async function attachAndSubmitUnderFakeTimers(): Promise<void> {
+    knowledgeUpload.mockResolvedValue({
+      ok: true,
+      document: { id: 'kbd_20260101000000_deadbeef', status: 'processing' },
+    });
+    await attachFiles([
+      new File(['knowledge text'], 'notes.txt', { type: 'text/plain' }),
+    ]);
+    vi.useFakeTimers();
+    const form = container.querySelector<HTMLFormElement>('.chat-composer');
+    expect(form).not.toBeNull();
+    await act(async () => {
+      form!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const chip = container.querySelector('.chat-knowledge-status');
+    expect(chip?.textContent).toContain('Indexing knowledge…');
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('keeps the chip indexing after upload acceptance and flips to added when the document is ready', async () => {
+    stubListEndpoint(() => ({
+      status: 200,
+      documents: [documentView()],
+    }));
+    await attachAndSubmitUnderFakeTimers();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    // Document still processing: chip keeps indexing and polling continues.
+    expect(container.querySelector('.chat-knowledge-status')?.textContent).toContain(
+      'Indexing knowledge…',
+    );
+    const callsAfterFirstTick = fetchMock.mock.calls.length;
+    expect(callsAfterFirstTick).toBeGreaterThanOrEqual(1);
+
+    stubListEndpoint(() => ({
+      status: 200,
+      documents: [documentView({ status: 'ready' })],
+    }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    expect(container.querySelector('.chat-knowledge-status')?.textContent).toContain(
+      'Added to Knowledge',
+    );
+
+    // Every candidate settled: polling stops.
+    const callsAfterSettled = fetchMock.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9_000);
+    });
+    expect(fetchMock.mock.calls.length).toBe(callsAfterSettled);
+  });
+
+  it('marks the chip failed with the server reason while preserving the documentId', async () => {
+    stubListEndpoint(() => ({
+      status: 200,
+      documents: [
+        documentView({ status: 'failed', error: 'The knowledge index is currently unreachable. Check the Qdrant service and retry.' }),
+      ],
+    }));
+    await attachAndSubmitUnderFakeTimers();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    const chip = container.querySelector('.chat-knowledge-status');
+    expect(chip?.textContent).toContain('unreachable');
+    expect(chip?.getAttribute('data-knowledge-state')).toBe('failed');
+
+    // The failed entry no longer polls.
+    const callsAfterSettled = fetchMock.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9_000);
+    });
+    expect(fetchMock.mock.calls.length).toBe(callsAfterSettled);
+  });
+
+  it('expires polling at the budget and keeps the chip indexing while polling stops', async () => {
+    stubListEndpoint(() => ({
+      status: 200,
+      documents: [documentView()],
+    }));
+    await attachAndSubmitUnderFakeTimers();
+
+    // Polling runs while the budget lasts...
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(16 * 60 * 1_000);
+    });
+    // ...and stops terminal-expired: the chip keeps showing "Indexing…"
+    // (the record may genuinely still be indexing server-side) while
+    // automatic polling ceases.
+    const chip = container.querySelector('.chat-knowledge-status');
+    expect(chip?.textContent).toContain('Indexing knowledge…');
+    const callsAtExpiry = fetchMock.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9_000);
+    });
+    expect(fetchMock.mock.calls.length).toBe(callsAtExpiry);
+  });
+
+  it('grants a fresh polling window to a new upload after the previous one settles', async () => {
+    // End the first run via its event stream so the composer re-arms for
+    // the SECOND send this test performs.
+    observeRunEvents.mockImplementationOnce(async (_runId: string, options: { onEvent: (event: { sequence: number; type: string; payload: { error: string }; createdAt: string }) => void }) => {
+      options.onEvent({
+        sequence: 0,
+        type: 'error',
+        payload: { error: 'first run ended' },
+        createdAt: '',
+      });
+    });
+    // First upload settles ready: its window is consumed and the candidate
+    // set becomes empty, which resets the polling budget.
+    stubListEndpoint(() => ({
+      status: 200,
+      documents: [documentView({ status: 'ready' })],
+    }));
+    await attachAndSubmitUnderFakeTimers();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    expect(
+      container.querySelector('.chat-knowledge-status')?.textContent,
+    ).toContain('Added to Knowledge');
+
+    // A NEW upload gets a fresh window: polling runs again for it. The
+    // second attach/submit stays under fake timers (flushed through the
+    // fake clock) so the new interval lands on the fake scheduler.
+    knowledgeUpload.mockResolvedValueOnce({
+      ok: true,
+      document: { id: 'kbd_20260101000000_cafe0001', status: 'processing' },
+    });
+    const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(fileInput).not.toBeNull();
+    Object.defineProperty(fileInput, 'files', {
+      value: [new File(['more text'], 'more.txt', { type: 'text/plain' })],
+      configurable: true,
+    });
+    await act(async () => {
+      fileInput!.dispatchEvent(new Event('change', { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const form = container.querySelector<HTMLFormElement>('.chat-composer');
+    expect(form).not.toBeNull();
+    await act(async () => {
+      form!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const chips = [...container.querySelectorAll('.chat-knowledge-status')];
+    expect(chips.length).toBe(2);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    expect(
+      chips.some((element) => element.textContent?.includes('Added to Knowledge')),
+    ).toBe(true);
+  });
+
+  it('stops polling on unmount', async () => {
+    stubListEndpoint(() => ({
+      status: 200,
+      documents: [documentView()],
+    }));
+    await attachAndSubmitUnderFakeTimers();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(1);
+
+    act(() => root?.unmount());
+    root = null;
+    const callsAtUnmount = fetchMock.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9_000);
+    });
+    expect(fetchMock.mock.calls.length).toBe(callsAtUnmount);
   });
 });

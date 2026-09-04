@@ -193,8 +193,19 @@ type KnowledgeUploadState = 'indexing' | 'added' | 'failed';
 
 type KnowledgeUploadStatus = {
   state: KnowledgeUploadState;
+  /** Server document id — preserved through EVERY transition because the
+   * raw document survives Qdrant failure (the PDF viewer needs it). */
+  documentId?: string;
   detail?: string;
+  /** Set when automatic polling gave up (16-minute budget); the chip keeps
+   * showing "Indexing…" while polling stops for this entry. */
+  pollingExpired?: boolean;
 };
+
+/** Chat chip reconciliation cadence and total automatic-polling budget
+ * (mirrors the server stale-processing window). */
+const KNOWLEDGE_POLLING_INTERVAL_MS = 3_000;
+const KNOWLEDGE_POLLING_BUDGET_MS = 16 * 60 * 1000;
 
 type PendingUpload = {
   id: string;
@@ -324,6 +335,9 @@ export function ChatStudio({
   const [input, setInput] = useState('');
   const [uploads, setUploads] = useState<PendingUpload[]>([]);
   const [knowledgeStatus, setKnowledgeStatus] = useState<Record<string, KnowledgeUploadStatus>>({});
+  const knowledgePollingStartRef = useRef(0);
+  const mountedRef = useRef(true);
+
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [commandOpen, setCommandOpen] = useState(false);
@@ -360,8 +374,87 @@ export function ChatStudio({
   const [taskNotice, setTaskNotice] = useState<string | null>(null);
   const [taskDockOpen, setTaskDockOpen] = useState(false);
 
+  useEffect(() => () => {
+    mountedRef.current = false;
+  }, []);
   const agentId = initialAgentId;
   const threadId = initialThreadId;
+
+  // Knowledge indexing reconciliation: ONE bounded polling loop reconciles
+  // every pending upload chip against the authenticated list endpoint.
+  // Candidates are accepted uploads (documentId present) still `indexing`
+  // and not expired; the 16-minute budget starts at the first tick after
+  // candidates appear and resets whenever the candidate set becomes empty,
+  // so a later unrelated upload gets a fresh window.
+  const knowledgeCandidateKey = Object.entries(knowledgeStatus)
+    .filter(([, status]) => status.state === 'indexing' && Boolean(status.documentId) && status.pollingExpired !== true)
+    .map(([id]) => id)
+    .sort()
+    .join('|');
+
+  useEffect(() => {
+    if (knowledgeCandidateKey === '') {
+      knowledgePollingStartRef.current = 0;
+      return;
+    }
+    if (knowledgePollingStartRef.current === 0) {
+      knowledgePollingStartRef.current = Date.now();
+    }
+    const startedAt = knowledgePollingStartRef.current;
+    const timer = setInterval(async () => {
+      if (Date.now() - startedAt > KNOWLEDGE_POLLING_BUDGET_MS) {
+        // Terminal for this window: the chip keeps showing "Indexing…"
+        // while automatic polling stops for these entries.
+        setKnowledgeStatus((current) => {
+          let changed = false;
+          const next: Record<string, KnowledgeUploadStatus> = { ...current };
+          for (const [key, status] of Object.entries(next)) {
+            if (status.state === 'indexing' && status.documentId && status.pollingExpired !== true) {
+              next[key] = { ...status, pollingExpired: true, detail: 'Still indexing — check the Knowledge page.' };
+              changed = true;
+            }
+          }
+          return changed ? next : current;
+        });
+        knowledgePollingStartRef.current = 0;
+        return;
+      }
+      try {
+        const response = await fetch('/api/storage/knowledge/documents');
+        if (!response.ok || !mountedRef.current) return;
+        const payload = (await response.json()) as {
+          documents?: Array<{ id: string; status: string; error?: string | null }>;
+        };
+        if (!Array.isArray(payload.documents)) return;
+        const byId = new Map(payload.documents.map((document) => [document.id, document]));
+        if (!mountedRef.current) return;
+        setKnowledgeStatus((current) => {
+          let changed = false;
+          const next: Record<string, KnowledgeUploadStatus> = { ...current };
+          for (const [key, status] of Object.entries(current)) {
+            if (status.state !== 'indexing' || !status.documentId || status.pollingExpired) continue;
+            const document = byId.get(status.documentId);
+            if (!document) continue;
+            if (document.status === 'ready') {
+              next[key] = { state: 'added', documentId: status.documentId };
+              changed = true;
+            } else if (document.status === 'failed') {
+              next[key] = {
+                state: 'failed',
+                documentId: status.documentId,
+                detail: document.error ?? 'Knowledge indexing failed.',
+              };
+              changed = true;
+            }
+          }
+          return changed ? next : current;
+        });
+      } catch {
+        // Transient polling failure: keep showing the current snapshot.
+      }
+    }, KNOWLEDGE_POLLING_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [knowledgeCandidateKey]);
 
   const currentAgent = agents.find((entry) => entry.id === agentId);
   const threadOwned = isOwnedThreadId(threadId, agentId, resourceId);
@@ -1076,14 +1169,16 @@ export function ChatStudio({
       prompt || attachmentViews[0]?.filename || 'Attachment';
     const runContent = buildUserMessageContent(prompt, readyUploads);
     const now = Date.now();
+    const sentInput = input;
     const userMessageId = crypto.randomUUID();
     const assistantId = crypto.randomUUID();
-    const sentInput = input;
 
     // Knowledge Base ingestion (additive, fire-and-forget): raw text/PDF
     // files are persisted and indexed server-side in parallel with the chat
     // run — this never blocks or waits on the conversation. Images stay
-    // multimodal-only and are never indexed.
+    // multimodal-only and are never indexed. An accepted upload is NOT
+    // indexed yet: the record stays `processing` until the reconciliation
+    // loop below observes the terminal state.
     for (const upload of uploads) {
       if (upload.status !== 'ready' || upload.kind === 'image' || !upload.raw) continue;
       if (classifyKnowledgeFile({ name: upload.filename, type: upload.raw.type }) === 'unsupported') {
@@ -1092,16 +1187,16 @@ export function ChatStudio({
       setKnowledgeStatus((current) => ({ ...current, [upload.id]: { state: 'indexing' } }));
       const uploadId = upload.id;
       void uploadKnowledgeDocument({ file: upload.raw, sourceThreadId: threadId }).then((result) => {
+        if (!mountedRef.current) return;
         setKnowledgeStatus((current) => ({
           ...current,
           [uploadId]: result.ok
-            ? result.document.status === 'failed'
-              ? { state: 'failed', detail: result.document.error ?? 'Knowledge indexing failed.' }
-              : { state: 'added' }
+            ? { state: 'indexing', documentId: result.document.id }
             : { state: 'failed', detail: result.message },
         }));
       });
     }
+
 
     // Sending a message is an explicit "show me the reply" intent: re-attach
     // the follow even if the user had scrolled up while reading.

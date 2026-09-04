@@ -199,6 +199,9 @@ export function KnowledgeDocumentList({ initialDocuments }: { initialDocuments: 
                   )}
                 </td>
                 <td>
+                  {doc.chunkCount ?? '—'}
+                </td>
+                <td>
                   <div className="studio-action-row">
                     <a href={`/api/storage/knowledge/documents/${encodeURIComponent(doc.id)}/original`}>
                       Open
