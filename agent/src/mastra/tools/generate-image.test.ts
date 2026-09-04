@@ -376,29 +376,38 @@ describe('generate_image tool — ordering and failure handling', () => {
   });
 
   it('does not update metadata when image generation fails', async () => {
-    const failingClient: ImageGenerationClient = {
-      async generate() {
-        throw new ImageGenerationClientError('timeout');
-      },
-    };
-    const root = createRootStore();
-    const seeded = seedPost(root);
-    await seeded.write();
-    const tool = makeTool({
-      imageClient: failingClient,
-      storeFactory: () => root,
-      now: FIXED_NOW,
-    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const failingClient: ImageGenerationClient = {
+        async generate() {
+          throw new ImageGenerationClientError('timeout');
+        },
+      };
+      const root = createRootStore();
+      const seeded = seedPost(root);
+      await seeded.write();
+      const tool = makeTool({
+        imageClient: failingClient,
+        storeFactory: () => root,
+        now: FIXED_NOW,
+      });
 
-    await expect(tool.execute!(
-      { postId: seeded.metadata.postId, ...makeBrief() } as never,
-      {} as never,
-    )).rejects.toThrow('Image generation timed out.');
+      await expect(tool.execute!(
+        { postId: seeded.metadata.postId, ...makeBrief() } as never,
+        {} as never,
+      )).rejects.toThrow('Image generation timed out.');
 
-    const { getSocialPost } = await import('@chekku/storage');
-    const post = await getSocialPost(createSocialPostStorage(root), seeded.metadata.postId);
-    expect(post.metadata.visualAssets).toBeUndefined();
-    expect(post.metadata.activeVisualAssetId).toBeUndefined();
+      expect(warn).toHaveBeenCalledWith(
+        '[generate_image] image generation failed: category=timeout',
+      );
+
+      const { getSocialPost } = await import('@chekku/storage');
+      const post = await getSocialPost(createSocialPostStorage(root), seeded.metadata.postId);
+      expect(post.metadata.visualAssets).toBeUndefined();
+      expect(post.metadata.activeVisualAssetId).toBeUndefined();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('does not update metadata when the upload fails', async () => {
