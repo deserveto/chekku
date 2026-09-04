@@ -589,6 +589,19 @@ describe('run routes: token quota gate', () => {
     expect(res.status).toBe(404);
   });
 
+  it('returns 409 with the active run when the thread already has one, even with quota exhausted', async () => {
+    // Duplicate-run attach is not new spend: the 409 contract must win
+    // over the quota gate so the client can attach to the running run.
+    blockedQuota();
+    const run = seedRunningRun();
+    const res = await startHandler(
+      makeContext({ body: { ...VALID }, mastra: mastraWithAgent() }) as never,
+    );
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { run?: { id?: string } };
+    expect(body.run?.id).toBe(run.id);
+  });
+
   it('starts normally while under the quota', async () => {
     const res = await startHandler(
       makeContext({ body: { ...VALID }, mastra: mastraWithAgent() }) as never,

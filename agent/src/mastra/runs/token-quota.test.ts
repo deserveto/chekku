@@ -82,6 +82,21 @@ describe('TokenQuotaStore', () => {
     store.consume('user-1', Number.MAX_SAFE_INTEGER);
     expect(() => store.assertQuota('user-1')).not.toThrow();
   });
+
+  it('bounds tracked resources, evicting the oldest-inserted entry', () => {
+    const { store } = fixedStore(1000);
+    const MAX = 10_000;
+    for (let i = 0; i <= MAX; i++) {
+      store.consume(`res-${i}`, 5);
+    }
+    // res-1 (next oldest) and the newest retain their usage — the size
+    // never exceeded the cap (otherwise nothing would have been evicted).
+    expect(store.getUsage('res-1')).toEqual({ used: 5, limit: 1000 });
+    expect(store.getUsage(`res-${MAX}`)).toEqual({ used: 5, limit: 1000 });
+    // Probing the evicted res-0 inserts a fresh entry (which in turn evicts
+    // the now-oldest key, res-2 — hence asserted last).
+    expect(store.getUsage('res-0')).toEqual({ used: 0, limit: 1000 });
+  });
 });
 
 describe('RunUsageTracker', () => {
@@ -91,33 +106,58 @@ describe('RunUsageTracker', () => {
     return { tracker, consumed };
   }
 
-  it('consumes cumulative step-finish totalUsage as deltas', () => {
+  // Runtime step-finish chunks carry BOTH shapes: `stepResult.totalUsage`
+  // (cumulative across steps) and `output.usage` (per-step). Cumulative wins
+  // whenever it parses.
+  function stepChunk(cumulative: number, perStep = cumulative) {
+    return {
+      stepResult: { totalUsage: { totalTokens: cumulative } },
+      output: { usage: { totalTokens: perStep } },
+    };
+  }
+
+  it('consumes cumulative stepResult.totalUsage as deltas', () => {
     const { tracker, consumed } = trackerOf();
-    tracker.recordStepFinish({ totalUsage: { totalTokens: 100 } });
-    tracker.recordStepFinish({ totalUsage: { totalTokens: 250 } });
-    tracker.recordStepFinish({ totalUsage: { totalTokens: 250 } });
+    tracker.recordStepFinish(stepChunk(100));
+    tracker.recordStepFinish(stepChunk(250));
+    tracker.recordStepFinish(stepChunk(250));
     expect(consumed).toEqual([100, 150]);
     expect(tracker.consumed).toBe(250);
   });
 
-  it('ignores non-monotonic step reports (per-step reporting variants)', () => {
+  it('prefers the cumulative shape when both are present', () => {
     const { tracker, consumed } = trackerOf();
-    tracker.recordStepFinish({ totalUsage: { totalTokens: 200 } });
-    tracker.recordStepFinish({ totalUsage: { totalTokens: 50 } });
+    tracker.recordStepFinish(stepChunk(200, 9_999));
+    expect(consumed).toEqual([200]);
+    expect(tracker.consumed).toBe(200);
+  });
+
+  it('ignores non-monotonic cumulative reports', () => {
+    const { tracker, consumed } = trackerOf();
+    tracker.recordStepFinish(stepChunk(200));
+    tracker.recordStepFinish(stepChunk(50));
     expect(consumed).toEqual([200]);
   });
 
   it('falls back to inputTokens + outputTokens when totalTokens is absent', () => {
     const { tracker, consumed } = trackerOf();
     tracker.recordStepFinish({
-      totalUsage: { inputTokens: 700, outputTokens: 300 },
+      stepResult: { totalUsage: { inputTokens: 700, outputTokens: 300 } },
     });
     expect(consumed).toEqual([1000]);
   });
 
+  it('consumes per-step output.usage additively when only it is present', () => {
+    const { tracker, consumed } = trackerOf();
+    tracker.recordStepFinish({ output: { usage: { totalTokens: 100 } } });
+    tracker.recordStepFinish({ output: { usage: { totalTokens: 50 } } });
+    expect(consumed).toEqual([100, 50]);
+    expect(tracker.consumed).toBe(150);
+  });
+
   it('reconciles the finish whole-run total, consuming only the shortfall', () => {
     const { tracker, consumed } = trackerOf();
-    tracker.recordStepFinish({ totalUsage: { totalTokens: 100 } });
+    tracker.recordStepFinish(stepChunk(100));
     tracker.recordFinish({ output: { usage: { totalTokens: 400 } } });
     tracker.recordFinish({ output: { usage: { totalTokens: 300 } } });
     expect(consumed).toEqual([100, 300]);
@@ -126,9 +166,9 @@ describe('RunUsageTracker', () => {
 
   it('does not double-count a late step-finish arriving after finish', () => {
     const { tracker, consumed } = trackerOf();
-    tracker.recordStepFinish({ totalUsage: { totalTokens: 100 } });
+    tracker.recordStepFinish(stepChunk(100));
     tracker.recordFinish({ output: { usage: { totalTokens: 400 } } });
-    tracker.recordStepFinish({ totalUsage: { totalTokens: 300 } });
+    tracker.recordStepFinish(stepChunk(300));
     expect(consumed).toEqual([100, 300]);
     expect(tracker.consumed).toBe(400);
   });
@@ -144,8 +184,14 @@ describe('RunUsageTracker', () => {
   it('is a no-op for malformed payloads', () => {
     const { tracker, consumed } = trackerOf();
     tracker.recordStepFinish({});
-    tracker.recordStepFinish({ totalUsage: null });
-    tracker.recordStepFinish({ totalUsage: { totalTokens: 'lots' } });
+    tracker.recordStepFinish({ stepResult: {} });
+    tracker.recordStepFinish({ output: {} });
+    // The stale top-level `totalUsage` shape no longer exists at runtime.
+    tracker.recordStepFinish({ totalUsage: { totalTokens: 500 } });
+    tracker.recordStepFinish({ stepResult: { totalUsage: null } });
+    tracker.recordStepFinish({
+      stepResult: { totalUsage: { totalTokens: 'lots' } },
+    });
     tracker.recordFinish({});
     tracker.recordFinish({ output: {} });
     tracker.recordFinish({ output: { usage: undefined } });

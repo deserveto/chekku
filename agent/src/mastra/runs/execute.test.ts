@@ -705,8 +705,20 @@ describe('runExecution token usage recording', () => {
     const { agent } = makeAgent(
       [
         { type: 'text-delta', payload: { text: 'hi' } },
-        { type: 'step-finish', payload: { totalUsage: { totalTokens: 120 } } },
-        { type: 'step-finish', payload: { totalUsage: { totalTokens: 300 } } },
+        {
+          type: 'step-finish',
+          payload: {
+            stepResult: { totalUsage: { totalTokens: 120 } },
+            output: { usage: { totalTokens: 120 } },
+          },
+        },
+        {
+          type: 'step-finish',
+          payload: {
+            stepResult: { totalUsage: { totalTokens: 300 } },
+            output: { usage: { totalTokens: 300 } },
+          },
+        },
         {
           type: 'finish',
           payload: { output: { usage: { totalTokens: 350 } } },
@@ -746,7 +758,10 @@ describe('runExecution token usage recording', () => {
           async start(controller) {
             controller.enqueue({
               type: 'step-finish',
-              payload: { totalUsage: { totalTokens: 90 } },
+              payload: {
+                stepResult: { totalUsage: { totalTokens: 90 } },
+                output: { usage: { totalTokens: 90 } },
+              },
             });
             // Erroring synchronously would discard the queued chunk
             // (controller.error resets the stream's queue), so yield
@@ -783,7 +798,13 @@ describe('runExecution token usage recording', () => {
   it('runs without a quota consumer and emits no usage events either way', async () => {
     const registry = new RunRegistry();
     const { agent } = makeAgent([
-      { type: 'step-finish', payload: { totalUsage: { totalTokens: 10 } } },
+      {
+        type: 'step-finish',
+        payload: {
+          stepResult: { totalUsage: { totalTokens: 10 } },
+          output: { usage: { totalTokens: 10 } },
+        },
+      },
       { type: 'finish', payload: { output: { usage: { totalTokens: 10 } } } },
     ]);
 

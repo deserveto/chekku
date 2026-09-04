@@ -118,7 +118,8 @@ const envSchema = z.object({
   // 0 disables enforcement. Counters are
   // in-memory; an agent server restart gives users a fresh daily quota.
   TOKEN_DAILY_LIMIT: z.preprocess(
-    (value) => (value === '' ? undefined : value),
+    (value) =>
+      typeof value === 'string' && value.trim() === '' ? undefined : value,
     z.coerce.number().int().min(0).default(500_000),
   ),
   BROWSER_HEADLESS: z.enum(['true', 'false']).default('true'),

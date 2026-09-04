@@ -215,16 +215,18 @@ export const startRunRoute = registerApiRoute('/runs', {
     }
 
     // Token quota gate: a blocked user gets a fixed 429 before any thread
-    // record or run registry state is created. The limit is the global
-    // server default (TOKEN_DAILY_LIMIT); counters are in-memory and die
-    // with the process, so a restart gives the user a fresh daily quota.
-    try {
-      tokenQuotaStore.assertQuota(resourceId);
-    } catch (error) {
-      if (error instanceof TokenQuotaExceededError) {
-        return c.json({ error: error.message }, 429);
+    // record or run registry state is created. Duplicate-run attach is NOT
+    // new spend: when this thread already has an active run, the 409
+    // attach contract wins even if the user's quota tipped over mid-run.
+    if (!agentRunRegistry.findActiveRun(agentId, threadId, resourceId)) {
+      try {
+        tokenQuotaStore.assertQuota(resourceId);
+      } catch (error) {
+        if (error instanceof TokenQuotaExceededError) {
+          return c.json({ error: error.message }, 429);
+        }
+        throw error;
       }
-      throw error;
     }
 
     // First turn: create the Memory thread record (untitled — Mastra's

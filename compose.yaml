@@ -151,6 +151,8 @@ services:
       WEB_READER_BASE_URL: http://reader:8081
       PUBLIC_HOLIDAY_API_BASE_URL: ${PUBLIC_HOLIDAY_API_BASE_URL:-https://api-hari-libur.vercel.app/api}
       CHEKKU_DEFAULT_AGENT_ID: ${CHEKKU_DEFAULT_AGENT_ID:-main-agent}
+      # Per-user daily token quota; empty maps to the env schema default (500000).
+      TOKEN_DAILY_LIMIT: ${TOKEN_DAILY_LIMIT:-}
       CHEKKU_LOCAL_USER_ID: ${CHEKKU_LOCAL_USER_ID:-local-user}
       BROWSER_HEADLESS: ${BROWSER_HEADLESS:-true}
       # Optional integrations (empty is safe; the server boots without them).

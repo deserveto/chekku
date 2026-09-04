@@ -46,6 +46,9 @@ interface QuotaEntry {
   used: number;
 }
 
+/** Cap on distinct tracked resources; the oldest-inserted entry is evicted beyond it. */
+const MAX_TRACKED_RESOURCES = 10_000;
+
 export class TokenQuotaStore implements TokenQuotaConsumer {
   private readonly limit: number;
   private readonly now: () => number;
@@ -65,6 +68,15 @@ export class TokenQuotaStore implements TokenQuotaConsumer {
     const day = this.currentDay();
     const existing = this.entries.get(resourceId);
     if (!existing || existing.day !== day) {
+      // Bound the Map: a brand-new key beyond the cap evicts the
+      // oldest-inserted entry (Maps preserve insertion order). Existing
+      // keys — including day rollovers, which replace in place — never evict.
+      if (!existing && this.entries.size >= MAX_TRACKED_RESOURCES) {
+        const oldest = this.entries.keys().next().value;
+        if (oldest !== undefined) {
+          this.entries.delete(oldest);
+        }
+      }
       // Lazy day rollover: a stale entry from a previous UTC day resets to 0.
       const fresh: QuotaEntry = { day, used: 0 };
       this.entries.set(resourceId, fresh);
@@ -116,12 +128,16 @@ function usageTotalTokens(usage: unknown): number | null {
 
 /**
  * Records one run's token usage into a quota consumer, delta-only so nothing
- * is double-counted. Mastra's `step-finish` payload carries `totalUsage` —
- * cumulative usage across steps so far (AI SDK contract) — so each event
- * consumes only growth over the highest cumulative total seen. A gateway
- * variant that reports non-cumulatively (or not at all) is caught by
- * `recordFinish`, which reconciles against the whole-run total in
- * `output.usage` and consumes only the shortfall.
+ * is double-counted. Runtime `step-finish` chunks carry usage in two shapes
+ * (there is no top-level `totalUsage` — the runtime zod schema strips it even
+ * though the stale TS types still declare it):
+ * - `stepResult.totalUsage` — cumulative across steps, so each event consumes
+ *   only growth over the highest cumulative total seen.
+ * - `output.usage` — per-step, so each event is consumed additively in full
+ *   (per-step totals are not monotonic).
+ * `recordFinish` reconciles against the whole-run total in `output.usage` and
+ * consumes only the shortfall, so a gateway that reports no step usage at all
+ * is still metered once at the end.
  */
 export class RunUsageTracker {
   private readonly consume: (tokens: number) => void;
@@ -133,12 +149,31 @@ export class RunUsageTracker {
   }
 
   recordStepFinish(payload: UnknownRecord): void {
-    const total = usageTotalTokens(payload.totalUsage);
-    if (total === null || total <= this.highestStepTotal) return;
-    const delta = total - this.highestStepTotal;
-    this.highestStepTotal = total;
-    this.recorded += delta;
-    this.consume(delta);
+    // Runtime `step-finish` chunks (llmIterationOutputSchema) carry usage at
+    // `stepResult.totalUsage` — cumulative across steps — and at
+    // `output.usage` — per-step. There is no top-level `totalUsage` on the
+    // runtime payload (the TS types are stale on this).
+    const stepResult =
+      payload.stepResult && typeof payload.stepResult === 'object'
+        ? (payload.stepResult as UnknownRecord)
+        : undefined;
+    const cumulative = usageTotalTokens(stepResult?.totalUsage);
+    if (cumulative !== null) {
+      if (cumulative <= this.highestStepTotal) return;
+      const delta = cumulative - this.highestStepTotal;
+      this.highestStepTotal = cumulative;
+      this.recorded += delta;
+      this.consume(delta);
+      return;
+    }
+    const output =
+      payload.output && typeof payload.output === 'object'
+        ? (payload.output as UnknownRecord)
+        : undefined;
+    const perStep = usageTotalTokens(output?.usage);
+    if (perStep === null) return;
+    this.recorded += perStep;
+    this.consume(perStep);
   }
 
   recordFinish(payload: UnknownRecord): void {
