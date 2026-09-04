@@ -31,11 +31,16 @@
     "lint": "npm run lint --workspace client",
     "test": "vitest run --exclude scripts/dev.test.ts --exclude scripts/prod.test.ts && vitest run scripts/dev.test.ts && vitest run scripts/prod.test.ts",
     "test:web-reader:live": "vitest run agent/src/mastra/web-reader/client.live.test.ts",
+    "test:e2e": "tsc -p e2e --noEmit && playwright test",
     "check": "npm run typecheck && npm run lint && npm test"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "@types/pg": "^8.20.3",
     "concurrently": "^10.0.3",
     "jsdom": "^29.1.1",
+    "pg": "^8.22.0",
+    "typescript": "^6.0.3",
     "vitest": "^4.1.0"
   },
   "overrides": {

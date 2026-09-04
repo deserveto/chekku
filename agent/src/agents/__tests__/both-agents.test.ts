@@ -188,17 +188,22 @@ describe('durable rollout (Task D, Fase 2: social cluster)', () => {
     expect(mastra.getAgentById('social-media-strategist-agent')).toBe(durableSocialMediaStrategistAgent);
   });
 
-  it('delegates strategy and visual delegation targets to the durable wrappers', () => {
-    // The supervisor's `agents` field is the delegation surface; the
-    // Content Writer stays plain there because the durable wrapper does
-    // not carry its Telegram channels.
+  it('keeps delegation targets plain because durable sub-agents break core 1.50.1 delegation', () => {
+    // The supervisor's `agents` field is the delegation surface. Core
+    // 1.50.1's network delegation wrapper reads `messageList` and `text`
+    // off the sub-agent stream result, and `DurableAgent.stream()` exposes
+    // neither — delegating to a durable wrapper always fails AFTER the
+    // sub-run completes. All three delegation targets therefore stay plain
+    // (durable execution still applies to each agent's own top-level runs).
     const supervisor = socialMediaSupervisorAgent as unknown as {
       __getStaticAgents?: () => Record<string, unknown>;
     };
     const subAgents = supervisor.__getStaticAgents?.() ?? {};
     expect(subAgents.socialMediaContentWriter).toBe(socialMediaContentWriter);
-    expect(subAgents.socialMediaStrategistAgent).toBe(durableSocialMediaStrategistAgent);
-    expect(subAgents.visualContentAgent).toBe(durableVisualContentAgent);
+    expect(subAgents.socialMediaStrategistAgent).toBe(socialMediaStrategistAgent);
+    expect(subAgents.socialMediaStrategistAgent).not.toBe(durableSocialMediaStrategistAgent);
+    expect(subAgents.visualContentAgent).toBe(visualContentAgent);
+    expect(subAgents.visualContentAgent).not.toBe(durableVisualContentAgent);
   });
 });
 
@@ -323,6 +328,19 @@ describe('social-media-supervisor-agent (instructions preview delegation)', () =
     expect(text).toContain('"Use generate_image with postId <id>"');
     expect(text).toContain('standalone preview');
   });
+
+  it('concept-block template matches the preview_image facts contract', async () => {
+    const { buildSupervisorInstructions } = await import('../social-media-supervisor-agent.js');
+    const text = buildSupervisorInstructions();
+    // Regression (2026-09): the template invited any number of long facts
+    // ("Panel count: <rough number>", "Concise description" formatting) while
+    // the preview_image schema caps facts at 3 entries of 80 characters each.
+    // The VCA transcribes the block near-verbatim, so an over-budget block
+    // deterministically fails tool input validation.
+    expect(text).toContain('2–3 entries');
+    expect(text).toContain('at most 80 characters total');
+    expect(text).not.toContain('Panel count');
+  });
 });
 
 describe('social-media-supervisor-agent (three sub-agents and routing)', () => {
@@ -336,10 +354,11 @@ describe('social-media-supervisor-agent (three sub-agents and routing)', () => {
       'socialMediaStrategistAgent',
       'visualContentAgent',
     ]);
-    // Task D Fase 2: the strategist and visual delegations run through the
-    // durable wrappers (identity assertions live in the Fase 2 describe
-    // block above); the Content Writer stays plain.
-    expect(subAgents.visualContentAgent).toBe(durableVisualContentAgent);
+    // Delegation targets stay plain (see the durable-rollout describe block:
+    // durable sub-agents break core 1.50.1's delegation result handling);
+    // durable wrappers are registered in the composition root instead.
+    expect(subAgents.visualContentAgent).toBe(visualContentAgent);
+    expect(subAgents.visualContentAgent).not.toBe(durableVisualContentAgent);
   });
 
   it('binds exactly the two research tools plus task tracking and nothing else', async () => {

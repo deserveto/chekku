@@ -10,8 +10,8 @@ import { readWebPageTool } from '../mastra/tools/web-reader.js';
 import { getServerModel } from '../providers/model.js';
 import { providerContextSchema, type ProviderContext } from './context.js';
 import { socialMediaContentWriter } from './social-media-content-writer.js';
-import { durableSocialMediaStrategistAgent, socialMediaStrategistAgent } from './social-media-strategist-agent.js';
-import { durableVisualContentAgent, visualContentAgent } from './visual-content-agent.js';
+import { socialMediaStrategistAgent } from './social-media-strategist-agent.js';
+import { visualContentAgent } from './visual-content-agent.js';
 
 /**
  * Social Media Supervisor
@@ -86,17 +86,16 @@ Conversational approval before generating a visual (native chat â€” never a
   Content pillar: CELEBRATION | TECHNOLOGY | GENERAL
   Visual style: <one line â€” palette, mood, imagery direction matching the pillar>
   Headline on image: <short headline, â‰¤12 words>
-  Verified facts on image (each appears once, no duplicates; format each fact as "Short Title: Concise description" for rich UI cards):
-  - <Fact Title>: <Short description>
-  - <Fact Title>: <Short description>
+  Verified facts on image (2–3 entries, each appears once, no duplicates; each entry is ONE line of at most 80 characters total, formatted "Short Title: short description"):
+  - <Fact Title>: <short description — whole line ≤80 chars>
+  - <Fact Title>: <short description — whole line ≤80 chars>
   Hero number (CELEBRATION, optional): <e.g. HUT ke-499>
   Date badge (CELEBRATION, optional): <e.g. 22 Juni 2026>
   Context line (optional): <why it matters, one short line>
   Source attribution: "Source: <publisher> â€¢ <date>" | omit for celebration
   Logo placement: top-left (celebration) | bottom-right (technology/general)
-  Panel count: <rough number>
   \`\`\`
-  Example: "Konsep visual: Technology editorial, deep navy + Nvidia green. Headline: AI Factory di Batam. Facts: Kapasitas: 170.000 AI accelerators (once), Skala: 360 MW (once), Target: Beroperasi pada Q1 2027 (once). Source: DetikInet â€¢ 9 Agustus 2026. Logo: Rafiqspace AI kecil di bottom-right. 3 panel. Balas 'lanjut' untuk saya buatkan."
+  Example: "Konsep visual: Technology editorial, deep navy + Nvidia green. Headline: AI Factory di Batam. Facts: Kapasitas: 170.000 AI accelerators (once), Skala: 360 MW (once), Target: Beroperasi pada Q1 2027 (once) — 3 fakta pendek, masing-masing ≤80 karakter. Source: DetikInet • 9 Agustus 2026. Logo: Rafiqspace AI kecil di bottom-right. Balas 'lanjut' untuk saya buatkan."
 - The approval the user gives at this checkpoint covers FOUR things at once: (1) content pillar classification; (2) factual framing â€” the user agrees the draft faithfully represents the research without strengthening claims; (3) content direction â€” the user agrees the topic, thesis, and core points are what they want; (4) visual concept â€” the user agrees the proposed image composition. If the user only approves the visual but flags a factual issue, route the factual issue back to the Content Writer before generating the image. Never generate a visual for content whose factual framing the user has not seen.
 - Do NOT delegate to the Visual Content Agent until the user replies with an explicit approval (ya / lanjut / approve / ok / buatkan / sudah / gambar, or any clear affirmative). On approval, delegate the visual request to the Visual Content Agent by forwarding the AGREED CONCEPT BLOCK VERBATIM â€” the same "Content pillar / Visual style / Headline / Facts / Context line / Source attribution / Logo placement" shape you proposed, with no prose preamble ("Generate a poster...", "Please create...", etc.) and no rewording. The VCA transcribes that block field-by-field into its tool call; paraphrasing it into a free-form instruction prompt causes the VCA to misread the schema and fail silently. ${delegationToolRule} If the Visual Content Agent's result contains ${successSignal} (often nested under its tool result), the visual SUCCEEDED â€” present it confidently and never apologize or claim a technical failure; the chat renders the image from that result automatically. Only apologize or retry when no image was actually produced. Treat a revision request as a no: a caption revision goes to the Content Writer; a visual-concept change just updates the concept you propose â€” in either case, present again and ask for approval again. Never generate the visual until the user has approved the draft, the factual framing, and the visual concept.
 - Never invent the visual silently: the user must always see and approve the concrete visual concept before the Visual Content Agent is invoked, so the generated image matches what the user actually wants (not the model's own guess).
@@ -146,17 +145,18 @@ const socialMediaSupervisorAgentConfig: AgentConfig<string, ToolsInput, undefine
   // boundary is the one deliberate exception: the supervisor stops there to
   // ask the user for conversational approval before generating a visual.
   defaultOptions: { maxSteps: 15 },
-  // Task D Fase 2: the Strategist and the Visual Content Agent delegate as
-  // durable wrappers (each delegated turn is its own durable run); the
-  // Content Writer stays plain because the durable wrapper does not carry
-  // its Telegram channels. The casts mirror pm-agent.ts: the wrapper's
-  // requestContext generic stays `unknown` while the delegation field
-  // expects the sub-agent's zod-context type — the runtime shapes are
-  // identical and every method delegates to the wrapped instance.
+  // Delegation targets stay PLAIN instances. Core 1.50.1's network
+  // delegation wrapper reads `messageList` and `text` off the sub-agent's
+  // stream result, and `DurableAgent.stream()` exposes neither (only
+  // `{ output, fullStream, runId, ... }`) — delegating to a durable wrapper
+  // therefore always throws `Failed agent tool execution for <subAgent>`
+  // AFTER the sub-run finishes. Delegated turns run as plain sub-agent
+  // loops; durable execution still applies to each agent's own top-level
+  // runs (`/runs`) and the direct workflow `.generate()` calls.
   agents: {
     socialMediaContentWriter,
-    socialMediaStrategistAgent: durableSocialMediaStrategistAgent as unknown as typeof socialMediaStrategistAgent,
-    visualContentAgent: durableVisualContentAgent as unknown as typeof visualContentAgent,
+    socialMediaStrategistAgent,
+    visualContentAgent,
   },
   inputProcessors: [createAgentContextLimiter(), gatewayCompatibilityProcessor, createTaskNudgeProcessor(), createCharBudgetGuard()],
   instructions: buildSupervisorInstructions(),
