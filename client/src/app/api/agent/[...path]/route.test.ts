@@ -14,6 +14,7 @@ vi.mock('@/server/proxy-url', () => ({
 }));
 
 import { DELETE, GET, HEAD, PATCH, POST, PUT } from './route';
+import { getUserId } from '@/server/auth';
 
 const context = (path: string[]) => ({ params: Promise.resolve({ path }) });
 
@@ -156,5 +157,54 @@ describe('agent proxy', () => {
   it('keeps every supported proxy method available', () => {
     expect([GET, POST, PUT, PATCH, DELETE, HEAD]).toHaveLength(6);
     expect(new Set([GET, POST, PUT, PATCH, DELETE, HEAD])).toEqual(new Set([GET]));
+  });
+
+  it.each(['generate', 'stream'] as const)('blocks native agent %s endpoint', async (endpoint) => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await POST(
+      request('POST', `api/agents/main-agent/${endpoint}`, { messages: [] }),
+      context(['api', 'agents', 'main-agent', endpoint]),
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.text()).resolves.toBe('Blocked native agent generation endpoint. Use the run surface.');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('still forwards read-only native agent routes', async () => {
+    const fetchMock = vi.fn(async () => new Response('agent info', {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const response = await GET(
+      request('GET', 'api/agents/main-agent'),
+      context(['api', 'agents', 'main-agent']),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toBe('agent info');
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://agent.internal:4111/api/agents/main-agent',
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it('blocks native agent generate endpoint only after the auth gate rejects unauthenticated callers', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    vi.mocked(getUserId).mockResolvedValueOnce(null);
+
+    const response = await POST(
+      request('POST', 'api/agents/main-agent/generate', { messages: [] }),
+      context(['api', 'agents', 'main-agent', 'generate']),
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.text()).resolves.toBe('Forbidden');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
