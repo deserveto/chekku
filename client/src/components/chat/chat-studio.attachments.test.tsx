@@ -81,6 +81,7 @@ vi.mock('@/lib/knowledge', async () => {
   };
 });
 vi.mock('@/lib/memory-threads', () => ({
+  UNTITLED_THREAD_LABEL: 'New conversation',
   listAgentThreads,
   listThreadMessages,
   removeThread: vi.fn(),

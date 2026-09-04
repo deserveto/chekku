@@ -2,7 +2,12 @@ import { Agent, type AgentConfig, type ToolsInput } from '@mastra/core/agent';
 import type { Tool } from '@mastra/core/tools';
 
 import { gatewayCompatibilityProcessor } from '../mastra/processors/gateway-compatibility.js';
-import { createAgentContextLimiter, createAgentMemory, createCharBudgetGuard } from '../mastra/processors/context-limit.js';
+import {
+  createAgentContextLimiter,
+  createAgentMemory,
+  createCharBudgetGuard,
+  TITLE_GENERATION_INSTRUCTIONS,
+} from '../mastra/processors/context-limit.js';
 import { createTaskNudgeProcessor } from '../mastra/tasks/task-nudge-processor.js';
 import { TASK_GUIDANCE, createTaskSignals } from '../mastra/tasks/task-signals.js';
 import { filterMaestroTools, createMaestroMcpClient, type CreateMaestroMcpClientOptions } from '../mastra/maestro/mcp-client.js';
@@ -111,7 +116,7 @@ const qaAndroidAgentConfig: AgentConfig<string, ToolsInput, undefined, ProviderC
   requestContextSchema: providerContextSchema,
   signals: createTaskSignals(),
   inputProcessors: [createAgentContextLimiter(), gatewayCompatibilityProcessor, createTaskNudgeProcessor(), createCharBudgetGuard()],
-  memory: createAgentMemory({ generateTitle: true }),
+  memory: createAgentMemory({ generateTitle: { instructions: TITLE_GENERATION_INSTRUCTIONS } }),
   tools: async () => ({
     ...(await loadMaestroMcpTools()),
     run_maestro_flow: runMaestroFlowTool,

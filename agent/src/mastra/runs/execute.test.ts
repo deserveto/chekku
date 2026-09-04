@@ -11,6 +11,7 @@ import {
   generateFirstTurnTitle,
   persistCancelledTurn,
   runExecution,
+  sanitizeThreadTitle,
   type MemoryAccess,
   type RunnableAgent,
 } from './execute.js';
@@ -1431,5 +1432,37 @@ describe('generateFirstTurnTitle (durable driver-side titles)', () => {
 
     expect(registry.getRun(run.id)?.status).toBe('failed');
     expect(genTitle).not.toHaveBeenCalled();
+  });
+});
+
+describe('sanitizeThreadTitle', () => {
+  it('clamps a long echo to at most 80 code points on a word boundary', () => {
+    const long = ('Here is a detailed response about your question regarding the quarterly ');
+    const echo = long.repeat(3);
+    const cleaned = sanitizeThreadTitle(echo)!;
+    const chars = Array.from(cleaned);
+    expect(chars.length).toBeLessThanOrEqual(80);
+    expect(cleaned.startsWith('Here is')).toBe(true);
+  });
+
+  it('never splits a surrogate pair when clamping', () => {
+    // 40 emoji (each 2 code points) = 80 code points; one more forces a cut.
+    const emoji = '\u{1F600}'.repeat(45);
+    const cleaned = sanitizeThreadTitle(emoji)!;
+    for (const char of cleaned) {
+      expect(/^[\u{D800}-\u{DFFF}]$/u.test(char)).toBe(false);
+    }
+    expect(Array.from(cleaned).length).toBeLessThanOrEqual(80);
+  });
+
+  it('strips wrapping quotes and collapses whitespace', () => {
+    expect(sanitizeThreadTitle('  "Quarterly Market Analysis"  ')).toBe('Quarterly Market Analysis');
+    expect(sanitizeThreadTitle("'Multi\nline   title'")).toBe('Multi line title');
+  });
+
+  it('returns undefined for whitespace-only or quote-only output', () => {
+    expect(sanitizeThreadTitle('   ')).toBeUndefined();
+    expect(sanitizeThreadTitle('""')).toBeUndefined();
+    expect(sanitizeThreadTitle('')).toBeUndefined();
   });
 });

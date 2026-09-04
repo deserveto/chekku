@@ -652,6 +652,22 @@ function userTextForTitle(params: RunExecutionParams): string {
  *
  * Best-effort: a title failure must never affect the completed run.
  */
+/**
+ * Sanitize a generated thread title: collapse whitespace, strip wrapping
+ * quotes, clamp to 80 code points (word-boundary aware). The deterministic
+ * fallback behind the strict title instructions — a disobedient model's
+ * long echo is clamped instead of stored verbatim.
+ */
+export function sanitizeThreadTitle(raw: string): string | undefined {
+  const collapsed = raw.replace(/\s+/g, ' ').trim().replace(/^["'“”‘’]+|["'“”‘’]+$/g, '').trim();
+  if (!collapsed) return undefined;
+  const chars = Array.from(collapsed); // code-point safe: never split surrogate pairs/emoji
+  if (chars.length <= 80) return chars.join('');
+  const cut = chars.slice(0, 80);
+  const lastSpace = cut.lastIndexOf(' ');
+  return (lastSpace >= 40 ? cut.slice(0, lastSpace) : cut).join('').trim() || undefined;
+}
+
 export async function generateFirstTurnTitle(
   agent: RunnableAgent,
   params: RunExecutionParams,
@@ -695,7 +711,8 @@ export async function generateFirstTurnTitle(
       model,
       instructions,
     );
-    if (!title?.trim()) return;
+    const clean = sanitizeThreadTitle(title ?? '');
+    if (!clean) return;
 
     // A manual rename that landed while the title was generating wins.
     const current = await memory.getThreadById({ threadId: params.threadId });
@@ -704,7 +721,7 @@ export async function generateFirstTurnTitle(
     await memory.createThread({
       threadId: params.threadId,
       resourceId: params.resourceId,
-      title,
+      title: clean,
       ...(thread.metadata !== undefined ? { metadata: thread.metadata } : {}),
     });
   } catch {

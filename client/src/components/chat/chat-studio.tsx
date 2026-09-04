@@ -53,6 +53,7 @@ import {
   listAgentThreads,
   listThreadMessages,
   removeThread,
+  UNTITLED_THREAD_LABEL,
   type StudioMemoryMessage,
   type StudioThread,
 } from '@/lib/memory-threads';
@@ -206,7 +207,9 @@ type KnowledgeUploadStatus = {
  * (mirrors the server stale-processing window). */
 const KNOWLEDGE_POLLING_INTERVAL_MS = 3_000;
 const KNOWLEDGE_POLLING_BUDGET_MS = 16 * 60 * 1000;
-
+/** One-shot delayed thread-list refresh after a run completes, so a title
+ * that lands just after the terminal event surfaces without polling. */
+const TITLE_REFRESH_DELAY_MS = 2_000;
 type PendingUpload = {
   id: string;
   filename: string;
@@ -337,6 +340,12 @@ export function ChatStudio({
   const [knowledgeStatus, setKnowledgeStatus] = useState<Record<string, KnowledgeUploadStatus>>({});
   const knowledgePollingStartRef = useRef(0);
   const mountedRef = useRef(true);
+  const titleRefreshTimerRef = useRef(0);
+
+  useEffect(() => () => {
+    mountedRef.current = false;
+    if (titleRefreshTimerRef.current) window.clearTimeout(titleRefreshTimerRef.current);
+  }, []);
 
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -471,11 +480,16 @@ export function ChatStudio({
   }, [search, threads]);
 
   const refreshThreads = useCallback(async () => {
+    let next: StudioThread[] = [];
     try {
-      setThreads(await listAgentThreads(resourceId, agentId));
+      next = await listAgentThreads(resourceId, agentId);
+      setThreads(next);
     } catch {
       setThreads([]);
     }
+    // On error, the empty list makes callers schedule nothing (find() →
+    // undefined) instead of reacting to stale component state.
+    return next;
   }, [agentId, resourceId]);
 
   const applyRunEvent = useCallback((event: AgentRunEvent, assistantId: string) => {
@@ -688,7 +702,19 @@ export function ChatStudio({
         setActiveRun(null);
         setActiveAssistantId(null);
         finalizeTerminalMessage(assistantId);
-        void refreshThreads();
+        // The title LLM call lands right AFTER the terminal event: decide
+        // from the FRESHLY fetched list whether one delayed refresh is
+        // needed. Already-titled threads (the common case) schedule nothing.
+        void refreshThreads().then((fresh) => {
+          if (!mountedRef.current) return;
+          const current = fresh.find((thread) => thread.id === threadRef.current);
+          if (current && current.title !== UNTITLED_THREAD_LABEL) return;
+          if (titleRefreshTimerRef.current) window.clearTimeout(titleRefreshTimerRef.current);
+          titleRefreshTimerRef.current = window.setTimeout(() => {
+            titleRefreshTimerRef.current = 0;
+            void refreshThreads();
+          }, TITLE_REFRESH_DELAY_MS);
+        });
         textareaRef.current?.focus();
       });
     },
@@ -916,6 +942,11 @@ export function ChatStudio({
       setTaskNotice(null);
       setTaskDockOpen(false);
       hasTaskSnapshotRef.current = false;
+      // A pending title refresh belongs to the previous thread's turn.
+      if (titleRefreshTimerRef.current) {
+        window.clearTimeout(titleRefreshTimerRef.current);
+        titleRefreshTimerRef.current = 0;
+      }
     };
   }, [agentId, attachToRun, refreshThreads, resourceId, threadId]);
 

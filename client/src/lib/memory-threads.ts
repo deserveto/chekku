@@ -91,6 +91,10 @@ function textFromContent(content: unknown): string {
   return '';
 }
 
+/** Constant fallback title rendered for threads the server has not titled
+ * yet; ChatStudio compares against it when deciding on delayed refreshes. */
+export const UNTITLED_THREAD_LABEL = 'New conversation';
+
 function normalizeThread(
   value: unknown,
   fallbackAgentId: string,
@@ -111,7 +115,7 @@ function normalizeThread(
     title:
       typeof row.title === 'string' && row.title.trim()
         ? row.title
-        : 'New conversation',
+        : UNTITLED_THREAD_LABEL,
     agentId:
       typeof row.agentId === 'string' && row.agentId
         ? row.agentId
