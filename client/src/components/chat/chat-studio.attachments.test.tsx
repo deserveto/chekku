@@ -80,12 +80,15 @@ vi.mock('@/lib/knowledge', async () => {
     uploadKnowledgeDocument: knowledgeUpload,
   };
 });
-vi.mock('@/lib/memory-threads', () => ({
-  UNTITLED_THREAD_LABEL: 'New conversation',
-  listAgentThreads,
-  listThreadMessages,
-  removeThread: vi.fn(),
-}));
+vi.mock('@/lib/memory-threads', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/memory-threads')>();
+  return {
+    ...actual,
+    listAgentThreads,
+    listThreadMessages,
+    removeThread: vi.fn(),
+  };
+});
 vi.mock('@/lib/agent-runs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/agent-runs')>();
   return {
