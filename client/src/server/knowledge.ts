@@ -25,6 +25,12 @@ import {
 } from '@/lib/knowledge';
 
 import { getUserId as getServerUserId } from './auth';
+
+export type {
+  KnowledgeDocumentBytes,
+  KnowledgeDocumentMetadata,
+} from '@chekku/storage';
+
 /**
  * Server-only Knowledge Base boundary. Every function resolves the tenant
  * from the Better Auth session (never from route input), scopes all storage

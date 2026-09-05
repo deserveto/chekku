@@ -43,12 +43,16 @@ vi.mock('@/components/studio/resizable-sidebar', () => ({
 }));
 vi.mock('@/components/ui/brand-mark', () => ({ BrandMark: () => null }));
 vi.mock('@/lib/agent-skills', () => ({ listAgentSkills }));
-vi.mock('@/lib/memory-threads', () => ({
-  listAgentThreads,
-  listThreadMessages,
-  removeThread: vi.fn(),
-  renameThread: vi.fn(),
-}));
+vi.mock('@/lib/memory-threads', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/memory-threads')>();
+  return {
+    ...actual,
+    listAgentThreads,
+    listThreadMessages,
+    removeThread: vi.fn(),
+    renameThread: vi.fn(),
+  };
+});
 vi.mock('@/lib/agent-runs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/agent-runs')>();
   return {
@@ -424,5 +428,150 @@ describe('ChatStudio run reconnection', () => {
     ).find((row) => row.textContent?.includes('Other thread'));
     expect(otherRow?.querySelector('.chat-thread-running')).not.toBeNull();
     expect(otherRow?.textContent).toContain('Running');
+  });
+});
+
+describe('ChatStudio delayed title refresh', () => {
+  const untitledThreads = [
+    {
+      id: activeThreadId,
+      title: 'New conversation',
+      agentId: 'main-agent',
+      createdAt: 1,
+      updatedAt: 2,
+    },
+    {
+      id: otherThreadId,
+      title: 'Other thread',
+      agentId: 'main-agent',
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  ];
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('retries the delayed refresh on a bounded backoff while the thread stays untitled', async () => {
+    listAgentThreads.mockResolvedValue(untitledThreads);
+    let resolveObservation: (() => void) | undefined;
+    observeRunEvents.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveObservation = resolve;
+        }),
+    );
+    await enterComposerText('name this conversation');
+    await submitComposer();
+
+    // Install fake timers BEFORE resolving the subscription so the delayed
+    // refreshes land on the fake clock.
+    vi.useFakeTimers();
+    let callsAfterCompletion = 0;
+    await act(async () => {
+      resolveObservation?.();
+      // Advance exactly to the first 2s delay: the microtask chain resolves
+      // the subscription, runs the completion refresh, and schedules the
+      // backoff chain that the fake clock then fires.
+      await vi.advanceTimersByTimeAsync(0);
+      callsAfterCompletion = listAgentThreads.mock.calls.length;
+      // One refresh per backoff window while the list stays untitled.
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(listAgentThreads.mock.calls.length).toBe(callsAfterCompletion + 1);
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(listAgentThreads.mock.calls.length).toBe(callsAfterCompletion + 2);
+      await vi.advanceTimersByTimeAsync(8_000);
+      expect(listAgentThreads.mock.calls.length).toBe(callsAfterCompletion + 3);
+      await vi.advanceTimersByTimeAsync(16_000);
+      expect(listAgentThreads.mock.calls.length).toBe(callsAfterCompletion + 4);
+      await vi.advanceTimersByTimeAsync(32_000);
+      expect(listAgentThreads.mock.calls.length).toBe(callsAfterCompletion + 5);
+    });
+
+    // Bounded: the retry chain stops after the last backoff window.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(listAgentThreads.mock.calls.length).toBe(callsAfterCompletion + 5);
+  });
+
+  it('does not schedule a refresh when the freshly fetched thread already carries a title', async () => {
+    // The default beforeEach fixture titles every thread.
+    let resolveObservation: (() => void) | undefined;
+    observeRunEvents.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveObservation = resolve;
+        }),
+    );
+    await enterComposerText('already titled');
+    await submitComposer();
+
+    vi.useFakeTimers();
+    let callsAfterCompletion = 0;
+    await act(async () => {
+      resolveObservation?.();
+      await vi.advanceTimersByTimeAsync(0);
+      callsAfterCompletion = listAgentThreads.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(listAgentThreads.mock.calls.length).toBe(callsAfterCompletion);
+  });
+
+  it('does not schedule a refresh when the delayed fetch itself resolves the title', async () => {
+    // (a) start-run refresh and (b) completion refresh both still see the
+    // untitled thread; (c) the delayed refresh returns the LLM title, which
+    // renders — and nothing further is scheduled.
+    listAgentThreads.mockReset();
+    const untitledRow = {
+      id: activeThreadId,
+      title: 'New conversation',
+      agentId: 'main-agent',
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const titledList = [
+      {
+        id: activeThreadId,
+        title: 'Real LLM Title',
+        agentId: 'main-agent',
+        createdAt: 1,
+        updatedAt: 3,
+      },
+      threads[1],
+    ];
+    listAgentThreads
+      .mockResolvedValueOnce([untitledRow, threads[1]])
+      .mockResolvedValueOnce([untitledRow, threads[1]])
+      .mockResolvedValue(titledList);
+
+    let resolveObservation: (() => void) | undefined;
+    observeRunEvents.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveObservation = resolve;
+        }),
+    );
+    await enterComposerText('name me');
+    await submitComposer();
+
+    vi.useFakeTimers();
+    let callsAfterCompletion = 0;
+    await act(async () => {
+      resolveObservation?.();
+      await vi.advanceTimersByTimeAsync(0);
+      callsAfterCompletion = listAgentThreads.mock.calls.length;
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    // The delayed refresh ran with the titled list and the sidebar re-rendered.
+    expect(listAgentThreads.mock.calls.length).toBe(callsAfterCompletion + 1);
+    expect(container.textContent).toContain('Real LLM Title');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(listAgentThreads.mock.calls.length).toBe(callsAfterCompletion + 1);
   });
 });

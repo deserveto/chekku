@@ -20,6 +20,10 @@ export interface StudioMemoryAttachment {
   mimeType: string;
   dataUrl: string;
   filename?: string;
+  /** Present on grouped PDF page attachments (restored messages only). */
+  pageCount?: number;
+  /** Grouped page data URLs in page order (restored messages only). */
+  pages?: string[];
 }
 
 export interface StudioMemoryMessage {
@@ -47,6 +51,15 @@ const MAX_RESTORED_ATTACHMENTS = 24;
 const MAX_RESTORED_ATTACHMENT_CHARS = 8 * 1024 * 1024;
 const MAX_RESTORED_MESSAGE_ATTACHMENT_CHARS = 8 * 1024 * 1024;
 const MAX_RESTORED_THREAD_ATTACHMENT_CHARS = 24 * 1024 * 1024;
+/**
+ * Mastra's persistence path strips `filename` from file parts, but the
+ * sentinel-wrapped attachments text part survives verbatim. The live send
+ * path labels every image there — `[Attached image 3 of 9: doc.pdf — page
+ * 2 of 18]` — so restore groups PDF page runs off that surviving manifest.
+ */
+const ATTACHMENT_SENTINEL_BEGIN = '<!-- chekku-attachments-begin -->';
+const IMAGE_LABEL =
+  /\[Attached image \d+ of \d+: ([^\]]+?)(?: — page (\d+) of (\d+))?\]/g;
 /**
  * Display text cap per restored message. Live user bubbles only ever show the
  * typed prompt; legacy rows without attachment sentinels can still carry the
@@ -91,6 +104,10 @@ function textFromContent(content: unknown): string {
   return '';
 }
 
+/** Constant fallback title rendered for threads the server has not titled
+ * yet; ChatStudio compares against it when deciding on delayed refreshes. */
+export const UNTITLED_THREAD_LABEL = 'New conversation';
+
 function normalizeThread(
   value: unknown,
   fallbackAgentId: string,
@@ -111,7 +128,7 @@ function normalizeThread(
     title:
       typeof row.title === 'string' && row.title.trim()
         ? row.title
-        : 'New conversation',
+        : UNTITLED_THREAD_LABEL,
     agentId:
       typeof row.agentId === 'string' && row.agentId
         ? row.agentId
@@ -120,6 +137,42 @@ function normalizeThread(
     updatedAt: toTimestamp(row.updatedAt, toTimestamp(row.createdAt)),
   };
 }
+type RestoredImagePart = { mimeType: string; data: string };
+
+type RestoredImageLabel = {
+  name: string;
+  page?: number;
+  pageCount?: number;
+};
+
+function imageLabelsFromContent(parts: unknown[]): RestoredImageLabel[] {
+  for (const part of parts) {
+    if (!part || typeof part !== 'object') continue;
+    const record = part as Record<string, unknown>;
+    if (record.type !== 'text') continue;
+    const text = typeof record.text === 'string' ? record.text : '';
+    if (!text.includes(ATTACHMENT_SENTINEL_BEGIN)) continue;
+
+    const labels: RestoredImageLabel[] = [];
+    for (const match of text.matchAll(IMAGE_LABEL)) {
+      const name = (match[1] ?? '').trim();
+      if (!name) continue;
+      const page = Number.parseInt(match[2] ?? '', 10);
+      const pageCount = Number.parseInt(match[3] ?? '', 10);
+      labels.push({
+        name,
+        ...(Number.isSafeInteger(page) && Number.isSafeInteger(pageCount)
+          ? { page, pageCount }
+          : {}),
+      });
+    }
+    // One sentinel block per message; its label order matches the image
+    // part order one-to-one (text attachments emit `[Attached file: …]`
+    // blocks, which the label regex ignores).
+    return labels;
+  }
+  return [];
+}
 
 function attachmentsFromContent(
   content: unknown,
@@ -127,28 +180,103 @@ function attachmentsFromContent(
 ): StudioMemoryAttachment[] {
   const attachments: StudioMemoryAttachment[] = [];
   let messageTotal = 0;
-  for (const part of partsFromContent(content)) {
+  const parts = partsFromContent(content);
+
+  const toDataUrl = (mimeType: string, data: string) =>
+    data.startsWith('data:') ? data : `data:${mimeType};base64,${data}`;
+
+
+  const imageParts: RestoredImagePart[] = [];
+  for (const part of parts) {
     if (!part || typeof part !== 'object') continue;
     const record = part as Record<string, unknown>;
-    if (record.type !== 'file') continue;
-    const mimeType = typeof record.mimeType === 'string' ? record.mimeType : '';
-    if (!mimeType.startsWith('image/')) continue;
-    const data = typeof record.data === 'string' ? record.data : '';
-    if (!data) continue;
-    const chars = data.length;
+    if (
+      record.type === 'file'
+      && typeof record.mimeType === 'string'
+      && record.mimeType.startsWith('image/')
+      && typeof record.data === 'string'
+      && record.data
+    ) {
+      imageParts.push({ mimeType: record.mimeType, data: record.data });
+    }
+  }
+  const labels = imageLabelsFromContent(parts);
+  // Grouping requires the surviving manifest to align one-to-one with the
+  // persisted image parts; any drift degrades to individual images so data
+  // is never dropped or mis-grouped.
+  const grouped = labels.length === imageParts.length && labels.length > 0;
+
+  for (let position = 0; position < imageParts.length; position += 1) {
+    if (attachments.length >= MAX_RESTORED_ATTACHMENTS) break;
+    const part = imageParts[position]!;
+    const label = grouped ? labels[position] : undefined;
+
+    // A complete, sequential page run (same name, pages 1..n in order)
+    // collapses into ONE pdf attachment. Broken or partial runs fall
+    // through to individual images.
+    if (
+      label?.page === 1 &&
+      typeof label.pageCount === 'number' &&
+      label.pageCount >= 2 &&
+      position + label.pageCount <= imageParts.length
+    ) {
+      const run: RestoredImagePart[] = [part];
+      let complete = true;
+      for (let page = 2; page <= label.pageCount; page += 1) {
+        const nextPart = imageParts[position + page - 1];
+        const nextLabel = labels[position + page - 1];
+        if (
+          !nextPart ||
+          nextLabel?.name !== label.name ||
+          nextLabel.page !== page ||
+          nextLabel.pageCount !== label.pageCount
+        ) {
+          complete = false;
+          break;
+        }
+        run.push(nextPart);
+      }
+      if (complete) {
+        const chars = run.reduce((total, page) => total + page.data.length, 0);
+        const withinBudget =
+          chars <= MAX_RESTORED_ATTACHMENT_CHARS &&
+          messageTotal + chars <= MAX_RESTORED_MESSAGE_ATTACHMENT_CHARS &&
+          budget.remaining - chars >= 0;
+        if (withinBudget) {
+          messageTotal += chars;
+          budget.remaining -= chars;
+          attachments.push({
+            mimeType: 'application/pdf',
+            filename: label.name,
+            dataUrl: toDataUrl(run[0]!.mimeType, run[0]!.data),
+            pageCount: label.pageCount,
+            pages: run.map((page) => toDataUrl(page.mimeType, page.data)),
+          });
+          position += label.pageCount - 1;
+          continue;
+        }
+        // Oversized group: skip it whole rather than emitting broken
+        // partial pages.
+        position += label.pageCount - 1;
+        continue;
+      }
+    }
+
+    const chars = part.data.length;
     if (chars > MAX_RESTORED_ATTACHMENT_CHARS) continue;
-    if (messageTotal + chars > MAX_RESTORED_MESSAGE_ATTACHMENT_CHARS) break;
-    if (budget.remaining - chars < 0) break;
+    if (
+      messageTotal + chars > MAX_RESTORED_MESSAGE_ATTACHMENT_CHARS ||
+      budget.remaining - chars < 0
+    ) {
+      break;
+    }
     messageTotal += chars;
     budget.remaining -= chars;
     attachments.push({
-      mimeType,
-      dataUrl: data.startsWith('data:') ? data : `data:${mimeType};base64,${data}`,
-      ...(typeof record.filename === 'string' && record.filename
-        ? { filename: record.filename }
-        : {}),
+      mimeType: part.mimeType,
+      dataUrl: toDataUrl(part.mimeType, part.data),
+      ...(grouped && label?.name ? { filename: label.name } : {}),
     });
-    if (attachments.length >= MAX_RESTORED_ATTACHMENTS) break;
   }
   return attachments;
 }

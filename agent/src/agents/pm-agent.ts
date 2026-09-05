@@ -2,7 +2,12 @@ import { Agent, type AgentConfig, type ToolsInput } from '@mastra/core/agent';
 import { createDurableAgent } from '@mastra/core/agent/durable';
 
 import { createCompetitiveResearchGuard } from '../mastra/processors/competitive-research-guard.js';
-import { createAgentContextLimiter, createAgentMemory, createCharBudgetGuard } from '../mastra/processors/context-limit.js';
+import {
+  createAgentContextLimiter,
+  createAgentMemory,
+  createCharBudgetGuard,
+  TITLE_GENERATION_INSTRUCTIONS,
+} from '../mastra/processors/context-limit.js';
 import { createTaskNudgeProcessor } from '../mastra/tasks/task-nudge-processor.js';
 import { TASK_GUIDANCE, createTaskSignals } from '../mastra/tasks/task-signals.js';
 import { getServerModel } from '../providers/model.js';
@@ -52,7 +57,7 @@ const pmAgentConfig: AgentConfig<string, ToolsInput, undefined, ProviderContext>
     read_web_page: withCompetitiveResearchBudget('read_web_page', readWebPageTool),
   },
   skills: [weeklyReportAnalysisSkill, competitiveAnalysisSkill],
-  memory: createAgentMemory({ generateTitle: true }),
+  memory: createAgentMemory({ generateTitle: { instructions: TITLE_GENERATION_INSTRUCTIONS } }),
   signals: createTaskSignals(),
   inputProcessors: [
     createCompetitiveResearchGuard(),

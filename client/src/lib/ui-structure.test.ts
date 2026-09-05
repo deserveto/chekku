@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const css = readFileSync(new URL('../app/studio.css', import.meta.url), 'utf8');
@@ -59,8 +59,24 @@ const reportTabs = readFileSync(
 );
 const competitiveAnalysisListPage = readStudioSource('../app/reports/competitive/page.tsx');
 const competitiveAnalysisDetailPage = readStudioSource('../app/reports/competitive/[analysisId]/page.tsx');
+const knowledgePage = readStudioSource('../app/knowledge/page.tsx');
+const knowledgePageStandalone = existsSync(
+  new URL('../app/knowledge/page.tsx', import.meta.url),
+);
+const agentNewPageStandalone = existsSync(
+  new URL('../app/agents/new/page.tsx', import.meta.url),
+);
+const agentEditPageStandalone = existsSync(
+  new URL('../app/agents/[id]/edit/page.tsx', import.meta.url),
+);
+const agentNewPage = readStudioSource('../app/agents/new/page.tsx');
+const agentEditPage = readStudioSource('../app/agents/[id]/edit/page.tsx');
 const competitiveAnalysisSlidesPage = readOptionalSource('../app/reports/competitive/[analysisId]/slides/page.tsx') || readOptionalSource('../app/(studio)/reports/competitive/[analysisId]/slides/page.tsx');
 const publicSlidesPage = readOptionalSource('../app/public/slides/[analysisId]/page.tsx');
+const commandPalette = readFileSync(
+  new URL('../components/studio/command-palette.tsx', import.meta.url),
+  'utf8',
+);
 
 describe('requested UI structure', () => {
   it('lets each sidebar place its collapse control in the brand row', () => {
@@ -396,5 +412,68 @@ describe('requested UI structure', () => {
     expect(publicSlidesPage).not.toContain('from \'@chekku/storage\'');
     expect(publicSlidesPage).not.toContain('getCompetitiveAnalysisForUser');
     expect(publicSlidesPage).not.toContain('requireIdentity');
+  });
+
+
+
+  it('renders knowledge and agent-builder routes inside the persistent studio shell', () => {
+    // Route files live under (studio)/ so the shared layout owns the
+    // shell; no standalone copies may exist outside the group.
+    expect(knowledgePageStandalone).toBe(false);
+    expect(agentNewPageStandalone).toBe(false);
+    expect(agentEditPageStandalone).toBe(false);
+    expect(knowledgePage).not.toContain('StudioNav');
+    expect(knowledgePage).not.toContain('studio-shell');
+    expect(knowledgePage).not.toContain('requireUserId');
+    expect(agentNewPage).not.toContain('requireUserId');
+    expect(agentNewPage).not.toContain('resourceId');
+    expect(agentEditPage).not.toContain('requireUserId');
+    expect(agentEditPage).not.toContain('resourceId');
+    expect(agentBuilder).not.toContain('<StudioNav');
+    expect(agentBuilder).not.toContain('studio-shell');
+    expect(agentBuilder).toContain('useStudioNavigation');
+  });
+
+  it('keeps StudioNav rendering inside components/studio and the studio layout', () => {
+    const root = new URL('../', import.meta.url);
+    // Sources that import the StudioNav module (quoted path match keeps
+    // the `studio-navigation` provider and CSS class names out).
+    const allowed: Record<string, true> = {
+      'components/studio/studio-nav.tsx': true,
+      'components/studio/studio-nav.test.ts': true,
+      'app/(studio)/layout.tsx': true,
+      'app/(studio)/reports/competitive/competitive-pages.test.ts': true,
+      'app/(studio)/reports/reports-pages.test.ts': true,
+      'app/(studio)/social-posts/social-posts-pages.test.ts': true,
+    };
+    const importers: string[] = [];
+    const walk = (relative: string): void => {
+      for (const entry of readdirSync(new URL(relative, root), { withFileTypes: true })) {
+        const child = `${relative}${entry.name}${entry.isDirectory() ? '/' : ''}`;
+        if (entry.isDirectory()) {
+          walk(child);
+        } else if (/\.tsx?$/.test(entry.name)) {
+          const source = readFileSync(new URL(child, root), 'utf8');
+          if (source.includes("from '@/components/studio/studio-nav'") || source.includes("from './studio-nav'")) {
+            importers.push(child);
+          }
+        }
+      }
+    };
+    walk('app/');
+    walk('components/');
+    expect(
+      importers.filter(
+        (path) => !allowed[path.replace(/^\//, '')],
+      ),
+    ).toEqual([]);
+  });
+
+  it('moves the navigation guard prop into the shared provider', () => {
+    expect(studioNav).not.toContain('guard?:');
+    expect(commandPalette).not.toContain('guard?:');
+    expect(commandPalette).not.toContain('export type NavigationGuard');
+    expect(studioNav).toContain('useStudioNavigation');
+    expect(commandPalette).toContain('useStudioNavigation');
   });
 });

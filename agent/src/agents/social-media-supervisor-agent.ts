@@ -2,7 +2,12 @@ import { Agent, type AgentConfig, type ToolsInput } from '@mastra/core/agent';
 import { createDurableAgent } from '@mastra/core/agent/durable';
 
 import { gatewayCompatibilityProcessor } from '../mastra/processors/gateway-compatibility.js';
-import { createAgentContextLimiter, createAgentMemory, createCharBudgetGuard } from '../mastra/processors/context-limit.js';
+import {
+  createAgentContextLimiter,
+  createAgentMemory,
+  createCharBudgetGuard,
+  TITLE_GENERATION_INSTRUCTIONS,
+} from '../mastra/processors/context-limit.js';
 import { createTaskNudgeProcessor } from '../mastra/tasks/task-nudge-processor.js';
 import { TASK_GUIDANCE, createTaskSignals } from '../mastra/tasks/task-signals.js';
 import { searchWebTool } from '../mastra/tools/searxng-search.js';
@@ -128,7 +133,7 @@ const socialMediaSupervisorAgentConfig: AgentConfig<string, ToolsInput, undefine
     'Supervisor for the social-media surface. Receives user requests and delegates drafting, planning, and visual-generation work to its sub-agents, running lightweight web research (search_web, read_web_page) itself when a request needs a quick lookup.',
   model: () => getServerModel(),
   requestContextSchema: providerContextSchema,
-  memory: createAgentMemory({ generateTitle: true }),
+  memory: createAgentMemory({ generateTitle: { instructions: TITLE_GENERATION_INSTRUCTIONS } }),
   signals: createTaskSignals(),
   tools: {
     search_web: searchWebTool,

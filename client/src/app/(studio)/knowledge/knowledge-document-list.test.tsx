@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeAll, afterEach, describe, expect, it, vi } from 'vitest';
-import { act, type ReactElement } from 'react';
+import { StrictMode, act, type ReactElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
 import { KnowledgeDocumentList } from './knowledge-document-list';
@@ -50,7 +50,7 @@ describe('KnowledgeDocumentList', () => {
   it('shows the empty state when no documents exist', () => {
     const container = render(<KnowledgeDocumentList initialDocuments={[]} />);
     expect(container.textContent).toContain('No documents in your Knowledge yet.');
-    expect(container.textContent).toContain('upload in chat');
+    expect(container.textContent).toContain('Attach a text file or PDF in chat');
   });
 
   it('lists documents with filename, type, size, date, status, and chunk count', () => {
@@ -90,6 +90,53 @@ describe('KnowledgeDocumentList', () => {
     // Retry is offered for failed documents.
     const buttons = [...container.querySelectorAll('button')].map((button) => button.textContent);
     expect(buttons).toContain('Retry indexing');
+  });
+
+  it('renders every document card with status badge, meta, and chunk count', () => {
+    const container = render(
+      <KnowledgeDocumentList
+        initialDocuments={[
+          doc(),
+          doc({
+            id: 'kbd_20260828120001_cafe0001',
+            filename: 'notes.txt',
+            mimeType: 'text/plain',
+            kind: 'text',
+            sizeBytes: 512,
+            status: 'processing',
+            chunkCount: undefined,
+          }),
+        ]}
+      />,
+    );
+    const cards = [...container.querySelectorAll('article[data-knowledge-document]')];
+    expect(cards).toHaveLength(2);
+
+    // Ready card: badge state, the chunk count in its own meta entry, and
+    // actions last.
+    expect(cards[0]?.getAttribute('data-knowledge-document')).toBe('ready');
+    expect(
+      cards[0]?.querySelector('[data-knowledge-status]')?.getAttribute('data-knowledge-status'),
+    ).toBe('ready');
+    expect(cards[0]?.querySelector('[data-knowledge-chunks]')?.textContent).toBe('12');
+    expect(cards[0]?.textContent).toContain('Open');
+    expect(cards[0]?.textContent).toContain('Delete');
+
+    // Processing card: no count yet — an em dash placeholder; no Open-less card.
+    expect(cards[1]?.getAttribute('data-knowledge-document')).toBe('processing');
+    expect(cards[1]?.querySelector('[data-knowledge-chunks]')?.textContent).toBe('—');
+  });
+
+  it('shows the failure reason on its own line with an em dash chunk placeholder', () => {
+    const container = render(
+      <KnowledgeDocumentList
+        initialDocuments={[doc({ status: 'failed', error: 'boom', chunkCount: undefined })]}
+      />,
+    );
+    const card = container.querySelector('article[data-knowledge-document]');
+    expect(card?.getAttribute('data-knowledge-document')).toBe('failed');
+    expect(card?.querySelector('[data-knowledge-chunks]')?.textContent).toBe('—');
+    expect(card?.querySelector('.studio-knowledge-reason')?.textContent).toBe('boom');
   });
 
   it('does not offer retry for ready documents', () => {
@@ -139,6 +186,43 @@ describe('KnowledgeDocumentList', () => {
     // Optimistic removal would hide a failed purge: the row stays visible
     // as Deleting… until a poll confirms the record is gone.
     expect(container.textContent).toContain('handbook.pdf');
+    expect(container.querySelector('[data-knowledge-status="deleting"]')).toBeTruthy();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(4100); });
+    expect(container.textContent).toContain('No documents in your Knowledge yet.');
+  });
+
+  it('completes the deletion flow when rendered under StrictMode', async () => {
+    // Regression: the unmount guard used to assign false only in cleanup,
+    // so StrictMode's dev mount cycle (setup → cleanup → setup) left it
+    // false for the live component — every poll tick and post-fetch state
+    // update early-returned and a deletion hung until a manual reload.
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith('/documents')) {
+        return { ok: true, json: async () => ({ documents: [] }) } as Response;
+      }
+      return { ok: true, json: async () => ({ ok: true }) } as Response;
+    });
+    const container = render(
+      <StrictMode>
+        <KnowledgeDocumentList initialDocuments={[doc()]} />
+      </StrictMode>,
+    );
+
+    const deleteButton = [...container.querySelectorAll('button')]
+      .find((button) => button.textContent === 'Delete') as HTMLButtonElement;
+    await act(async () => { deleteButton.click(); });
+    const dialog = container.querySelector('dialog');
+    const confirmButton = [...dialog!.querySelectorAll('button')]
+      .find((button) => button.textContent === 'Delete') as HTMLButtonElement;
+    await act(async () => { confirmButton.click(); });
+    await act(async () => { await Promise.resolve(); });
+
+    // The guard must be alive on the mounted component: the dialog closes
+    // and the Deleting… marker is set after the DELETE resolves.
+    expect(dialog?.open).toBe(false);
     expect(container.querySelector('[data-knowledge-status="deleting"]')).toBeTruthy();
 
     await act(async () => { await vi.advanceTimersByTimeAsync(4100); });

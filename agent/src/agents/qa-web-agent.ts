@@ -3,7 +3,12 @@ import { createDurableAgent } from '@mastra/core/agent/durable';
 
 import { browser } from '../mastra/browsers.js';
 import { gatewayCompatibilityProcessor } from '../mastra/processors/gateway-compatibility.js';
-import { createAgentContextLimiter, createAgentMemory, createCharBudgetGuard } from '../mastra/processors/context-limit.js';
+import {
+  createAgentContextLimiter,
+  createAgentMemory,
+  createCharBudgetGuard,
+  TITLE_GENERATION_INSTRUCTIONS,
+} from '../mastra/processors/context-limit.js';
 import { createTaskNudgeProcessor } from '../mastra/tasks/task-nudge-processor.js';
 import { TASK_GUIDANCE, createTaskSignals } from '../mastra/tasks/task-signals.js';
 import { calculatorTool } from '../mastra/tools/calculator.js';
@@ -22,7 +27,7 @@ const qaWebAgentConfig: AgentConfig<string, ToolsInput, undefined, ProviderConte
   tools: { calculatorTool, getCurrentTimeTool },
   signals: createTaskSignals(),
   inputProcessors: [createAgentContextLimiter(), gatewayCompatibilityProcessor, createTaskNudgeProcessor(), createCharBudgetGuard()],
-  memory: createAgentMemory({ generateTitle: true }),
+  memory: createAgentMemory({ generateTitle: { instructions: TITLE_GENERATION_INSTRUCTIONS } }),
   defaultOptions: () => ({ maxSteps: 80 }),
   instructions: `You are QA Web Agent, a careful browser QA delegate.
 

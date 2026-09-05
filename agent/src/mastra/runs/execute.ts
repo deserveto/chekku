@@ -1,4 +1,8 @@
 import { isDurableAgent } from '@mastra/core/agent/durable';
+import {
+  MASTRA_RESOURCE_ID_KEY,
+  RequestContext,
+} from '@mastra/core/request-context';
 
 import {
   type AgentRunEvent,
@@ -38,6 +42,9 @@ export interface RunnableAgent {
       memory: { thread: string; resource: string };
       runId: string;
       abortSignal: AbortSignal;
+      /** Mastra's RequestContext: the server-owned channel that carries
+       * the authenticated resource id into tool execution. */
+      requestContext?: RequestContext;
     },
   ): Promise<StreamResult>;
   getMemory(): Promise<MemoryAccess | undefined>;
@@ -645,6 +652,22 @@ function userTextForTitle(params: RunExecutionParams): string {
  *
  * Best-effort: a title failure must never affect the completed run.
  */
+/**
+ * Sanitize a generated thread title: collapse whitespace, strip wrapping
+ * quotes, clamp to 80 code points (word-boundary aware). The deterministic
+ * fallback behind the strict title instructions — a disobedient model's
+ * long echo is clamped instead of stored verbatim.
+ */
+export function sanitizeThreadTitle(raw: string): string | undefined {
+  const collapsed = raw.replace(/\s+/g, ' ').trim().replace(/^["'“”‘’]+|["'“”‘’]+$/g, '').trim();
+  if (!collapsed) return undefined;
+  const chars = Array.from(collapsed); // code-point safe: never split surrogate pairs/emoji
+  if (chars.length <= 80) return chars.join('');
+  const cut = chars.slice(0, 80);
+  const lastSpace = cut.lastIndexOf(' ');
+  return (lastSpace >= 40 ? cut.slice(0, lastSpace) : cut).join('').trim() || undefined;
+}
+
 export async function generateFirstTurnTitle(
   agent: RunnableAgent,
   params: RunExecutionParams,
@@ -688,7 +711,8 @@ export async function generateFirstTurnTitle(
       model,
       instructions,
     );
-    if (!title?.trim()) return;
+    const clean = sanitizeThreadTitle(title ?? '');
+    if (!clean) return;
 
     // A manual rename that landed while the title was generating wins.
     const current = await memory.getThreadById({ threadId: params.threadId });
@@ -697,7 +721,7 @@ export async function generateFirstTurnTitle(
     await memory.createThread({
       threadId: params.threadId,
       resourceId: params.resourceId,
-      title,
+      title: clean,
       ...(thread.metadata !== undefined ? { metadata: thread.metadata } : {}),
     });
   } catch {
@@ -724,10 +748,18 @@ export async function runExecution(
     const streamInput: RunStreamInput = params.content
       ? [{ role: 'user', content: params.content }]
       : params.prompt;
+    // Server-owned tenant identity rides the reserved RequestContext key so
+    // tools (e.g. search_knowledge_base) resolve the tenant deterministically
+    // instead of relying on framework-assembled context members. The value
+    // equals the memory option's resource, so core's precedence is harmless.
+    const requestContext: RequestContext = new RequestContext([
+      [MASTRA_RESOURCE_ID_KEY, params.resourceId],
+    ]);
     const output = await agent.stream(streamInput, {
       memory: { thread: params.threadId, resource: params.resourceId },
       runId: params.runId,
       abortSignal: params.abortSignal,
+      requestContext,
     });
     cleanup = output.cleanup;
 

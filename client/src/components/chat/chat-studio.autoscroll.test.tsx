@@ -45,12 +45,16 @@ vi.mock('@/components/ui/confirmation-dialog', () => ({
   ConfirmationDialog: () => null,
 }));
 vi.mock('@/lib/agent-skills', () => ({ listAgentSkills }));
-vi.mock('@/lib/memory-threads', () => ({
-  listAgentThreads,
-  listThreadMessages,
-  removeThread: vi.fn(),
-  renameThread: vi.fn(),
-}));
+vi.mock('@/lib/memory-threads', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/memory-threads')>();
+  return {
+    ...actual,
+    listAgentThreads,
+    listThreadMessages,
+    removeThread: vi.fn(),
+    renameThread: vi.fn(),
+  };
+});
 vi.mock('@/lib/agent-runs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/agent-runs')>();
   return {

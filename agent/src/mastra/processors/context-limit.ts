@@ -59,21 +59,48 @@ export function getCharBudget(modelId: string): number {
 
 /**
  * Shared Memory factory. `generateTitle` opts an agent into Mastra's native
- * thread title generation (first-turn completion, agent's own model). Note:
- * Mastra serializes the recent user message for the title call OUTSIDE the
- * agent's inputProcessors, so the context limiter and char-budget guard do
- * not bound it; an oversized first turn can make the provider reject the
- * title request, which Mastra swallows (thread keeps the untitled fallback).
+ * thread title generation (first-turn completion, agent's own model) — pass
+ * `true` for Mastra's default instructions or `{ instructions }` for strict
+ * custom ones (both the classic and durable first-turn paths resolve the
+ * object form through `resolveTitleGenerationConfig`). Note: Mastra
+ * serializes the recent user message for the title call OUTSIDE the agent's
+ * inputProcessors, so the context limiter and char-budget guard do not bound
+ * it; an oversized first turn can make the provider reject the title
+ * request, which Mastra swallows (thread keeps the untitled fallback).
  */
+export const TITLE_GENERATION_INSTRUCTIONS = [
+  'Generate one concise title for this new conversation.',
+  'Target 3-8 words, hard maximum 80 characters, single line.',
+  "Summarize the topic of the user's first message; do not answer it.",
+  "Do not repeat the user's message verbatim or quote it at length.",
+  'No preamble, no explanation, no prefix such as "Title:", no surrounding quotes.',
+  "Reply in the same language as the user's message.",
+  'Your entire response is used verbatim as the title.',
+].join(' ');
+
+export interface AgentTitleGenerationConfig {
+  /** Resolved by Mastra to the agent's own model when omitted. */
+  model?: unknown;
+  instructions?: string;
+}
+
 export function createAgentMemory(
-  options: { generateTitle?: boolean } = {},
+  options: { generateTitle?: boolean | AgentTitleGenerationConfig } = {},
 ): Memory {
-  return new Memory({
+  const generateTitle: boolean | AgentTitleGenerationConfig | undefined =
+    options.generateTitle;
+  // The pinned core d.ts marks `model` required in the generateTitle object
+  // form, but its only consumer (`resolveTitleGenerationConfig`) types it
+  // optional and resolves it to the agent's own model at generation time —
+  // instructions-only is the intended shape and the library type is wrong on
+  // this boundary, hence the assertion.
+  const memoryConfig = {
     options: {
       lastMessages: AGENT_MEMORY_LAST_MESSAGES,
-      generateTitle: options.generateTitle === true,
+      generateTitle,
     },
-  });
+  } as unknown as ConstructorParameters<typeof Memory>[0];
+  return new Memory(memoryConfig);
 }
 
 type VisionCountableMessage = {
