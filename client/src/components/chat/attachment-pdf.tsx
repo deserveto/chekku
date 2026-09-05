@@ -139,13 +139,14 @@ export function PdfViewerDialog({
       }}
     >
       <header className="chat-pdf-viewer-header">
-        <h2 id={titleId} className="chat-pdf-viewer-title">
-          {filename}
-          <small>
-            {' '}
-            · {pageCount} page{pageCount === 1 ? '' : 's'}
-          </small>
-        </h2>
+        <div className="chat-pdf-viewer-heading">
+          <h2 id={titleId} className="chat-pdf-viewer-title">
+            {filename}
+          </h2>
+          <p className="chat-pdf-viewer-meta">
+            PDF · {pageCount} page{pageCount === 1 ? '' : 's'}
+          </p>
+        </div>
         <button
           type="button"
           className="chat-pdf-viewer-close"

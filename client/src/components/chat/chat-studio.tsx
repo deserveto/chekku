@@ -258,6 +258,34 @@ function TypingIndicator() {
   );
 }
 
+/**
+ * Icon-only knowledge-status indicator beside an attachment. Deliberately no
+ * visible copy: the state reads from the glyph (spinning arc / check /
+ * exclamation / stalled arc) and the reason lives in the accessible label
+ * and tooltip. The stalled state (polling budget expired) stops the spin —
+ * an unwatched upload must not advertise active progress.
+ */
+function KnowledgeStatusChip({ status }: { status: KnowledgeUploadStatus }) {
+  const stalled = status.state === 'indexing' && status.pollingExpired === true;
+  const label =
+    status.state === 'added'
+      ? 'Added to Knowledge'
+      : status.state === 'failed'
+        ? status.detail ?? 'Knowledge indexing failed'
+        : stalled
+          ? 'Still indexing — check the Knowledge page.'
+          : 'Indexing…';
+  return (
+    <small
+      className="chat-knowledge-status"
+      data-knowledge-state={stalled ? 'stalled' : status.state}
+      role="status"
+      aria-label={label}
+      title={label}
+    />
+  );
+}
+
 function ToolCallCard({
   tool,
   collapseByDefault = false,
@@ -371,10 +399,18 @@ export function ChatStudio({
   // a timeline an active-run attach populated in the meantime.
   const activeAssistantIdRef = useRef<string | null>(null);
 
-  useEffect(() => () => {
-    mountedRef.current = false;
-    if (titleRefreshTimerRef.current) window.clearTimeout(titleRefreshTimerRef.current);
-    if (restoreRetryTimerRef.current) window.clearTimeout(restoreRetryTimerRef.current);
+  useEffect(() => {
+    // Assign TRUE in the setup, not just FALSE in cleanup: under React
+    // StrictMode's dev mount cycle (setup → cleanup → setup) a
+    // cleanup-only guard leaves the ref false for the live component,
+    // silently killing every mounted-guarded continuation (poll ticks,
+    // post-fetch state updates).
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (titleRefreshTimerRef.current) window.clearTimeout(titleRefreshTimerRef.current);
+      if (restoreRetryTimerRef.current) window.clearTimeout(restoreRetryTimerRef.current);
+    };
   }, []);
 
   const [dragOver, setDragOver] = useState(false);
@@ -417,11 +453,6 @@ export function ChatStudio({
   const [error, setError] = useState<string>();
   const [modelReady, setModelReady] = useState(false);
 
-  useEffect(() => () => {
-    mountedRef.current = false;
-    if (titleRefreshTimerRef.current) window.clearTimeout(titleRefreshTimerRef.current);
-    if (restoreRetryTimerRef.current) window.clearTimeout(restoreRetryTimerRef.current);
-  }, []);
   const agentId = initialAgentId;
   const threadId = initialThreadId;
 
@@ -446,10 +477,11 @@ export function ChatStudio({
       knowledgePollingStartRef.current = Date.now();
     }
     const startedAt = knowledgePollingStartRef.current;
-    const timer = setInterval(async () => {
+    const tick = async () => {
       if (Date.now() - startedAt > KNOWLEDGE_POLLING_BUDGET_MS) {
         // Terminal for this window: the chip shows the "still indexing"
-        // guidance while automatic polling stops for these entries.
+        // guidance (as a stalled, non-spinning marker) while automatic
+        // polling stops for these entries.
         setKnowledgeStatus((current) => {
           let changed = false;
           const next: Record<string, KnowledgeUploadStatus> = { ...current };
@@ -497,7 +529,12 @@ export function ChatStudio({
       } catch {
         // Transient polling failure: keep showing the current snapshot.
       }
-    }, KNOWLEDGE_POLLING_INTERVAL_MS);
+    };
+    // Reconcile once immediately: indexing often finishes between the
+    // upload POST and the first interval tick, and a fast flip must not
+    // wait out the interval.
+    void tick();
+    const timer = setInterval(() => void tick(), KNOWLEDGE_POLLING_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [knowledgeCandidateKey]);
 
@@ -1387,7 +1424,12 @@ export function ChatStudio({
         setKnowledgeStatus((current) => ({
           ...current,
           [uploadId]: result.ok
-            ? { state: 'indexing', documentId: result.document.id }
+            ? result.document.status === 'ready'
+              // Small files can finish indexing before the upload POST even
+              // returns; trust that snapshot instead of spinning until the
+              // first reconciliation tick observes it.
+              ? { state: 'added', documentId: result.document.id }
+              : { state: 'indexing', documentId: result.document.id }
             : { state: 'failed', detail: result.message },
         }));
       });
@@ -2006,16 +2048,7 @@ export function ChatStudio({
                               )}
                               {message.role === 'user'
                                 && knowledgeStatus[attachment.id] !== undefined && (
-                                <small
-                                  className="chat-knowledge-status"
-                                  data-knowledge-state={knowledgeStatus[attachment.id].state}
-                                >
-                                  {knowledgeStatus[attachment.id].state === 'indexing'
-                                    ? knowledgeStatus[attachment.id].detail ?? 'Indexing…'
-                                    : knowledgeStatus[attachment.id].state === 'added'
-                                      ? 'Added to Knowledge'
-                                      : knowledgeStatus[attachment.id].detail ?? 'Knowledge indexing failed'}
-                                </small>
+                                <KnowledgeStatusChip status={knowledgeStatus[attachment.id]} />
                               )}
                             </Fragment>
                           ))}

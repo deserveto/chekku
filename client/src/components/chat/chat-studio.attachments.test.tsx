@@ -501,7 +501,11 @@ describe('ChatStudio knowledge reconciliation', () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     const chip = container.querySelector('.chat-knowledge-status');
-    expect(chip?.textContent).toContain('Indexing…');
+    // The chip exists at acceptance in a bounded state; an immediate
+    // reconciliation tick may already have observed a terminal status.
+    expect(chip?.getAttribute('data-knowledge-state')).toEqual(
+      expect.stringMatching(/^(indexing|added|failed)$/),
+    );
   }
 
   afterEach(() => {
@@ -516,15 +520,20 @@ describe('ChatStudio knowledge reconciliation', () => {
     }));
     await attachAndSubmitUnderFakeTimers();
 
+    // The immediate reconciliation tick polled the list endpoint before the
+    // first interval elapse.
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(1);
+
     await act(async () => {
       await vi.advanceTimersByTimeAsync(3_000);
     });
-    // Document still processing: chip keeps indexing and polling continues.
-    expect(container.querySelector('.chat-knowledge-status')?.textContent).toContain(
-      'Indexing…',
+    // Document still processing: chip keeps indexing and the interval keeps
+    // polling after the immediate tick.
+    expect(container.querySelector('.chat-knowledge-status')?.getAttribute('aria-label')).toContain(
+      'Indexing',
     );
     const callsAfterFirstTick = fetchMock.mock.calls.length;
-    expect(callsAfterFirstTick).toBeGreaterThanOrEqual(1);
+    expect(callsAfterFirstTick).toBeGreaterThanOrEqual(2);
 
     stubListEndpoint(() => ({
       status: 200,
@@ -533,7 +542,7 @@ describe('ChatStudio knowledge reconciliation', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(3_000);
     });
-    expect(container.querySelector('.chat-knowledge-status')?.textContent).toContain(
+    expect(container.querySelector('.chat-knowledge-status')?.getAttribute('aria-label')).toContain(
       'Added to Knowledge',
     );
 
@@ -543,6 +552,36 @@ describe('ChatStudio knowledge reconciliation', () => {
       await vi.advanceTimersByTimeAsync(9_000);
     });
     expect(fetchMock.mock.calls.length).toBe(callsAfterSettled);
+  });
+
+  it('flips to added immediately when the upload acceptance snapshot is already ready', async () => {
+    // Small files can finish indexing before the upload POST even returns;
+    // the chip must trust that snapshot instead of spinning until the first
+    // list poll observes it.
+    stubListEndpoint(() => ({
+      status: 200,
+      documents: [],
+    }));
+    knowledgeUpload.mockResolvedValue({
+      ok: true,
+      document: { id: 'kbd_20260101000000_deadbeef', status: 'ready' },
+    });
+    await attachFiles([
+      new File(['instant text'], 'quick.txt', { type: 'text/plain' }),
+    ]);
+    vi.useFakeTimers();
+    const form = container.querySelector<HTMLFormElement>('.chat-composer');
+    expect(form).not.toBeNull();
+    await act(async () => {
+      form!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    const chip = container.querySelector('.chat-knowledge-status');
+    expect(chip?.getAttribute('data-knowledge-state')).toBe('added');
+    expect(chip?.getAttribute('aria-label')).toContain('Added to Knowledge');
+    // Already settled at acceptance: no list polling ever starts.
+    expect(fetchMock.mock.calls.length).toBe(0);
   });
 
   it('marks the chip failed with the server reason while preserving the documentId', async () => {
@@ -558,7 +597,7 @@ describe('ChatStudio knowledge reconciliation', () => {
       await vi.advanceTimersByTimeAsync(3_000);
     });
     const chip = container.querySelector('.chat-knowledge-status');
-    expect(chip?.textContent).toContain('unreachable');
+    expect(chip?.getAttribute('aria-label')).toContain('unreachable');
     expect(chip?.getAttribute('data-knowledge-state')).toBe('failed');
 
     // The failed entry no longer polls.
@@ -584,11 +623,12 @@ describe('ChatStudio knowledge reconciliation', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(16 * 60 * 1_000);
     });
-    // ...and stops terminal-expired: the chip shows the "still indexing"
-    // guidance (the record may genuinely still be indexing server-side)
-    // while automatic polling ceases.
+    // ...and stops terminal-expired: the chip flips to the stalled marker
+    // (the record may genuinely still be indexing server-side) with the
+    // guidance in its accessible label, while automatic polling ceases.
     const chip = container.querySelector('.chat-knowledge-status');
-    expect(chip?.textContent).toContain('Still indexing');
+    expect(chip?.getAttribute('data-knowledge-state')).toBe('stalled');
+    expect(chip?.getAttribute('aria-label')).toContain('Still indexing');
     const callsAtExpiry = fetchMock.mock.calls.length;
     await act(async () => {
       await vi.advanceTimersByTimeAsync(9_000);
@@ -618,7 +658,7 @@ describe('ChatStudio knowledge reconciliation', () => {
       await vi.advanceTimersByTimeAsync(3_000);
     });
     expect(
-      container.querySelector('.chat-knowledge-status')?.textContent,
+      container.querySelector('.chat-knowledge-status')?.getAttribute('aria-label'),
     ).toContain('Added to Knowledge');
 
     // A NEW upload gets a fresh window: polling runs again for it. The
@@ -650,7 +690,7 @@ describe('ChatStudio knowledge reconciliation', () => {
       await vi.advanceTimersByTimeAsync(3_000);
     });
     expect(
-      chips.some((element) => element.textContent?.includes('Added to Knowledge')),
+      chips.some((element) => element.getAttribute('aria-label')?.includes('Added to Knowledge')),
     ).toBe(true);
   });
 

@@ -3525,54 +3525,70 @@ dialog.chat-task-dock-dialog[open] {
   font: 10px var(--font-dm-mono);
 }
 
+/* Knowledge indexing indicator: an icon-only engraved mark beside the
+ * attachment, never a label plate. The reason text lives in aria-label and
+ * the tooltip, not as visible copy. */
 .chat-knowledge-status {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 2px 7px;
-  border: 1px dashed var(--studio-line);
-  border-radius: 999px;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
   color: var(--studio-muted);
-  font: 9px var(--font-dm-mono);
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  transition: color 140ms ease;
 }
 
 .chat-knowledge-status::before {
   content: '';
-  display: none;
-}
-
-/* Minimalist indexing indicator: a small spinning arc, nothing else. */
-.chat-knowledge-status[data-knowledge-state='indexing']::before {
   display: inline-block;
-  width: 7px;
-  height: 7px;
-  border: 1px solid currentColor;
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid currentColor;
   border-right-color: transparent;
   border-radius: 50%;
+}
+
+/* Indexing: the arc spins. */
+.chat-knowledge-status[data-knowledge-state='indexing']::before {
   animation: chat-knowledge-spin 700ms linear infinite;
+}
+
+.chat-knowledge-status[data-knowledge-state='added'] {
+  color: var(--studio-success);
+}
+
+.chat-knowledge-status[data-knowledge-state='added']::before {
+  content: '\2713';
+  width: auto;
+  height: auto;
+  border: 0;
+  border-radius: 0;
+  font: 700 10px/1 var(--font-dm-mono);
+}
+
+.chat-knowledge-status[data-knowledge-state='failed'] {
+  color: var(--studio-danger);
+}
+
+.chat-knowledge-status[data-knowledge-state='failed']::before {
+  content: '!';
+  width: auto;
+  height: auto;
+  border: 0;
+  border-radius: 0;
+  font: 700 10px/1 var(--font-dm-mono);
+}
+
+/* Polling budget expired: the arc stops spinning — an unwatched upload
+ * must not advertise active progress. */
+.chat-knowledge-status[data-knowledge-state='stalled'] {
+  color: var(--studio-warning);
 }
 
 @keyframes chat-knowledge-spin {
   to {
     transform: rotate(360deg);
   }
-}
-
-.chat-knowledge-status[data-knowledge-state='added'] {
-  color: var(--studio-ok, var(--studio-body));
-  border-style: solid;
-}
-
-.chat-knowledge-status[data-knowledge-state='added']::before {
-  content: '\2713';
-  display: inline-block;
-}
-
-.chat-knowledge-status[data-knowledge-state='failed']::before {
-  content: '!';
-  display: inline-block;
 }
 
 .chat-pdf-card {
@@ -3648,11 +3664,15 @@ dialog.chat-task-dock-dialog[open] {
   border: 1px solid var(--studio-line-strong);
   border-radius: 0;
   padding: 0;
-  background: var(--studio-bg, #fff);
+  /* dialogs sit on Walnut Panel (Material Rule ladder); --studio-bg never
+   * existed, and the old #fff fallback left parchment text invisible. */
+  background: var(--studio-panel);
   color: var(--studio-body);
   display: flex;
   flex-direction: column;
   animation: chat-pdf-viewer-in 160ms ease-out;
+  /* Overlay lamp: a true floating sheet, per the shadow vocabulary. */
+  box-shadow: 0 28px 90px rgb(12 9 7 / 58%);
 }
 
 @keyframes chat-pdf-viewer-in {
@@ -3677,36 +3697,63 @@ dialog.chat-task-dock-dialog[open] {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--studio-line);
+  padding: 10px 12px 10px 14px;
+  border-bottom: 1px solid var(--studio-line-strong);
   flex: 0 0 auto;
 }
 
+.chat-pdf-viewer-heading {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* Filename speaks the Inter title voice; the meta line is its engraved
+ * plate underneath (mono micro-label, uppercase, letterspaced). */
 .chat-pdf-viewer-title {
   margin: 0;
-  font: 13px var(--font-dm-mono);
+  font: 550 13px/1.3 var(--font-inter);
+  color: var(--studio-ink);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.chat-pdf-viewer-title small {
+.chat-pdf-viewer-meta {
+  margin: 0;
+  font: 500 10px/16px var(--font-dm-mono);
+  letter-spacing: 1.25px;
+  text-transform: uppercase;
   color: var(--studio-muted);
-  font-weight: normal;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chat-pdf-viewer-close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
   border: 1px solid var(--studio-line);
-  border-radius: 3px;
+  border-radius: 4px;
   background: transparent;
   color: var(--studio-body);
-  padding: 3px 8px;
   cursor: pointer;
-  font: 11px var(--font-dm-mono);
+  font: 12px/1 var(--font-dm-mono);
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease,
+    color 140ms ease;
 }
 
 .chat-pdf-viewer-close:hover {
-  border-color: var(--studio-accent);
+  border-color: var(--studio-line-strong);
+  background: var(--studio-panel-hover);
+  color: var(--studio-ink);
 }
 
 .chat-pdf-viewer-body {
@@ -4230,6 +4277,7 @@ dialog.chat-task-dock-dialog[open] {
     .chat-task-dock,
     .chat-task-pill,
     .chat-typing i,
+    .chat-knowledge-status[data-knowledge-state='indexing']::before,
   .chat-thread-running i {
     animation: none;
   }
