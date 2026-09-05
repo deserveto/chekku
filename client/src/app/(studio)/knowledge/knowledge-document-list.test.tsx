@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeAll, afterEach, describe, expect, it, vi } from 'vitest';
-import { act, type ReactElement } from 'react';
+import { StrictMode, act, type ReactElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
 import { KnowledgeDocumentList } from './knowledge-document-list';
@@ -186,6 +186,43 @@ describe('KnowledgeDocumentList', () => {
     // Optimistic removal would hide a failed purge: the row stays visible
     // as Deleting… until a poll confirms the record is gone.
     expect(container.textContent).toContain('handbook.pdf');
+    expect(container.querySelector('[data-knowledge-status="deleting"]')).toBeTruthy();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(4100); });
+    expect(container.textContent).toContain('No documents in your Knowledge yet.');
+  });
+
+  it('completes the deletion flow when rendered under StrictMode', async () => {
+    // Regression: the unmount guard used to assign false only in cleanup,
+    // so StrictMode's dev mount cycle (setup → cleanup → setup) left it
+    // false for the live component — every poll tick and post-fetch state
+    // update early-returned and a deletion hung until a manual reload.
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith('/documents')) {
+        return { ok: true, json: async () => ({ documents: [] }) } as Response;
+      }
+      return { ok: true, json: async () => ({ ok: true }) } as Response;
+    });
+    const container = render(
+      <StrictMode>
+        <KnowledgeDocumentList initialDocuments={[doc()]} />
+      </StrictMode>,
+    );
+
+    const deleteButton = [...container.querySelectorAll('button')]
+      .find((button) => button.textContent === 'Delete') as HTMLButtonElement;
+    await act(async () => { deleteButton.click(); });
+    const dialog = container.querySelector('dialog');
+    const confirmButton = [...dialog!.querySelectorAll('button')]
+      .find((button) => button.textContent === 'Delete') as HTMLButtonElement;
+    await act(async () => { confirmButton.click(); });
+    await act(async () => { await Promise.resolve(); });
+
+    // The guard must be alive on the mounted component: the dialog closes
+    // and the Deleting… marker is set after the DELETE resolves.
+    expect(dialog?.open).toBe(false);
     expect(container.querySelector('[data-knowledge-status="deleting"]')).toBeTruthy();
 
     await act(async () => { await vi.advanceTimersByTimeAsync(4100); });

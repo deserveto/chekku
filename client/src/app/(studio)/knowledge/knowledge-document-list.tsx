@@ -58,8 +58,16 @@ export function KnowledgeDocumentList({ initialDocuments }: { initialDocuments: 
   const deleteStartsRef = useRef(new Map<string, number>());
   const mountedRef = useRef(true);
 
-  useEffect(() => () => {
-    mountedRef.current = false;
+  useEffect(() => {
+    // Assign TRUE in the setup, not just FALSE in cleanup: under React
+    // StrictMode's dev mount cycle (setup → cleanup → setup) a
+    // cleanup-only guard leaves the ref false for the live component —
+    // every poll tick and post-fetch state update then early-returns and
+    // deletions/processing transitions never render without a reload.
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
   }, []);
 
   const shouldPoll = documents.some((doc) => doc.status === 'processing') || deletingIds.size > 0;
