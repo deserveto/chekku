@@ -483,3 +483,49 @@ describe('toAttachmentView', () => {
     expect(view.dataUrl).toBeUndefined();
   });
 });
+
+describe('toAttachmentView pdf views', () => {
+  const localImageDeps: ImageProcessingDeps = {
+    decode: async () => ({ width: 1, height: 1 }),
+    createCanvas: (width, height) => ({
+      width,
+      height,
+      getContext: () => ({ drawImage: () => undefined }),
+    }),
+    encodeJpeg: async (canvas) => `page:${canvas.width}x${canvas.height}`,
+    readBytes: async () => new Uint8Array([1, 2, 3]),
+    base64Encode: () => '',
+  };
+  const localPdfDeps: PdfProcessingDeps = {
+    loadPdf: async () => ({
+      numPages: 2,
+      getPage: async () => ({
+        getViewport: ({ scale }: { scale: number }) => ({
+          width: 612 * scale,
+          height: 792 * scale,
+        }),
+        render: () => ({ promise: Promise.resolve() }),
+      }),
+    }),
+  };
+
+  it('carries byteSize, cover dataUrl and pageCount — and never grouped pages', async () => {
+    const prepared = await preparePdfAttachment(
+      new File([new Uint8Array([1, 2, 3])], 'handbook.pdf', { type: 'application/pdf' }),
+      localImageDeps,
+      localPdfDeps,
+    );
+    const view = toAttachmentView(prepared);
+
+    expect(view).toMatchObject({
+      kind: 'pdf',
+      filename: 'handbook.pdf',
+      mimeType: 'application/pdf',
+      pageCount: 2,
+      byteSize: 3,
+    });
+    expect(view.dataUrl).toContain('data:image/jpeg;base64,');
+    // Live retention invariant: full page arrays are never kept on views.
+    expect(view.pages).toBeUndefined();
+  });
+});

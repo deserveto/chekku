@@ -1,7 +1,12 @@
 import { Agent, type AgentConfig, type ToolsInput } from '@mastra/core/agent';
 import { providerContextSchema, type ProviderContext } from './context.js';
 import { createDescriptionForwardingDurableAgent } from '../mastra/durable-agent.js';
-import { createAgentContextLimiter, createAgentMemory, createCharBudgetGuard } from '../mastra/processors/context-limit.js';
+import {
+  createAgentContextLimiter,
+  createAgentMemory,
+  createCharBudgetGuard,
+  TITLE_GENERATION_INSTRUCTIONS,
+} from '../mastra/processors/context-limit.js';
 import { searchKnowledgeBaseTool } from '../mastra/tools/knowledge-search.js';
 import { createTaskNudgeProcessor } from '../mastra/tasks/task-nudge-processor.js';
 import { TASK_GUIDANCE, createTaskSignals } from '../mastra/tasks/task-signals.js';
@@ -14,7 +19,7 @@ const mainAgentConfig: AgentConfig<string, ToolsInput, undefined, ProviderContex
     'A general-purpose AI assistant for everyday tasks: answering questions, drafting and improving content, reasoning through problems, and searching uploaded documents in the Knowledge Base. Use for general requests; browser QA belongs to the QA Web Agent.',
   model: () => getServerModel(),
   requestContextSchema: providerContextSchema,
-  memory: createAgentMemory({ generateTitle: true }),
+  memory: createAgentMemory({ generateTitle: { instructions: TITLE_GENERATION_INSTRUCTIONS } }),
   signals: createTaskSignals(),
   tools: { searchKnowledgeBaseTool },
   inputProcessors: [createAgentContextLimiter(), createTaskNudgeProcessor(), createCharBudgetGuard()],

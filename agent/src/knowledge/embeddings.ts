@@ -178,8 +178,12 @@ async function embedBatch(
   } catch (error) {
     if (error instanceof EmbeddingsError) throw error;
     if (controller.signal.aborted) {
+      console.error('[knowledge] embeddings request failed: timeout');
       throw new EmbeddingsError('timeout', 'The embedding model request timed out.');
     }
+    // Fixed-code logging: raw fetch failures can embed URLs, so only the
+    // error name reaches the log line.
+    console.error('[knowledge] embeddings request failed:', error instanceof Error ? error.name : 'unknown');
     throw new EmbeddingsError('unavailable', 'The embedding model request could not be completed.');
   } finally {
     clearTimeout(deadline);

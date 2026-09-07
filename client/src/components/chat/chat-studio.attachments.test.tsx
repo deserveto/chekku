@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
+  knowledgeUpload,
   listAgentSkills,
   listAgentThreads,
   listThreadMessages,
@@ -16,6 +17,7 @@ const {
   browserImageDeps,
   browserPdfDeps,
 } = vi.hoisted(() => ({
+  knowledgeUpload: vi.fn(),
   listAgentSkills: vi.fn(),
   listAgentThreads: vi.fn(),
   listThreadMessages: vi.fn(),
@@ -71,11 +73,22 @@ vi.mock('@/lib/chat-attachments-browser', () => ({
   browserImageDeps,
   browserPdfDeps,
 }));
-vi.mock('@/lib/memory-threads', () => ({
-  listAgentThreads,
-  listThreadMessages,
-  removeThread: vi.fn(),
-}));
+vi.mock('@/lib/knowledge', async () => {
+  const actual = await vi.importActual<object>('@/lib/knowledge');
+  return {
+    ...actual,
+    uploadKnowledgeDocument: knowledgeUpload,
+  };
+});
+vi.mock('@/lib/memory-threads', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/memory-threads')>();
+  return {
+    ...actual,
+    listAgentThreads,
+    listThreadMessages,
+    removeThread: vi.fn(),
+  };
+});
 vi.mock('@/lib/agent-runs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/agent-runs')>();
   return {
@@ -189,13 +202,13 @@ function sentMessages(): SentMessage[] {
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  knowledgeUpload.mockResolvedValue({ ok: false, message: 'Knowledge upload unavailable in test.' });
   listAgentSkills.mockResolvedValue([]);
   listAgentThreads.mockResolvedValue([]);
   listThreadMessages.mockResolvedValue([]);
   startRun.mockResolvedValue({
     id: 'run_20260101000000_00000001',
     resourceId: 'local-user',
-    agentId: 'main-agent',
     threadId: activeThreadId,
     prompt: 'attachment',
     status: 'running',
@@ -449,5 +462,410 @@ describe('ChatStudio file uploads', () => {
     expect(assistant?.textContent).not.toContain(
       'Generation ended before a final response was produced',
     );
+  });
+});
+
+describe('ChatStudio knowledge reconciliation', () => {
+  const documentView = (overrides: Partial<{ id: string; status: string; error: string | null }> = {}) => ({
+    id: 'kbd_20260101000000_deadbeef',
+    status: 'processing',
+    error: null,
+    ...overrides,
+  });
+
+  type ListResponse = { status: number; documents: Array<{ id: string; status: string; error?: string | null }> };
+  let fetchMock: ReturnType<typeof vi.fn>;
+  function stubListEndpoint(respond: () => ListResponse): void {
+    fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify(respond()), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+  }
+
+  // Installs fake timers BEFORE the submit so the component's polling
+  // interval is created against the fake scheduler (an interval created on
+  // the real clock would never advance under fake timers).
+  async function attachAndSubmitUnderFakeTimers(): Promise<void> {
+    knowledgeUpload.mockResolvedValue({
+      ok: true,
+      document: { id: 'kbd_20260101000000_deadbeef', status: 'processing' },
+    });
+    await attachFiles([
+      new File(['knowledge text'], 'notes.txt', { type: 'text/plain' }),
+    ]);
+    vi.useFakeTimers();
+    const form = container.querySelector<HTMLFormElement>('.chat-composer');
+    expect(form).not.toBeNull();
+    await act(async () => {
+      form!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const chip = container.querySelector('.chat-knowledge-status');
+    // The chip exists at acceptance in a bounded state; an immediate
+    // reconciliation tick may already have observed a terminal status.
+    expect(chip?.getAttribute('data-knowledge-state')).toEqual(
+      expect.stringMatching(/^(indexing|added|failed)$/),
+    );
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('keeps the chip indexing after upload acceptance and flips to added when the document is ready', async () => {
+    stubListEndpoint(() => ({
+      status: 200,
+      documents: [documentView()],
+    }));
+    await attachAndSubmitUnderFakeTimers();
+
+    // The immediate reconciliation tick polled the list endpoint before the
+    // first interval elapse.
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    // Document still processing: chip keeps indexing and the interval keeps
+    // polling after the immediate tick.
+    expect(container.querySelector('.chat-knowledge-status')?.getAttribute('aria-label')).toContain(
+      'Indexing',
+    );
+    const callsAfterFirstTick = fetchMock.mock.calls.length;
+    expect(callsAfterFirstTick).toBeGreaterThanOrEqual(2);
+
+    stubListEndpoint(() => ({
+      status: 200,
+      documents: [documentView({ status: 'ready' })],
+    }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    expect(container.querySelector('.chat-knowledge-status')?.getAttribute('aria-label')).toContain(
+      'Added to Knowledge',
+    );
+
+    // Every candidate settled: polling stops.
+    const callsAfterSettled = fetchMock.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9_000);
+    });
+    expect(fetchMock.mock.calls.length).toBe(callsAfterSettled);
+  });
+
+  it('flips to added immediately when the upload acceptance snapshot is already ready', async () => {
+    // Small files can finish indexing before the upload POST even returns;
+    // the chip must trust that snapshot instead of spinning until the first
+    // list poll observes it.
+    stubListEndpoint(() => ({
+      status: 200,
+      documents: [],
+    }));
+    knowledgeUpload.mockResolvedValue({
+      ok: true,
+      document: { id: 'kbd_20260101000000_deadbeef', status: 'ready' },
+    });
+    await attachFiles([
+      new File(['instant text'], 'quick.txt', { type: 'text/plain' }),
+    ]);
+    vi.useFakeTimers();
+    const form = container.querySelector<HTMLFormElement>('.chat-composer');
+    expect(form).not.toBeNull();
+    await act(async () => {
+      form!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    const chip = container.querySelector('.chat-knowledge-status');
+    expect(chip?.getAttribute('data-knowledge-state')).toBe('added');
+    expect(chip?.getAttribute('aria-label')).toContain('Added to Knowledge');
+    // Already settled at acceptance: no list polling ever starts.
+    expect(fetchMock.mock.calls.length).toBe(0);
+  });
+
+  it('marks the chip failed with the server reason while preserving the documentId', async () => {
+    stubListEndpoint(() => ({
+      status: 200,
+      documents: [
+        documentView({ status: 'failed', error: 'The knowledge index is currently unreachable. Check the Qdrant service and retry.' }),
+      ],
+    }));
+    await attachAndSubmitUnderFakeTimers();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    const chip = container.querySelector('.chat-knowledge-status');
+    expect(chip?.getAttribute('aria-label')).toContain('unreachable');
+    expect(chip?.getAttribute('data-knowledge-state')).toBe('failed');
+
+    // The failed entry no longer polls.
+    const callsAfterSettled = fetchMock.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9_000);
+    });
+    expect(fetchMock.mock.calls.length).toBe(callsAfterSettled);
+  });
+
+  it('expires polling at the budget and keeps the chip indexing while polling stops', async () => {
+    stubListEndpoint(() => ({
+      status: 200,
+      documents: [documentView()],
+    }));
+    await attachAndSubmitUnderFakeTimers();
+
+    // Polling runs while the budget lasts...
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(16 * 60 * 1_000);
+    });
+    // ...and stops terminal-expired: the chip flips to the stalled marker
+    // (the record may genuinely still be indexing server-side) with the
+    // guidance in its accessible label, while automatic polling ceases.
+    const chip = container.querySelector('.chat-knowledge-status');
+    expect(chip?.getAttribute('data-knowledge-state')).toBe('stalled');
+    expect(chip?.getAttribute('aria-label')).toContain('Still indexing');
+    const callsAtExpiry = fetchMock.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9_000);
+    });
+    expect(fetchMock.mock.calls.length).toBe(callsAtExpiry);
+  });
+
+  it('grants a fresh polling window to a new upload after the previous one settles', async () => {
+    // End the first run via its event stream so the composer re-arms for
+    // the SECOND send this test performs.
+    observeRunEvents.mockImplementationOnce(async (_runId: string, options: { onEvent: (event: { sequence: number; type: string; payload: { error: string }; createdAt: string }) => void }) => {
+      options.onEvent({
+        sequence: 0,
+        type: 'error',
+        payload: { error: 'first run ended' },
+        createdAt: '',
+      });
+    });
+    // First upload settles ready: its window is consumed and the candidate
+    // set becomes empty, which resets the polling budget.
+    stubListEndpoint(() => ({
+      status: 200,
+      documents: [documentView({ status: 'ready' })],
+    }));
+    await attachAndSubmitUnderFakeTimers();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    expect(
+      container.querySelector('.chat-knowledge-status')?.getAttribute('aria-label'),
+    ).toContain('Added to Knowledge');
+
+    // A NEW upload gets a fresh window: polling runs again for it. The
+    // second attach/submit stays under fake timers (flushed through the
+    // fake clock) so the new interval lands on the fake scheduler.
+    knowledgeUpload.mockResolvedValueOnce({
+      ok: true,
+      document: { id: 'kbd_20260101000000_cafe0001', status: 'processing' },
+    });
+    const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(fileInput).not.toBeNull();
+    Object.defineProperty(fileInput, 'files', {
+      value: [new File(['more text'], 'more.txt', { type: 'text/plain' })],
+      configurable: true,
+    });
+    await act(async () => {
+      fileInput!.dispatchEvent(new Event('change', { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const form = container.querySelector<HTMLFormElement>('.chat-composer');
+    expect(form).not.toBeNull();
+    await act(async () => {
+      form!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const chips = [...container.querySelectorAll('.chat-knowledge-status')];
+    expect(chips.length).toBe(2);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    expect(
+      chips.some((element) => element.getAttribute('aria-label')?.includes('Added to Knowledge')),
+    ).toBe(true);
+  });
+
+  it('stops polling on unmount', async () => {
+    stubListEndpoint(() => ({
+      status: 200,
+      documents: [documentView()],
+    }));
+    await attachAndSubmitUnderFakeTimers();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(1);
+
+    act(() => root?.unmount());
+    root = null;
+    const callsAtUnmount = fetchMock.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(9_000);
+    });
+    expect(fetchMock.mock.calls.length).toBe(callsAtUnmount);
+  });
+});
+
+describe('ChatStudio pdf cards and viewer', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function stubListEndpoint(
+    documents: Array<{ id: string; status: string; error?: string | null }>,
+  ): void {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(JSON.stringify({ documents }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    );
+  }
+
+  async function attachPdfAndSend(
+    uploadImplementation?: () => Promise<unknown>,
+  ): Promise<void> {
+    if (uploadImplementation) {
+      knowledgeUpload.mockImplementationOnce(uploadImplementation);
+    } else {
+      knowledgeUpload.mockResolvedValueOnce({
+        ok: true,
+        document: { id: 'kbd_20260101000000_deadbeef', status: 'processing' },
+      });
+    }
+    await attachFiles([
+      new File([new Uint8Array([1, 2, 3])], 'report.pdf', {
+        type: 'application/pdf',
+      }),
+    ]);
+    await submitComposer();
+  }
+
+  it('opens the original-PDF viewer while the upload is still indexing', async () => {
+    stubListEndpoint([
+      { id: 'kbd_20260101000000_deadbeef', status: 'processing' },
+    ]);
+    await attachPdfAndSend();
+
+    const card = container.querySelector<HTMLButtonElement>('.chat-pdf-card');
+    expect(card).not.toBeNull();
+    expect(card!.disabled).toBe(false);
+    await act(async () => {
+      card!.click();
+      await Promise.resolve();
+    });
+
+    const frame = container.querySelector<HTMLIFrameElement>('.chat-pdf-frame');
+    expect(frame).not.toBeNull();
+    // The original-bytes route is available the moment the upload POST
+    // succeeded — indexing state must not block the viewer.
+    expect(frame!.getAttribute('src')).toBe(
+      '/api/storage/knowledge/documents/kbd_20260101000000_deadbeef/original',
+    );
+  });
+
+  it('still opens the original-PDF viewer after indexing fails', async () => {
+    stubListEndpoint([
+      {
+        id: 'kbd_20260101000000_deadbeef',
+        status: 'failed',
+        error: 'The knowledge index is currently unreachable. Check the Qdrant service and retry.',
+      },
+    ]);
+    await attachPdfAndSend();
+
+    const card = container.querySelector<HTMLButtonElement>('.chat-pdf-card');
+    expect(card!.disabled).toBe(false);
+    await act(async () => {
+      card!.click();
+      await Promise.resolve();
+    });
+    expect(
+      container.querySelector<HTMLIFrameElement>('.chat-pdf-frame')?.getAttribute('src'),
+    ).toBe('/api/storage/knowledge/documents/kbd_20260101000000_deadbeef/original');
+  });
+
+  it('renders a disabled card before the upload resolves', async () => {
+    await attachPdfAndSend(() => new Promise<never>(() => undefined));
+
+    const card = container.querySelector<HTMLButtonElement>('.chat-pdf-card');
+    expect(card).not.toBeNull();
+    expect(card!.disabled).toBe(true);
+    expect(card!.getAttribute('title')).toContain('opens once the upload finishes');
+  });
+
+  it('opens the grouped-page viewer for a restored multi-page pdf and closes on Escape', async () => {
+    listThreadMessages.mockResolvedValue([
+      {
+        id: 'msg-pdf-restore',
+        role: 'user',
+        content: 'the report',
+        createdAt: 1,
+        attachments: [
+          {
+            mimeType: 'application/pdf',
+            filename: 'restored.pdf',
+            dataUrl: 'data:image/jpeg;base64,UDDE=',
+            pageCount: 2,
+            pages: ['data:image/jpeg;base64,UDDE=', 'data:image/jpeg;base64,UDDF='],
+          },
+        ],
+      },
+    ]);
+    // Re-render the same harness with the restored thread loaded.
+    await act(async () => {
+      root?.unmount();
+      document.body.innerHTML = '';
+      container = document.createElement('div');
+      document.body.appendChild(container);
+      root = createRoot(container);
+      root.render(
+        <ChatStudio
+          resourceId="local-user"
+          initialAgentId="main-agent"
+          initialThreadId={activeThreadId}
+        />,
+      );
+    });
+    await flushEffects();
+
+    const card = container.querySelector<HTMLButtonElement>('.chat-pdf-card');
+    expect(card).not.toBeNull();
+    expect(card!.disabled).toBe(false);
+    await act(async () => {
+      card!.click();
+      await Promise.resolve();
+    });
+
+    // No documentId survives restore: the grouped-page viewer opens.
+    expect(container.querySelector('.chat-pdf-frame')).toBeNull();
+    expect(container.querySelectorAll('.chat-pdf-page img')).toHaveLength(2);
+    expect(container.textContent).toContain('restored.pdf');
+
+    // Escape closes through the native cancel path.
+    const dialog = container.querySelector('dialog.chat-pdf-viewer');
+    expect(dialog).not.toBeNull();
+    await act(async () => {
+      dialog!.dispatchEvent(
+        new Event('cancel', { bubbles: false, cancelable: true }),
+      );
+      await Promise.resolve();
+    });
+    expect(container.querySelector('dialog.chat-pdf-viewer')).toBeNull();
   });
 });

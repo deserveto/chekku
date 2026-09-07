@@ -10,8 +10,10 @@ import {
   type MouseEvent,
 } from 'react';
 import { useRouter } from 'next/navigation';
-import { StudioNav } from '@/components/studio/studio-nav';
 import { AgentIcon } from '@/components/agents/agent-icon';
+import {
+  useStudioNavigation,
+} from '@/components/studio/studio-navigation';
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
 import {
   AGENT_ICON_IDS,
@@ -126,11 +128,9 @@ function iconForTool(id: string): string {
 export function AgentBuilderPage({
   mode,
   agentId,
-  resourceId,
 }: {
   mode: 'create' | 'edit';
   agentId?: string;
-  resourceId: string;
 }) {
   const router = useRouter();
   const [values, setValues] = useState<Values>(EMPTY);
@@ -236,7 +236,9 @@ export function AgentBuilderPage({
   }, [dirty]);
   // Client-side navigations from the shared sidebar and ⌘K palette must
   // respect the same dirty-guard as the in-page links; beforeunload only
-  // covers full page unloads.
+  // covers full page unloads. The provider lifecycle unregisters the
+  // guard when the builder unmounts.
+  const { registerGuard } = useStudioNavigation();
   const guardNavigation = useCallback(
     (href: string) => {
       if (!dirty) return true;
@@ -244,6 +246,10 @@ export function AgentBuilderPage({
       return false;
     },
     [dirty],
+  );
+  useEffect(
+    () => registerGuard(guardNavigation),
+    [registerGuard, guardNavigation],
   );
 
 
@@ -328,10 +334,8 @@ export function AgentBuilderPage({
   };
 
   return (
-    <div className="studio-shell">
-      <StudioNav resourceId={resourceId} guard={guardNavigation} />
-
-      <main className="studio-main studio-builder-main">
+    <>
+      <div className="studio-builder-main">
         <header className="studio-page-header studio-builder-header">
           <div>
             <p className="studio-eyebrow">Agent builder</p>
@@ -684,7 +688,7 @@ export function AgentBuilderPage({
             </footer>
           </form>
         )}
-      </main>
+      </div>
       <ConfirmationDialog
         open={pendingExit !== null}
         title="Discard unsaved changes?"
@@ -697,6 +701,6 @@ export function AgentBuilderPage({
           if (target) router.push(target);
         }}
       />
-    </div>
+    </>
   );
 }

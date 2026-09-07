@@ -14,6 +14,7 @@ import {
   getCharBudget,
   getModelContextWindow,
   getModelMessageBudget,
+  TITLE_GENERATION_INSTRUCTIONS,
   prunePromptToCharBudget,
   type CharBudgetPrompt,
 } from './context-limit.js';
@@ -107,7 +108,19 @@ describe('agent context limiting (model-adaptive)', () => {
 
   it('opts into Mastra thread title generation when requested', () => {
     const memory = createAgentMemory({ generateTitle: true });
-    expect(memory.getMergedThreadConfig().generateTitle).toBe(true);
+    const config = memory.getMergedThreadConfig().generateTitle;
+    expect(config === true || (typeof config === 'object' && config !== null)).toBe(true);
+  });
+
+  it('forwards the object form with strict instructions verbatim', () => {
+    const memory = createAgentMemory({
+      generateTitle: { instructions: TITLE_GENERATION_INSTRUCTIONS },
+    });
+    const config = memory.getMergedThreadConfig().generateTitle;
+    expect(typeof config).toBe('object');
+    expect((config as { instructions?: string }).instructions).toBe(
+      TITLE_GENERATION_INSTRUCTIONS,
+    );
   });
 
   it('bounds recalled message history to a finite positive window', () => {

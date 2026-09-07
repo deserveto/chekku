@@ -25,6 +25,10 @@ import { MarkdownMessage } from '@/components/markdown-message';
 import { ResizableSidebar } from '@/components/studio/resizable-sidebar';
 import { BrandMark } from '@/components/ui/brand-mark';
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog';
+import {
+  PdfAttachmentCard,
+  PdfViewerDialog,
+} from '@/components/chat/attachment-pdf';
 import { AgentIcon } from '@/components/agents/agent-icon';
 import { defaultAgentIcon } from '@/lib/agent-icons';
 import {
@@ -53,6 +57,7 @@ import {
   listAgentThreads,
   listThreadMessages,
   removeThread,
+  UNTITLED_THREAD_LABEL,
   type StudioMemoryMessage,
   type StudioThread,
 } from '@/lib/memory-threads';
@@ -96,9 +101,10 @@ import {
 } from '@/lib/assistant-parts';
 import {
   MAIN_AGENT_ID,
-  QA_WEB_AGENT_ID,
-  QA_ANDROID_AGENT_ID,
+  type ChatAttachmentView,
   type ChatMessage,
+  QA_ANDROID_AGENT_ID,
+  QA_WEB_AGENT_ID,
   type ChekkuAgentSummary,
   type ToolAssistantPart,
   type ToolEventStatus,
@@ -176,13 +182,28 @@ function appendErrorDetail(message: ChatMessage, detail: string): ChatMessage {
 
 function messageFromMemory(value: StudioMemoryMessage): ChatMessage {
   const { attachments: restored, ...base } = value;
-  const attachments = restored?.map((attachment, index) => ({
-    id: `${value.id}-att-${index}`,
-    kind: 'image' as const,
-    filename: attachment.filename ?? `attachment-${index + 1}`,
-    mimeType: attachment.mimeType,
-    dataUrl: attachment.dataUrl,
-  }));
+  const attachments = restored?.map((attachment, index) => {
+    // Restored PDF page groups map to pdf views that open the grouped-page
+    // viewer (no documentId linkage survives restore by design).
+    if (attachment.pages && attachment.pages.length > 0) {
+      return {
+        id: `${value.id}-pdf-${index}`,
+        kind: 'pdf' as const,
+        filename: attachment.filename ?? `document-${index + 1}.pdf`,
+        mimeType: 'application/pdf',
+        pageCount: attachment.pageCount ?? attachment.pages.length,
+        pages: attachment.pages,
+        dataUrl: attachment.dataUrl,
+      };
+    }
+    return {
+      id: `${value.id}-att-${index}`,
+      kind: 'image' as const,
+      filename: attachment.filename ?? `attachment-${index + 1}`,
+      mimeType: attachment.mimeType,
+      dataUrl: attachment.dataUrl,
+    };
+  });
   return {
     ...base,
     ...(attachments && attachments.length > 0 ? { attachments } : {}),
@@ -193,9 +214,27 @@ type KnowledgeUploadState = 'indexing' | 'added' | 'failed';
 
 type KnowledgeUploadStatus = {
   state: KnowledgeUploadState;
+  /** Server document id — preserved through EVERY transition because the
+   * raw document survives Qdrant failure (the PDF viewer needs it). */
+  documentId?: string;
   detail?: string;
+  /** Set when automatic polling gave up (16-minute budget); the chip shows
+   * the "still indexing" guidance while polling stops for this entry. */
+  pollingExpired?: boolean;
 };
 
+/** Chat chip reconciliation cadence and total automatic-polling budget
+ * (mirrors the server stale-processing window). */
+const KNOWLEDGE_POLLING_INTERVAL_MS = 3_000;
+const KNOWLEDGE_POLLING_BUDGET_MS = 16 * 60 * 1000;
+/** Bounded title-refresh retries after a run completes. The server
+ * generates the first-turn title AFTER the terminal event (best-effort),
+ * so a slow title LLM call lands seconds later; each retry re-checks from
+ * fresh data and stops the moment the thread is titled. */
+const TITLE_REFRESH_DELAYS_MS = [2_000, 4_000, 8_000, 16_000, 32_000];
+/** Bounded re-fetch schedule for a thread that restored empty right after
+ * its first turn completed (Memory serves the new rows seconds later). */
+const RESTORE_RETRY_DELAYS_MS = [1_500, 3_000, 4_500, 6_000];
 type PendingUpload = {
   id: string;
   filename: string;
@@ -216,6 +255,34 @@ function TypingIndicator() {
         <i />
       </span>
     </div>
+  );
+}
+
+/**
+ * Icon-only knowledge-status indicator beside an attachment. Deliberately no
+ * visible copy: the state reads from the glyph (spinning arc / check /
+ * exclamation / stalled arc) and the reason lives in the accessible label
+ * and tooltip. The stalled state (polling budget expired) stops the spin —
+ * an unwatched upload must not advertise active progress.
+ */
+function KnowledgeStatusChip({ status }: { status: KnowledgeUploadStatus }) {
+  const stalled = status.state === 'indexing' && status.pollingExpired === true;
+  const label =
+    status.state === 'added'
+      ? 'Added to Knowledge'
+      : status.state === 'failed'
+        ? status.detail ?? 'Knowledge indexing failed'
+        : stalled
+          ? 'Still indexing — check the Knowledge page.'
+          : 'Indexing…';
+  return (
+    <small
+      className="chat-knowledge-status"
+      data-knowledge-state={stalled ? 'stalled' : status.state}
+      role="status"
+      aria-label={label}
+      title={label}
+    />
   );
 }
 
@@ -324,6 +391,28 @@ export function ChatStudio({
   const [input, setInput] = useState('');
   const [uploads, setUploads] = useState<PendingUpload[]>([]);
   const [knowledgeStatus, setKnowledgeStatus] = useState<Record<string, KnowledgeUploadStatus>>({});
+  const knowledgePollingStartRef = useRef(0);
+  const mountedRef = useRef(true);
+  const titleRefreshTimerRef = useRef(0);
+  const restoreRetryTimerRef = useRef(0);
+  // Mirror for timer callbacks: a scheduled restore retry must not clobber
+  // a timeline an active-run attach populated in the meantime.
+  const activeAssistantIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    // Assign TRUE in the setup, not just FALSE in cleanup: under React
+    // StrictMode's dev mount cycle (setup → cleanup → setup) a
+    // cleanup-only guard leaves the ref false for the live component,
+    // silently killing every mounted-guarded continuation (poll ticks,
+    // post-fetch state updates).
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (titleRefreshTimerRef.current) window.clearTimeout(titleRefreshTimerRef.current);
+      if (restoreRetryTimerRef.current) window.clearTimeout(restoreRetryTimerRef.current);
+    };
+  }, []);
+
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [commandOpen, setCommandOpen] = useState(false);
@@ -333,11 +422,25 @@ export function ChatStudio({
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [activeRun, setActiveRun] = useState<AgentRunSummary | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<StudioThread>();
+  const [deletingThreadId, setDeletingThreadId] = useState<string>();
+  const [pdfPreview, setPdfPreview] = useState<{
+    view: ChatAttachmentView;
+    documentId?: string;
+  } | null>(null);
   // id of the assistant placeholder the active subscription streams into;
   // gates per-message UI (typing indicator) to the streaming turn only.
   const [activeAssistantId, setActiveAssistantId] = useState<string | null>(
     null,
   );
+  // Latest authoritative task snapshot for the viewed thread; null while the
+  // thread has no task list. Canonical state stays server-side (Mastra task
+  // store + run events); this only mirrors the newest snapshot.
+  const [threadTasks, setThreadTasks] = useState<ThreadTaskState | null>(null);
+  const [taskNotice, setTaskNotice] = useState<string | null>(null);
+  const [taskDockOpen, setTaskDockOpen] = useState(false);
+  // Bounded last task-tool failure surfaced inside the dock; cleared by
+  // the next snapshot and on thread switches.
   const [subscriptionState, setSubscriptionState] = useState<
     'idle' | 'connecting' | 'connected'
   >('idle');
@@ -349,19 +452,91 @@ export function ChatStudio({
   >({});
   const [error, setError] = useState<string>();
   const [modelReady, setModelReady] = useState(false);
-  const [pendingDelete, setPendingDelete] = useState<StudioThread>();
-  const [deletingThreadId, setDeletingThreadId] = useState<string>();
-  // Latest authoritative task snapshot for the viewed thread; null while the
-  // thread has no task list. Canonical state stays server-side (Mastra task
-  // store + run events); this only mirrors the newest snapshot.
-  const [threadTasks, setThreadTasks] = useState<ThreadTaskState | null>(null);
-  // Bounded last task-tool failure surfaced inside the dock; cleared by
-  // the next snapshot and on thread switches.
-  const [taskNotice, setTaskNotice] = useState<string | null>(null);
-  const [taskDockOpen, setTaskDockOpen] = useState(false);
 
   const agentId = initialAgentId;
   const threadId = initialThreadId;
+
+  // Knowledge indexing reconciliation: ONE bounded polling loop reconciles
+  // every pending upload chip against the authenticated list endpoint.
+  // Candidates are accepted uploads (documentId present) still `indexing`
+  // and not expired; the 16-minute budget starts at the first tick after
+  // candidates appear and resets whenever the candidate set becomes empty,
+  // so a later unrelated upload gets a fresh window.
+  const knowledgeCandidateKey = Object.entries(knowledgeStatus)
+    .filter(([, status]) => status.state === 'indexing' && Boolean(status.documentId) && status.pollingExpired !== true)
+    .map(([id]) => id)
+    .sort()
+    .join('|');
+
+  useEffect(() => {
+    if (knowledgeCandidateKey === '') {
+      knowledgePollingStartRef.current = 0;
+      return;
+    }
+    if (knowledgePollingStartRef.current === 0) {
+      knowledgePollingStartRef.current = Date.now();
+    }
+    const startedAt = knowledgePollingStartRef.current;
+    const tick = async () => {
+      if (Date.now() - startedAt > KNOWLEDGE_POLLING_BUDGET_MS) {
+        // Terminal for this window: the chip shows the "still indexing"
+        // guidance (as a stalled, non-spinning marker) while automatic
+        // polling stops for these entries.
+        setKnowledgeStatus((current) => {
+          let changed = false;
+          const next: Record<string, KnowledgeUploadStatus> = { ...current };
+          for (const [key, status] of Object.entries(next)) {
+            if (status.state === 'indexing' && status.documentId && status.pollingExpired !== true) {
+              next[key] = { ...status, pollingExpired: true, detail: 'Still indexing — check the Knowledge page.' };
+              changed = true;
+            }
+          }
+          return changed ? next : current;
+        });
+        knowledgePollingStartRef.current = 0;
+        return;
+      }
+      try {
+        const response = await fetch('/api/storage/knowledge/documents');
+        if (!response.ok || !mountedRef.current) return;
+        const payload = (await response.json()) as {
+          documents?: Array<{ id: string; status: string; error?: string | null }>;
+        };
+        if (!Array.isArray(payload.documents)) return;
+        const byId = new Map(payload.documents.map((document) => [document.id, document]));
+        if (!mountedRef.current) return;
+        setKnowledgeStatus((current) => {
+          let changed = false;
+          const next: Record<string, KnowledgeUploadStatus> = { ...current };
+          for (const [key, status] of Object.entries(current)) {
+            if (status.state !== 'indexing' || !status.documentId || status.pollingExpired) continue;
+            const document = byId.get(status.documentId);
+            if (!document) continue;
+            if (document.status === 'ready') {
+              next[key] = { state: 'added', documentId: status.documentId };
+              changed = true;
+            } else if (document.status === 'failed') {
+              next[key] = {
+                state: 'failed',
+                documentId: status.documentId,
+                detail: document.error ?? 'Knowledge indexing failed.',
+              };
+              changed = true;
+            }
+          }
+          return changed ? next : current;
+        });
+      } catch {
+        // Transient polling failure: keep showing the current snapshot.
+      }
+    };
+    // Reconcile once immediately: indexing often finishes between the
+    // upload POST and the first interval tick, and a fast flip must not
+    // wait out the interval.
+    void tick();
+    const timer = setInterval(() => void tick(), KNOWLEDGE_POLLING_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [knowledgeCandidateKey]);
 
   const currentAgent = agents.find((entry) => entry.id === agentId);
   const threadOwned = isOwnedThreadId(threadId, agentId, resourceId);
@@ -378,11 +553,16 @@ export function ChatStudio({
   }, [search, threads]);
 
   const refreshThreads = useCallback(async () => {
+    let next: StudioThread[] = [];
     try {
-      setThreads(await listAgentThreads(resourceId, agentId));
+      next = await listAgentThreads(resourceId, agentId);
+      setThreads(next);
     } catch {
       setThreads([]);
     }
+    // On error, the empty list makes callers schedule nothing (find() →
+    // undefined) instead of reacting to stale component state.
+    return next;
   }, [agentId, resourceId]);
 
   const applyRunEvent = useCallback((event: AgentRunEvent, assistantId: string) => {
@@ -551,6 +731,88 @@ export function ChatStudio({
     }
   }, []);
 
+  /** Applies a restored message list: timeline messages plus the task
+   * snapshot rebuilt from persisted task tool results (Mastra Memory is the
+   * source of truth once the run registry no longer holds the run; last
+   * valid snapshot wins, matching the live event stream's semantics). A
+   * restored list re-opens the dock on wide screens unless the user
+   * explicitly collapsed it before. */
+  const applyStoredMessages = useCallback(
+    (storedMessages: StudioMemoryMessage[]) => {
+      setMessages(storedMessages.map(messageFromMemory));
+      let restoredTasks = null as ThreadTaskState['tasks'] | null;
+      for (const message of storedMessages) {
+        const snapshot = tasksFromRestoredParts(message.parts);
+        if (snapshot) restoredTasks = snapshot;
+      }
+      setThreadTasks(restoredTasks ? { tasks: restoredTasks } : null);
+      hasTaskSnapshotRef.current = restoredTasks !== null;
+      setTaskDockOpen(
+        restoredTasks !== null &&
+          !readTaskDockCollapsedPreference() &&
+          window.innerWidth > 1080,
+      );
+    },
+    [],
+  );
+
+  /**
+   * Re-fetches a thread that restored empty right after its first turn
+   * completed (bounded backoff; Memory serves the new rows a few seconds
+   * after the terminal event). Each attempt checks that the thread is still
+   * the one being viewed before applying anything.
+   */
+  const scheduleEmptyThreadRestoreRetry = useCallback(
+    (
+      agentId: string,
+      threadId: string,
+      resourceId: string,
+      attempt: number,
+    ) => {
+    const delay = RESTORE_RETRY_DELAYS_MS[attempt];
+    if (delay === undefined) return;
+    restoreRetryTimerRef.current = window.setTimeout(() => {
+      restoreRetryTimerRef.current = 0;
+      if (!mountedRef.current || threadRef.current !== threadId) return;
+      if (activeAssistantIdRef.current) return;
+      void listThreadMessages(agentId, threadId, resourceId)
+        .then((storedMessages) => {
+          if (!mountedRef.current || threadRef.current !== threadId) return;
+          // While a run streams into this thread the timeline holds live
+          // optimistic content; re-applying the persisted snapshot would
+          // clobber it. Defer until the subscription ends.
+          if (activeAssistantIdRef.current || subscriptionRef.current) {
+            scheduleEmptyThreadRestoreRetry(
+              agentId,
+              threadId,
+              resourceId,
+              attempt + 1,
+            );
+            return;
+          }
+          if (storedMessages.length === 0) {
+            scheduleEmptyThreadRestoreRetry(
+              agentId,
+              threadId,
+              resourceId,
+              attempt + 1,
+            );
+            return;
+          }
+          applyStoredMessages(storedMessages);
+        })
+        .catch(() => {
+          // Transient restore failure: the thread stays on the empty view.
+        });
+    }, delay);
+    },
+    [applyStoredMessages],
+  );
+
+  useEffect(() => {
+    activeAssistantIdRef.current = activeAssistantId;
+  }, [activeAssistantId]);
+
   const finalizeTerminalMessage = useCallback((assistantId: string) => {
     const terminal = lastTerminalRef.current;
     if (terminal !== 'cancelled' && terminal !== 'error') return;
@@ -574,6 +836,31 @@ export function ChatStudio({
     );
   }, []);
 
+  /**
+   * Re-fetches the thread list on a bounded backoff schedule until the
+   * current thread's first-turn title lands (or the retries run out). The
+   * immediate post-terminal fetch usually sees the title already; each
+   * retry decides from fresh data, never from the stale snapshot.
+   */
+  const scheduleTitleRefresh = useCallback(
+    (attempt: number) => {
+      const delay = TITLE_REFRESH_DELAYS_MS[attempt];
+      if (delay === undefined) return;
+      if (titleRefreshTimerRef.current) window.clearTimeout(titleRefreshTimerRef.current);
+      titleRefreshTimerRef.current = window.setTimeout(() => {
+        titleRefreshTimerRef.current = 0;
+        void refreshThreads().then((fresh) => {
+          if (!mountedRef.current) return;
+          const current = fresh.find((thread) => thread.id === threadRef.current);
+          if (!current || current.title === UNTITLED_THREAD_LABEL) {
+            scheduleTitleRefresh(attempt + 1);
+          }
+        });
+      }, delay);
+    },
+    [refreshThreads],
+  );
+
   const beginSubscription = useCallback(
     (runId: string, assistantId: string) => {
       // Supersede any previous observation; this never cancels the run.
@@ -595,11 +882,19 @@ export function ChatStudio({
         setActiveRun(null);
         setActiveAssistantId(null);
         finalizeTerminalMessage(assistantId);
-        void refreshThreads();
+        // The title LLM call lands right AFTER the terminal event: decide
+        // from the FRESHLY fetched list whether retries are needed.
+        // Already-titled threads (the common case) schedule nothing.
+        void refreshThreads().then((fresh) => {
+          if (!mountedRef.current) return;
+          const current = fresh.find((thread) => thread.id === threadRef.current);
+          if (current && current.title !== UNTITLED_THREAD_LABEL) return;
+          scheduleTitleRefresh(0);
+        });
         textareaRef.current?.focus();
       });
     },
-    [applyRunEvent, finalizeTerminalMessage, refreshThreads],
+    [applyRunEvent, finalizeTerminalMessage, refreshThreads, scheduleTitleRefresh],
   );
 
   /**
@@ -739,7 +1034,7 @@ export function ChatStudio({
         setAgents(agentList);
         setModelReady(modelRegistry.configured);
 
-        await refreshThreads();
+        const freshThreads = await refreshThreads();
 
         try {
           const storedMessages = await listThreadMessages(
@@ -747,6 +1042,21 @@ export function ChatStudio({
             threadId,
             resourceId,
           );
+          // A thread whose first turn JUST completed can read back empty for
+          // a short window after the terminal event (the run finished and
+          // the thread row exists, but Memory has not served the new rows
+          // yet). Schedule a bounded background re-fetch so a refresh in
+          // that window still restores the persisted attachments; the
+          // initial render never blocks on it. The thread row exists in the
+          // threads list only after the first run started, so never-used
+          // new chats schedule nothing.
+          if (
+            !cancelled
+            && storedMessages.length === 0
+            && freshThreads.some((thread) => thread.id === threadId)
+          ) {
+            scheduleEmptyThreadRestoreRetry(agentId, threadId, resourceId, 0);
+          }
           if (!cancelled) {
             setMessages(storedMessages.map(messageFromMemory));
             // Rebuild historical task state from the persisted task tool
@@ -823,8 +1133,24 @@ export function ChatStudio({
       setTaskNotice(null);
       setTaskDockOpen(false);
       hasTaskSnapshotRef.current = false;
+      // A pending title refresh belongs to the previous thread's turn.
+      if (titleRefreshTimerRef.current) {
+        window.clearTimeout(titleRefreshTimerRef.current);
+        titleRefreshTimerRef.current = 0;
+      }
+      if (restoreRetryTimerRef.current) {
+        window.clearTimeout(restoreRetryTimerRef.current);
+        restoreRetryTimerRef.current = 0;
+      }
     };
-  }, [agentId, attachToRun, refreshThreads, resourceId, threadId]);
+  }, [
+    agentId,
+    attachToRun,
+    refreshThreads,
+    resourceId,
+    scheduleEmptyThreadRestoreRetry,
+    threadId,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1076,14 +1402,16 @@ export function ChatStudio({
       prompt || attachmentViews[0]?.filename || 'Attachment';
     const runContent = buildUserMessageContent(prompt, readyUploads);
     const now = Date.now();
+    const sentInput = input;
     const userMessageId = crypto.randomUUID();
     const assistantId = crypto.randomUUID();
-    const sentInput = input;
 
     // Knowledge Base ingestion (additive, fire-and-forget): raw text/PDF
     // files are persisted and indexed server-side in parallel with the chat
     // run — this never blocks or waits on the conversation. Images stay
-    // multimodal-only and are never indexed.
+    // multimodal-only and are never indexed. An accepted upload is NOT
+    // indexed yet: the record stays `processing` until the reconciliation
+    // loop below observes the terminal state.
     for (const upload of uploads) {
       if (upload.status !== 'ready' || upload.kind === 'image' || !upload.raw) continue;
       if (classifyKnowledgeFile({ name: upload.filename, type: upload.raw.type }) === 'unsupported') {
@@ -1092,16 +1420,21 @@ export function ChatStudio({
       setKnowledgeStatus((current) => ({ ...current, [upload.id]: { state: 'indexing' } }));
       const uploadId = upload.id;
       void uploadKnowledgeDocument({ file: upload.raw, sourceThreadId: threadId }).then((result) => {
+        if (!mountedRef.current) return;
         setKnowledgeStatus((current) => ({
           ...current,
           [uploadId]: result.ok
-            ? result.document.status === 'failed'
-              ? { state: 'failed', detail: result.document.error ?? 'Knowledge indexing failed.' }
-              : { state: 'added' }
+            ? result.document.status === 'ready'
+              // Small files can finish indexing before the upload POST even
+              // returns; trust that snapshot instead of spinning until the
+              // first reconciliation tick observes it.
+              ? { state: 'added', documentId: result.document.id }
+              : { state: 'indexing', documentId: result.document.id }
             : { state: 'failed', detail: result.message },
         }));
       });
     }
+
 
     // Sending a message is an explicit "show me the reply" intent: re-attach
     // the follow even if the user had scrolled up while reading.
@@ -1673,7 +2006,23 @@ export function ChatStudio({
                             <Fragment
                               key={attachment.id || `${message.id}-att-${index}`}
                             >
-                              {attachment.dataUrl ? (
+                              {attachment.kind === 'pdf' ? (
+                                <PdfAttachmentCard
+                                  filename={attachment.filename}
+                                  pageCount={attachment.pageCount ?? 0}
+                                  byteSize={attachment.byteSize}
+                                  coverUrl={attachment.dataUrl}
+                                  canOpen={
+                                    Boolean(knowledgeStatus[attachment.id]?.documentId)
+                                    || Boolean(attachment.pages)
+                                  }
+                                  onOpen={() =>
+                                    setPdfPreview({
+                                      view: attachment,
+                                      documentId: knowledgeStatus[attachment.id]?.documentId,
+                                    })}
+                                />
+                              ) : attachment.dataUrl ? (
                                 // Data-URL thumbnails cannot use next/image without
                                 // per-origin configuration; a plain img is correct here.
                                 // eslint-disable-next-line @next/next/no-img-element
@@ -1699,16 +2048,7 @@ export function ChatStudio({
                               )}
                               {message.role === 'user'
                                 && knowledgeStatus[attachment.id] !== undefined && (
-                                <small
-                                  className="chat-knowledge-status"
-                                  data-knowledge-state={knowledgeStatus[attachment.id].state}
-                                >
-                                  {knowledgeStatus[attachment.id].state === 'indexing'
-                                    ? 'Indexing knowledge…'
-                                    : knowledgeStatus[attachment.id].state === 'added'
-                                      ? 'Added to Knowledge'
-                                      : knowledgeStatus[attachment.id].detail ?? 'Knowledge indexing failed'}
-                                </small>
+                                <KnowledgeStatusChip status={knowledgeStatus[attachment.id]} />
                               )}
                             </Fragment>
                           ))}
@@ -1774,7 +2114,7 @@ export function ChatStudio({
               {!modelReady && !loading && <div className="studio-alert studio-alert-error">The agent server returned no models. Set <code>LLM_BASE_URL</code>, <code>LLM_API_KEY</code>, and <code>LLM_DEFAULT_MODEL</code> in <code>agent/.env</code>, then restart the agent server.</div>}
               <form className={`chat-composer${dragOver ? ' drag-over' : ''}`} onSubmit={submit} onDragOver={dragOverForm} onDragEnter={dragEnterForm} onDragLeave={dragLeaveForm} onDrop={dropForm}>
                 <div className="chat-composer__input">
-                  {uploads.length > 0 && <div className="chat-upload-row" role="list" aria-label="Pending attachments">{uploads.map((upload) => <span className={`chat-upload-chip ${upload.status}`} key={upload.id} role="listitem"><span aria-hidden="true">{upload.kind === 'image' ? '▣' : upload.kind === 'pdf' ? '⎘' : '≡'}</span><span className="chat-upload-name">{upload.filename}{upload.prepared?.kind === 'pdf' ? ` (${upload.prepared.pages.length} pages)` : ''}</span>{upload.status === 'preparing' && <small>processing…</small>}{upload.status === 'ready' && upload.kind !== 'image' && knowledgeStatus[upload.id] !== undefined && <small className="chat-knowledge-status" data-knowledge-state={knowledgeStatus[upload.id].state}>{knowledgeStatus[upload.id].state === 'indexing' ? 'Indexing knowledge…' : knowledgeStatus[upload.id].state === 'added' ? 'Added to Knowledge' : knowledgeStatus[upload.id].detail ?? 'Knowledge indexing failed'}</small>}{upload.status === 'error' && upload.error && <small>{upload.error}</small>}<button type="button" onClick={() => removeUpload(upload.id)} aria-label={`Remove ${upload.filename}`}>×</button></span>)}</div>}
+                  {uploads.length > 0 && <div className="chat-upload-row" role="list" aria-label="Pending attachments">{uploads.map((upload) => <span className={`chat-upload-chip ${upload.status}`} key={upload.id} role="listitem"><span aria-hidden="true">{upload.kind === 'image' ? '▣' : upload.kind === 'pdf' ? '⎘' : '≡'}</span><span className="chat-upload-name">{upload.filename}{upload.prepared?.kind === 'pdf' ? ` (${upload.prepared.pages.length} pages)` : ''}</span>{upload.status === 'preparing' && <small>processing…</small>}{upload.status === 'ready' && upload.kind !== 'image' && knowledgeStatus[upload.id] !== undefined && <small className="chat-knowledge-status" data-knowledge-state={knowledgeStatus[upload.id].state}>{knowledgeStatus[upload.id].state === 'indexing' ? knowledgeStatus[upload.id].detail ?? 'Indexing…' : knowledgeStatus[upload.id].state === 'added' ? 'Added to Knowledge' : knowledgeStatus[upload.id].detail ?? 'Knowledge indexing failed'}</small>}{upload.status === 'error' && upload.error && <small>{upload.error}</small>}<button type="button" onClick={() => removeUpload(upload.id)} aria-label={`Remove ${upload.filename}`}>×</button></span>)}</div>}
                   {commandOpen && filteredSkills.length > 0 ? <CommandMenu commands={filteredSkills} activeIndex={commandIndex} onSelect={applySelection} /> : null}
                   <textarea ref={textareaRef} value={input} onChange={(event) => { const value = event.target.value; setInput(value); const isCommand = isCommandInput(value); setCommandOpen(isCommand); if (isCommand) setCommandIndex(0); }} onKeyDown={keyDown} onPaste={paste} role="combobox" aria-expanded={commandOpen && filteredSkills.length > 0} aria-controls={commandOpen && filteredSkills.length > 0 ? 'chat-command-menu' : undefined} aria-autocomplete="list" placeholder={modelReady ? `Message ${currentAgent?.name || agentId}…` : 'Configure the server model first…'} disabled={!modelReady || runActive} rows={1} />
                 </div>
@@ -1812,6 +2152,16 @@ export function ChatStudio({
         onCancel={() => setPendingDelete(undefined)}
         onConfirm={() => void deleteThread()}
       />
+      {pdfPreview && (
+        <PdfViewerDialog
+          open
+          filename={pdfPreview.view.filename}
+          pageCount={pdfPreview.view.pageCount ?? 0}
+          documentId={pdfPreview.documentId}
+          pages={pdfPreview.view.pages}
+          onClose={() => setPdfPreview(null)}
+        />
+      )}
     </div>
   );
 }

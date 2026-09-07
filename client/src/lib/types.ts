@@ -76,6 +76,13 @@ export type ChatAttachmentView = {
   dataUrl?: string;
   /** Number of rendered pages for PDF attachments. */
   pageCount?: number;
+  /** Original upload size in bytes (live PDF views only). */
+  byteSize?: number;
+  /**
+   * Grouped page images for RESTORED messages only — live sends keep the
+   * cover-only view and open the authenticated original-PDF route instead.
+   */
+  pages?: string[];
 };
 
 /**
