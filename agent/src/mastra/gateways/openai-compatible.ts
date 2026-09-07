@@ -81,6 +81,12 @@ export class OpenAICompatibleGateway extends MastraModelGateway {
       apiKey,
       baseURL: this.buildUrl(),
       supportsStructuredOutputs: true,
+      // Request usage chunks in streaming: without `include_usage` most
+      // OpenAI-compatible gateways (incl. hosted vLLM) omit token usage
+      // from stream chunks, and the per-user token quota would meter
+      // nothing. Per the provider this is "strict compatibility mode";
+      // the Chekku gateway is vLLM-compatible.
+      includeUsage: true,
     }).chatModel(modelId);
 
     /*

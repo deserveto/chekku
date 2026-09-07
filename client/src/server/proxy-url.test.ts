@@ -70,8 +70,8 @@ describe('buildAgentProxyUrl', () => {
   });
 
   it('blocks the native workflow HTTP API from the browser proxy', () => {
-    // Wrapping an agent with `createDurableAgent` auto-registers the
-    // general-purpose `durable-agentic-loop` engine workflow, and the agent
+    // Registering a durable agent auto-registers the general-purpose
+    // `durable-agentic-loop` engine workflow, and the agent
     // server runs without an auth provider — proxying this namespace would
     // let any signed-in user drive any agent outside the guarded `/runs`
     // surface. App workflows are triggered server-side over AGENT_URL

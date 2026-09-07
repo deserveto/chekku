@@ -240,3 +240,29 @@ describe('applyEnvFiles (dev env precedence)', () => {
     ).not.toThrow();
   });
 });
+
+describe('TOKEN_DAILY_LIMIT', () => {
+  it('defaults to 500000 when unset', () => {
+    expect(loadEnv({}).TOKEN_DAILY_LIMIT).toBe(500_000);
+  });
+
+  it('coerces numeric strings and accepts zero (unlimited)', () => {
+    expect(loadEnv({ TOKEN_DAILY_LIMIT: '250000' }).TOKEN_DAILY_LIMIT).toBe(
+      250_000,
+    );
+    expect(loadEnv({ TOKEN_DAILY_LIMIT: '0' }).TOKEN_DAILY_LIMIT).toBe(0);
+  });
+
+  it('treats an empty string as unset (default), not 0/unlimited', () => {
+    expect(loadEnv({ TOKEN_DAILY_LIMIT: '' }).TOKEN_DAILY_LIMIT).toBe(500_000);
+  });
+
+  it('treats a whitespace-only string as unset (default), not 0/unlimited', () => {
+    expect(loadEnv({ TOKEN_DAILY_LIMIT: ' ' }).TOKEN_DAILY_LIMIT).toBe(500_000);
+  });
+
+  it('rejects negative and non-integer values', () => {
+    expect(() => loadEnv({ TOKEN_DAILY_LIMIT: '-1' })).toThrow();
+    expect(() => loadEnv({ TOKEN_DAILY_LIMIT: '1.5' })).toThrow();
+  });
+});

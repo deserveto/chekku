@@ -21,6 +21,7 @@ import {
   isOwnedThreadId,
   isResourceId,
 } from '../runs/thread-ownership.js';
+import { TokenQuotaExceededError, tokenQuotaStore } from '../runs/token-quota.js';
 
 export const MAX_PROMPT_UTF8_BYTES = 65_536;
 
@@ -214,6 +215,21 @@ export const startRunRoute = registerApiRoute('/runs', {
       return c.json({ error: 'Unknown agent' }, 404);
     }
 
+    // Token quota gate: a blocked user gets a fixed 429 before any thread
+    // record or run registry state is created. Duplicate-run attach is NOT
+    // new spend: when this thread already has an active run, the 409
+    // attach contract wins even if the user's quota tipped over mid-run.
+    if (!agentRunRegistry.findActiveRun(agentId, threadId, resourceId)) {
+      try {
+        tokenQuotaStore.assertQuota(resourceId);
+      } catch (error) {
+        if (error instanceof TokenQuotaExceededError) {
+          return c.json({ error: error.message }, 429);
+        }
+        throw error;
+      }
+    }
+
     // First turn: create the Memory thread record untitled before execution
     // starts, so the thread is visible in listings the moment the run
     // starts, not when the first completed turn persists. The title is
@@ -252,16 +268,21 @@ export const startRunRoute = registerApiRoute('/runs', {
       return c.json({ error: 'Could not start the run' }, 500);
     }
 
-    void runExecution(agentRunRegistry, agent, {
-      runId,
-      agentId,
-      threadId,
-      resourceId,
-      prompt,
-      ...(content ? { content } : {}),
-      ...(firstTurn ? { firstTurn } : {}),
-      abortSignal: controller.signal,
-    });
+    void runExecution(
+      agentRunRegistry,
+      agent,
+      {
+        runId,
+        agentId,
+        threadId,
+        resourceId,
+        prompt,
+        ...(content ? { content } : {}),
+        ...(firstTurn ? { firstTurn } : {}),
+        abortSignal: controller.signal,
+      },
+      tokenQuotaStore,
+    );
 
     return c.json({ run }, 202);
   },
