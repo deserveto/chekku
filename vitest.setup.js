@@ -4,6 +4,75 @@ import { vi } from 'vitest';
 if (!globalThis.TextEncoder) globalThis.TextEncoder = TextEncoder;
 if (!globalThis.TextDecoder) globalThis.TextDecoder = TextDecoder;
 
+// Node >=26 ships a persistent global `localStorage` that returns `undefined`
+// unless `--localstorage-file` is provided. Vitest's jsdom environment uses
+// `window === globalThis`, so Node's broken getter shadows jsdom's working
+// `window._localStorage` and every `window.localStorage` access resolves to
+// `undefined`. Restore jsdom's implementation (or a minimal in-memory fallback
+// outside jsdom) when the current value is unusable. On Node 22 `localStorage`
+// is already jsdom's working instance and this is a no-op.
+try {
+  let broken = false;
+  // Reading Node 26's persistent `localStorage` getter without a
+  // `--localstorage-file` emits an ExperimentalWarning, so detect it via the
+  // property descriptor first and only read the value for non-Node getters.
+  const descriptor = Object.getOwnPropertyDescriptor(
+    globalThis,
+    'localStorage',
+  );
+  if (
+    descriptor?.get &&
+    descriptor.get.toString().includes('internal/webstorage')
+  ) {
+    broken = true;
+  } else {
+    try {
+      const current = globalThis.localStorage;
+      broken = !current || typeof current.getItem !== 'function';
+    } catch {
+      broken = true;
+    }
+  }
+  if (broken) {
+    const inner = globalThis._localStorage;
+    const fallback =
+      inner && typeof inner.getItem === 'function'
+        ? inner
+        : (() => {
+            const store = new Map();
+            return {
+              get length() {
+                return store.size;
+              },
+              key(index) {
+                return [...store.keys()][index] ?? null;
+              },
+              getItem(key) {
+                const value = store.get(String(key));
+                return value === undefined ? null : value;
+              },
+              setItem(key, value) {
+                store.set(String(key), String(value));
+              },
+              removeItem(key) {
+                store.delete(String(key));
+              },
+              clear() {
+                store.clear();
+              },
+            };
+          })();
+    Object.defineProperty(globalThis, 'localStorage', {
+      value: fallback,
+      writable: true,
+      configurable: true,
+      enumerable: true,
+    });
+  }
+} catch {
+  // Never fail the suite on setup-time storage probing.
+}
+
 // `agent/src/config/env.ts` loads agent/.env unconditionally, so a real
 // deployment value (WEB_URL=https://app.example.com) would leak into assertions
 // about the agent's CORS origin and fail the suite on any machine that has
