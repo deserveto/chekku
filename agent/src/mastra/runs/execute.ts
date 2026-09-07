@@ -5,6 +5,10 @@ import {
   type AgentRunEventType,
   type RunRegistry,
 } from './run-registry.js';
+import {
+  RunUsageTracker,
+  type TokenQuotaConsumer,
+} from './token-quota.js';
 import { TASK_TOOL_NAMES } from '../tasks/task-signals.js';
 import { extractTaskSnapshot } from '../tasks/task-stream-adapter.js';
 
@@ -716,8 +720,12 @@ export async function runExecution(
   registry: RunRegistry,
   agent: RunnableAgent,
   params: RunExecutionParams,
+  quota?: TokenQuotaConsumer,
 ): Promise<void> {
   let sawError = false;
+  const usageTracker = new RunUsageTracker((tokens) =>
+    quota?.consume(params.resourceId, tokens),
+  );
   let cleanup: (() => void) | undefined;
 
   try {
@@ -735,7 +743,15 @@ export async function runExecution(
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      const mapped = chunkToRunEvent(value ?? {});
+      const chunk = value ?? {};
+      // Usage chunks feed the token quota only; they never become run
+      // events, so the client stream is unchanged.
+      if (chunk.type === 'step-finish') {
+        usageTracker.recordStepFinish(chunkPayload(chunk));
+      } else if (chunk.type === 'finish') {
+        usageTracker.recordFinish(chunkPayload(chunk));
+      }
+      const mapped = chunkToRunEvent(chunk);
       if (mapped) {
         if (mapped.type === 'error') sawError = true;
         registry.appendEvent(params.runId, mapped.type, mapped.payload);
