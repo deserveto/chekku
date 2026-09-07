@@ -1,0 +1,193 @@
+name: PR58 isolated verification
+
+on:
+  pull_request:
+    branches:
+      - verify/pr58-superpower-base
+
+permissions: {}
+
+env:
+  EXPECTED_PR_HEAD: 8a1321d124ef9f1c4b60052c723fa77a6bd8bcee
+  PR_BRANCH: fix/studio-stability-knowledge-titles-pdf
+
+jobs:
+  verify:
+    name: Integrate, TDD, check, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout verification harness
+        uses: actions/checkout@v4
+        with:
+          path: harness
+          persist-credentials: false
+
+      - name: Checkout PR branch without write credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PR_BRANCH }}
+          fetch-depth: 0
+          path: work
+          persist-credentials: false
+
+      - name: Resolve reviewed main integration
+        run: python "$GITHUB_WORKSPACE/harness/.github/scripts/pr58-integrate.py" integrate "$GITHUB_WORKSPACE/work"
+
+      - name: Add regression tests before implementation changes
+        run: python "$GITHUB_WORKSPACE/harness/.github/scripts/pr58-integrate.py" add-tests "$GITHUB_WORKSPACE/work"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.22'
+          cache: npm
+          cache-dependency-path: work/package-lock.json
+
+      - name: Install dependencies
+        working-directory: work
+        run: npm ci
+
+      - name: Confirm red phase for retry/delete race
+        working-directory: work
+        shell: bash
+        run: |
+          if npx vitest run 'client/src/app/(studio)/knowledge/knowledge-document-list.test.tsx' -t 'hides retry while deletion is in flight'; then
+            echo 'Expected delete/retry regression test to fail before the implementation fix.' >&2
+            exit 1
+          fi
+
+      - name: Confirm red phase for duplicate Qdrant logging
+        working-directory: work
+        shell: bash
+        run: |
+          if npx vitest run agent/src/knowledge/qdrant-index.test.ts -t 'logs an operation-tagged failure with the error name only'; then
+            echo 'Expected Qdrant single-log regression assertion to fail before the implementation fix.' >&2
+            exit 1
+          fi
+
+      - name: Confirm red phase for failed-chip CSS override
+        working-directory: work
+        shell: bash
+        run: |
+          if npx vitest run client/src/lib/ui-structure.test.ts -t 'keeps the failed Knowledge chip on the danger color without a stale override'; then
+            echo 'Expected CSS regression test to fail before removing the stale override.' >&2
+            exit 1
+          fi
+
+      - name: Confirm existing ChatStudio StrictMode fix satisfies its new regression test
+        working-directory: work
+        run: npx vitest run client/src/components/chat/chat-studio.runs.test.tsx -t 'keeps delayed title refresh alive under StrictMode'
+
+      - name: Apply minimal reviewed fixes
+        run: python "$GITHUB_WORKSPACE/harness/.github/scripts/pr58-integrate.py" apply-fixes "$GITHUB_WORKSPACE/work"
+
+      - name: Verify integration and documentation invariants
+        run: python "$GITHUB_WORKSPACE/harness/.github/scripts/pr58-integrate.py" verify-static "$GITHUB_WORKSPACE/work"
+
+      - name: Run affected regression suites
+        working-directory: work
+        run: >-
+          npx vitest run
+          client/src/components/chat/chat-studio.runs.test.tsx
+          'client/src/app/(studio)/knowledge/knowledge-document-list.test.tsx'
+          agent/src/knowledge/qdrant-index.test.ts
+          client/src/lib/ui-structure.test.ts
+
+      - name: Mutation-prove ChatStudio StrictMode regression coverage
+        working-directory: work
+        shell: bash
+        run: |
+          python "$GITHUB_WORKSPACE/harness/.github/scripts/pr58-integrate.py" mutate-chat "$GITHUB_WORKSPACE/work"
+          if npx vitest run client/src/components/chat/chat-studio.runs.test.tsx -t 'keeps delayed title refresh alive under StrictMode'; then
+            python "$GITHUB_WORKSPACE/harness/.github/scripts/pr58-integrate.py" restore-chat "$GITHUB_WORKSPACE/work"
+            echo 'Mutation survived: StrictMode regression test did not detect removal of mountedRef setup.' >&2
+            exit 1
+          fi
+          python "$GITHUB_WORKSPACE/harness/.github/scripts/pr58-integrate.py" restore-chat "$GITHUB_WORKSPACE/work"
+
+      - name: Full typecheck, lint, and test suite
+        working-directory: work
+        run: npm run check
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+          MASTRA_TELEMETRY_DISABLED: true
+          NEXT_TELEMETRY_DISABLED: 1
+
+      - name: Full production build
+        working-directory: work
+        run: npm run build
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+          MASTRA_TELEMETRY_DISABLED: true
+          NEXT_TELEMETRY_DISABLED: 1
+
+      - name: Commit only after all verification passes
+        run: python "$GITHUB_WORKSPACE/harness/.github/scripts/pr58-integrate.py" commit "$GITHUB_WORKSPACE/work"
+
+      - name: Assert clean verified tree and create bundle
+        working-directory: work
+        shell: bash
+        run: |
+          test -z "$(git status --porcelain)"
+          git diff --check HEAD^..HEAD
+          git rev-parse HEAD > "$GITHUB_WORKSPACE/pr58-final-sha.txt"
+          git bundle create "$GITHUB_WORKSPACE/pr58-final.bundle" HEAD
+          git bundle verify "$GITHUB_WORKSPACE/pr58-final.bundle"
+
+      - name: Upload verified commit bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr58-verified-commit
+          path: |
+            pr58-final.bundle
+            pr58-final-sha.txt
+          if-no-files-found: error
+          retention-days: 1
+
+  push_verified:
+    name: Push verified commit to PR branch
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout exact pre-verification PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PR_BRANCH }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Guard against concurrent PR branch movement
+        shell: bash
+        run: |
+          ACTUAL="$(git rev-parse HEAD)"
+          test "$ACTUAL" = "$EXPECTED_PR_HEAD" || {
+            echo "PR branch moved during verification: expected $EXPECTED_PR_HEAD, got $ACTUAL" >&2
+            exit 1
+          }
+          git fetch origin main
+
+      - name: Download verified commit bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: pr58-verified-commit
+          path: verified
+
+      - name: Validate verified ancestry and push
+        shell: bash
+        run: |
+          FINAL="$(cat verified/pr58-final-sha.txt)"
+          git fetch verified/pr58-final.bundle HEAD:refs/remotes/pr58-verified/final
+          BUNDLED="$(git rev-parse refs/remotes/pr58-verified/final)"
+          test "$FINAL" = "$BUNDLED"
+          git merge-base --is-ancestor "$EXPECTED_PR_HEAD" "$FINAL"
+          git merge-base --is-ancestor origin/main "$FINAL"
+          git push origin "$FINAL:refs/heads/$PR_BRANCH"
+          echo "Pushed verified PR head: $FINAL"
