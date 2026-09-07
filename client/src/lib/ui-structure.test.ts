@@ -79,6 +79,15 @@ const commandPalette = readFileSync(
 );
 
 describe('requested UI structure', () => {
+  it('keeps the failed Knowledge chip on the danger color without a stale override', () => {
+    const failedRules = [...css.matchAll(
+      /\.chat-knowledge-status\[data-knowledge-state='failed'\]\s*\{([^}]*)\}/g,
+    )].map((match) => match[1]);
+    expect(failedRules).toHaveLength(1);
+    expect(failedRules[0]).toContain('color: var(--studio-danger)');
+    expect(failedRules[0]).not.toContain('var(--studio-warning)');
+  });
+
   it('lets each sidebar place its collapse control in the brand row', () => {
     expect(resizableSidebar).toContain('toggleCollapsed: () => void');
     expect(resizableSidebar).not.toContain('<button\n        className="studio-sidebar-collapse"');

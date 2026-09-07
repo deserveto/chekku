@@ -251,6 +251,41 @@ describe('KnowledgeDocumentList', () => {
     expect(container.textContent).toContain('handbook.pdf');
   });
 
+  it('hides retry while deletion is in flight', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true }),
+    } as Response);
+    const container = render(
+      <KnowledgeDocumentList
+        initialDocuments={[doc({ status: 'failed', error: 'boom' })]}
+      />,
+    );
+    expect(
+      [...container.querySelectorAll('button')].some(
+        (button) => button.textContent === 'Retry indexing',
+      ),
+    ).toBe(true);
+
+    const deleteButton = [...container.querySelectorAll('button')].find(
+      (button) => button.textContent === 'Delete',
+    ) as HTMLButtonElement;
+    await act(async () => { deleteButton.click(); });
+    const dialog = container.querySelector('dialog');
+    const confirmButton = [...dialog!.querySelectorAll('button')].find(
+      (button) => button.textContent === 'Delete',
+    ) as HTMLButtonElement;
+    await act(async () => { confirmButton.click(); });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(container.querySelector('[data-knowledge-status="deleting"]')).toBeTruthy();
+    expect(
+      [...container.querySelectorAll('button')].some(
+        (button) => button.textContent === 'Retry indexing',
+      ),
+    ).toBe(false);
+  });
+
   it('retries failed documents through the retry endpoint', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
       ok: true,

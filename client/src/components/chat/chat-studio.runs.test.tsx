@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, type ReactNode } from 'react';
+import { StrictMode, act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RunConflictError } from '@/lib/agent-runs';
@@ -451,6 +451,51 @@ describe('ChatStudio delayed title refresh', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('keeps delayed title refresh alive under StrictMode', async () => {
+    // Regression: StrictMode runs setup → cleanup → setup in development.
+    // mountedRef must be restored to true by the live setup or the
+    // post-terminal continuation returns before scheduling the title refresh.
+    act(() => root?.unmount());
+    document.body.innerHTML = '';
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    listAgentThreads.mockResolvedValue(untitledThreads);
+
+    let resolveObservation: (() => void) | undefined;
+    observeRunEvents.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveObservation = resolve;
+        }),
+    );
+    act(() => {
+      root!.render(
+        <StrictMode>
+          <ChatStudio
+            resourceId="local-user"
+            initialAgentId="main-agent"
+            initialThreadId={activeThreadId}
+          />
+        </StrictMode>,
+      );
+    });
+    await flushEffects();
+    await enterComposerText('strict title refresh');
+    await submitComposer();
+
+    vi.useFakeTimers();
+    let callsAfterCompletion = 0;
+    await act(async () => {
+      resolveObservation?.();
+      await vi.advanceTimersByTimeAsync(0);
+      callsAfterCompletion = listAgentThreads.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+
+    expect(listAgentThreads.mock.calls.length).toBe(callsAfterCompletion + 1);
   });
 
   it('retries the delayed refresh on a bounded backoff while the thread stays untitled', async () => {

@@ -257,6 +257,7 @@ describe('createQdrantKnowledgeIndex', () => {
     expect(opLogs).toContain('[knowledge] qdrant upsertPoints failed:');
     expect(opLogs).toContain('[knowledge] qdrant deleteDocumentPoints failed:');
     expect(opLogs).toContain('[knowledge] qdrant search failed:');
+    expect(errorSpy).toHaveBeenCalledTimes(3);
     // The log carries only the error NAME; the raw provider message with the
     // host URL never reaches the console.
     for (const call of errorSpy.mock.calls) {

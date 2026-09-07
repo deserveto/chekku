@@ -236,7 +236,7 @@ export function KnowledgeDocumentList({ initialDocuments }: { initialDocuments: 
                 >
                   Open
                 </a>
-                {retryable ? (
+                {retryable && !deleting ? (
                   <button
                     type="button"
                     className="studio-button"

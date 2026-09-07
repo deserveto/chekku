@@ -199,9 +199,6 @@ function logQdrantOperationFailure(operation: string, error: unknown): void {
 
 function mapIndexError(error: unknown): KnowledgeIndexError {
   if (error instanceof KnowledgeIndexError) return error;
-  // Fixed-code logging: raw provider errors can embed URLs and bodies, so
-  // only the error name reaches the log line.
-  console.error('[knowledge] qdrant request failed:', error instanceof Error ? error.name : 'unknown');
   return new KnowledgeIndexError('unavailable', 'The knowledge index is currently unavailable.');
 }
 

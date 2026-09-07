@@ -3873,11 +3873,6 @@ dialog.chat-task-dock-dialog[open] {
   }
 }
 
-.chat-knowledge-status[data-knowledge-state='failed'] {
-  color: var(--studio-warning);
-  border-style: solid;
-}
-
 .chat-send-button:disabled {
   opacity: 0.35;
   cursor: not-allowed;
