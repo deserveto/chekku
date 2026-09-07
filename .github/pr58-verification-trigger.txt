@@ -1,1 +1,2 @@
 PR #58 isolated verify-before-push trigger.
+retry: merge identity configured
