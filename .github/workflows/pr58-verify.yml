@@ -34,6 +34,12 @@ jobs:
           path: work
           persist-credentials: false
 
+      - name: Configure local merge identity
+        working-directory: work
+        run: |
+          git config user.name 'ChatGPT PR58 Verifier'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
       - name: Resolve reviewed main integration
         run: python "$GITHUB_WORKSPACE/harness/.github/scripts/pr58-integrate.py" integrate "$GITHUB_WORKSPACE/work"
 
