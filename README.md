@@ -187,7 +187,7 @@ Local file: `client/.env.local`
 | `npm run lint` | Run the client ESLint configuration. |
 | `npm test` | Run all Vitest tests. |
 | `npm run test:web-reader:live` | Optionally read `https://example.com/` through the self-hosted Reader container; requires `WEB_READER_BASE_URL` to resolve to a running `reader` service. |
-| `npm run test:e2e` | Run the local Playwright E2E suites (`e2e/`); type-checks the specs first. Requires Postgres running and a configured `client/.env.local` (see below). |
+| `npm run test:e2e` | Run the local Playwright E2E suites (`e2e/`); type-checks the specs first. Requires Postgres running and a configured `client/.env.local`; the agent-probe suite additionally needs the agent server and its model gateway running (see below). |
 | `npm run check` | Run typecheck, lint, and tests. |
 | `npm run build` | Build Mastra and Next.js for production. |
 | `npm run start` | Start the built Mastra and Next.js servers together. Requires a prior `npm run build`. |
@@ -205,6 +205,8 @@ The client uses system font stacks, so `next build` does not download fonts from
 
 Local Playwright E2E suites live in `e2e/` (run on demand; they are not attached to CI and are separate from the Vitest suites). The auth module suite covers signup, email-verification gating and resend, sign-in, middleware redirects, the unauthenticated API 403 JSON boundary, session persistence across reloads, sign-out, and password-reset request/reset-link pages — test-case inventory (including one deliberately manual rate-limit case) lives in `e2e/auth-test-cases.csv`.
 
+The agent probe suite (`e2e/agents/agent-probe.spec.ts`) is a live integration check of every agent the studio catalog offers. It signs in one fresh test user, reads the agent list off `/agents` itself — so built-ins and stored agents are both covered and a newly created agent needs no edit to the spec — then, for each one, clicks **Open chat**, sends the single probe prompt `Apa yang kamu bisa lakukan untuk saya?`, and asserts the run finishes with a non-empty, error-free reply. Each agent is a reported step, and a failing agent does not stop the ones after it: the test ends by listing every agent that failed. It performs real LLM calls through the agent server, so the agent server must be running with a configured model gateway (`npm run dev:agent`, `npm run dev`, or an already-running stack) before invoking it; the per-agent budget is 180 seconds, so a full catalog sweep can take several minutes.
+
 Prerequisites, once per machine and repository: `npm run setup` and `npm run db:migrate` have been run at least once, and Postgres is up — the `docker compose --env-file` invocation below hard-errors until `storage/.env.local` and `searxng/.env.local` exist. The Playwright `webServer` starts `npm run dev:client` automatically (or reuses an already-running dev stack).
 
 ```bash
@@ -215,7 +217,7 @@ npm run test:e2e
 
 Notes:
 
-- The client's auth rate limiter allows 5 POSTs per scope per 60 seconds; the suite runs serially with `workers: 1` and stays under the caps. If you re-run the suite within a minute of a previous run, wait ~60 seconds or restart the dev client first.
+- The client's auth rate limiter allows 5 POSTs per scope per 60 seconds; the suite runs serially with `workers: 1` and stays under the caps. If you re-run the suite within a minute of a previous run, wait ~60 seconds or restart the dev client first. The agent probe suite adds one signup and one sign-in POST, which keeps both scopes within the caps even when run right after the auth suite.
 - Email verification cannot be completed through a real mailbox in local dev, so the suite signs up through the UI and then flips `emailVerified` directly in `chekku_auth` via `e2e/helpers/auth-db.ts` (connection resolved from `AUTH_DATABASE_URL`; override with `CHEKKU_E2E_AUTH_DATABASE_URL`). Test users are deleted afterwards.
 - Point the suite at another origin with `CHEKKU_E2E_BASE_URL` (default `http://localhost:3000`). The override retargets the browser only; the target stack must already be running — the Playwright `webServer` readiness poll always checks the local origin.
 
