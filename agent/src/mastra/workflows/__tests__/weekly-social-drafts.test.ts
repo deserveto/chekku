@@ -42,8 +42,7 @@ const envMock = vi.hoisted(() => ({
   PUBLIC_HOLIDAY_CACHE_DIR: '',
   WEB_READER_BASE_URL: '',
   // The durable wrappers (supervisor, strategist, visual) resolve their
-  // model eagerly at construction (`createDurableAgent` calls
-  // `agent.getModel()`), and importing the supervisor transitively imports
+  // model eagerly during construction, and importing the supervisor imports
   // the strategist/visual modules. Without a configured model the wrapper
   // construction throws under this partial env mock. `getServerModel`
   // only returns a router id string — no network access happens here.

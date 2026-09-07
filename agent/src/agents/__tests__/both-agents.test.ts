@@ -104,7 +104,7 @@ describe('pm-agent (weekly and competitive analysis)', () => {
 });
 
 describe('pm-agent (durable execution pilot, N8_4)', () => {
-  it('wraps the plain agent with createDurableAgent and keeps its identity', () => {
+  it('keeps the durable wrapper identity', () => {
     // The public id must stay `pm-agent` so `getAgentById`, thread-id
     // ownership, and the /runs surface resolve unchanged.
     expect(durablePmAgent.id).toBe('pm-agent');
@@ -123,7 +123,7 @@ describe('pm-agent (durable execution pilot, N8_4)', () => {
 });
 
 describe('durable rollout (Task D, Fase 1: qa-web + main)', () => {
-  it('wraps qa-web-agent with createDurableAgent and keeps its identity', () => {
+  it('keeps the durable qa-web-agent identity', () => {
     expect(durableQaWebAgent.id).toBe('qa-web-agent');
     expect(durableQaWebAgent.name).toBe('QA Web Agent');
   });
@@ -144,7 +144,7 @@ describe('durable rollout (Task D, Fase 1: qa-web + main)', () => {
     );
   });
 
-  it('wraps main-agent with createDurableAgent and keeps its identity', () => {
+  it('keeps the durable main-agent identity', () => {
     expect(durableMainAgent.id).toBe('main-agent');
     expect(durableMainAgent.name).toBe('Chekku Assistant');
   });
@@ -204,6 +204,40 @@ describe('durable rollout (Task D, Fase 2: social cluster)', () => {
     expect(subAgents.socialMediaStrategistAgent).not.toBe(durableSocialMediaStrategistAgent);
     expect(subAgents.visualContentAgent).toBe(visualContentAgent);
     expect(subAgents.visualContentAgent).not.toBe(durableVisualContentAgent);
+  });
+});
+
+describe('durable wrapper description forwarding (agent catalog)', () => {
+  it('exposes each plain agent description through its durable wrapper', () => {
+    // The native /api/agents catalog serializes getDescription(); the
+    // upstream DurableAgent constructor drops the description, so every
+    // production wrapper must route through the local forwarding factory.
+    expect(durableMainAgent.getDescription()).toBe(mainAgent.getDescription());
+    expect(durablePmAgent.getDescription()).toBe(pmAgent.getDescription());
+    expect(durableQaWebAgent.getDescription()).toBe(qaWebAgent.getDescription());
+    expect(durableSocialMediaStrategistAgent.getDescription()).toBe(
+      socialMediaStrategistAgent.getDescription(),
+    );
+    expect(durableSocialMediaSupervisorAgent.getDescription()).toBe(
+      socialMediaSupervisorAgent.getDescription(),
+    );
+    expect(durableVisualContentAgent.getDescription()).toBe(
+      visualContentAgent.getDescription(),
+    );
+  });
+
+  it('keeps every durable code-agent description non-empty for the catalog', () => {
+    const durableAgents = [
+      durableMainAgent,
+      durablePmAgent,
+      durableQaWebAgent,
+      durableSocialMediaStrategistAgent,
+      durableSocialMediaSupervisorAgent,
+      durableVisualContentAgent,
+    ];
+    for (const agent of durableAgents) {
+      expect(agent.getDescription().length).toBeGreaterThan(0);
+    }
   });
 });
 

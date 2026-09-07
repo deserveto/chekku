@@ -1,6 +1,6 @@
 import { Agent, type AgentConfig, type ToolsInput } from '@mastra/core/agent';
-import { createDurableAgent } from '@mastra/core/agent/durable';
 
+import { createDescriptionForwardingDurableAgent } from '../mastra/durable-agent.js';
 import { gatewayCompatibilityProcessor } from '../mastra/processors/gateway-compatibility.js';
 import { createAgentContextLimiter, createAgentMemory, createCharBudgetGuard } from '../mastra/processors/context-limit.js';
 import { createTaskNudgeProcessor } from '../mastra/tasks/task-nudge-processor.js';
@@ -178,6 +178,6 @@ export const socialMediaSupervisorAgent = new Agent(socialMediaSupervisorAgentCo
  * the supervisor does not interrupt an in-flight delegated sub-agent turn
  * — it runs to completion and the abort lands at the next LLM step.
  */
-export const durableSocialMediaSupervisorAgent = createDurableAgent({
+export const durableSocialMediaSupervisorAgent = createDescriptionForwardingDurableAgent({
   agent: socialMediaSupervisorAgent as Agent<string, ToolsInput, undefined>,
 });
