@@ -104,7 +104,7 @@ describe('pm-agent (weekly and competitive analysis)', () => {
 });
 
 describe('pm-agent (durable execution pilot, N8_4)', () => {
-  it('wraps the plain agent with createDurableAgent and keeps its identity', () => {
+  it('keeps the durable wrapper identity', () => {
     // The public id must stay `pm-agent` so `getAgentById`, thread-id
     // ownership, and the /runs surface resolve unchanged.
     expect(durablePmAgent.id).toBe('pm-agent');
@@ -123,7 +123,7 @@ describe('pm-agent (durable execution pilot, N8_4)', () => {
 });
 
 describe('durable rollout (Task D, Fase 1: qa-web + main)', () => {
-  it('wraps qa-web-agent with createDurableAgent and keeps its identity', () => {
+  it('keeps the durable qa-web-agent identity', () => {
     expect(durableQaWebAgent.id).toBe('qa-web-agent');
     expect(durableQaWebAgent.name).toBe('QA Web Agent');
   });
@@ -144,7 +144,7 @@ describe('durable rollout (Task D, Fase 1: qa-web + main)', () => {
     );
   });
 
-  it('wraps main-agent with createDurableAgent and keeps its identity', () => {
+  it('keeps the durable main-agent identity', () => {
     expect(durableMainAgent.id).toBe('main-agent');
     expect(durableMainAgent.name).toBe('Chekku Assistant');
   });
@@ -188,17 +188,56 @@ describe('durable rollout (Task D, Fase 2: social cluster)', () => {
     expect(mastra.getAgentById('social-media-strategist-agent')).toBe(durableSocialMediaStrategistAgent);
   });
 
-  it('delegates strategy and visual delegation targets to the durable wrappers', () => {
-    // The supervisor's `agents` field is the delegation surface; the
-    // Content Writer stays plain there because the durable wrapper does
-    // not carry its Telegram channels.
+  it('keeps delegation targets plain because durable sub-agents break core 1.50.1 delegation', () => {
+    // The supervisor's `agents` field is the delegation surface. Core
+    // 1.50.1's network delegation wrapper reads `messageList` and `text`
+    // off the sub-agent stream result, and `DurableAgent.stream()` exposes
+    // neither — delegating to a durable wrapper always fails AFTER the
+    // sub-run completes. All three delegation targets therefore stay plain
+    // (durable execution still applies to each agent's own top-level runs).
     const supervisor = socialMediaSupervisorAgent as unknown as {
       __getStaticAgents?: () => Record<string, unknown>;
     };
     const subAgents = supervisor.__getStaticAgents?.() ?? {};
     expect(subAgents.socialMediaContentWriter).toBe(socialMediaContentWriter);
-    expect(subAgents.socialMediaStrategistAgent).toBe(durableSocialMediaStrategistAgent);
-    expect(subAgents.visualContentAgent).toBe(durableVisualContentAgent);
+    expect(subAgents.socialMediaStrategistAgent).toBe(socialMediaStrategistAgent);
+    expect(subAgents.socialMediaStrategistAgent).not.toBe(durableSocialMediaStrategistAgent);
+    expect(subAgents.visualContentAgent).toBe(visualContentAgent);
+    expect(subAgents.visualContentAgent).not.toBe(durableVisualContentAgent);
+  });
+});
+
+describe('durable wrapper description forwarding (agent catalog)', () => {
+  it('exposes each plain agent description through its durable wrapper', () => {
+    // The native /api/agents catalog serializes getDescription(); the
+    // upstream DurableAgent constructor drops the description, so every
+    // production wrapper must route through the local forwarding factory.
+    expect(durableMainAgent.getDescription()).toBe(mainAgent.getDescription());
+    expect(durablePmAgent.getDescription()).toBe(pmAgent.getDescription());
+    expect(durableQaWebAgent.getDescription()).toBe(qaWebAgent.getDescription());
+    expect(durableSocialMediaStrategistAgent.getDescription()).toBe(
+      socialMediaStrategistAgent.getDescription(),
+    );
+    expect(durableSocialMediaSupervisorAgent.getDescription()).toBe(
+      socialMediaSupervisorAgent.getDescription(),
+    );
+    expect(durableVisualContentAgent.getDescription()).toBe(
+      visualContentAgent.getDescription(),
+    );
+  });
+
+  it('keeps every durable code-agent description non-empty for the catalog', () => {
+    const durableAgents = [
+      durableMainAgent,
+      durablePmAgent,
+      durableQaWebAgent,
+      durableSocialMediaStrategistAgent,
+      durableSocialMediaSupervisorAgent,
+      durableVisualContentAgent,
+    ];
+    for (const agent of durableAgents) {
+      expect(agent.getDescription().length).toBeGreaterThan(0);
+    }
   });
 });
 
@@ -289,6 +328,19 @@ describe('social-media-supervisor-agent (instructions preview delegation)', () =
     expect(text).toContain('"Use generate_image with postId <id>"');
     expect(text).toContain('standalone preview');
   });
+
+  it('concept-block template matches the preview_image facts contract', async () => {
+    const { buildSupervisorInstructions } = await import('../social-media-supervisor-agent.js');
+    const text = buildSupervisorInstructions();
+    // Regression (2026-09): the template invited any number of long facts
+    // ("Panel count: <rough number>", "Concise description" formatting) while
+    // the preview_image schema caps facts at 3 entries of 80 characters each.
+    // The VCA transcribes the block near-verbatim, so an over-budget block
+    // deterministically fails tool input validation.
+    expect(text).toContain('2–3 entries');
+    expect(text).toContain('at most 80 characters total');
+    expect(text).not.toContain('Panel count');
+  });
 });
 
 describe('social-media-supervisor-agent (three sub-agents and routing)', () => {
@@ -302,10 +354,11 @@ describe('social-media-supervisor-agent (three sub-agents and routing)', () => {
       'socialMediaStrategistAgent',
       'visualContentAgent',
     ]);
-    // Task D Fase 2: the strategist and visual delegations run through the
-    // durable wrappers (identity assertions live in the Fase 2 describe
-    // block above); the Content Writer stays plain.
-    expect(subAgents.visualContentAgent).toBe(durableVisualContentAgent);
+    // Delegation targets stay plain (see the durable-rollout describe block:
+    // durable sub-agents break core 1.50.1's delegation result handling);
+    // durable wrappers are registered in the composition root instead.
+    expect(subAgents.visualContentAgent).toBe(visualContentAgent);
+    expect(subAgents.visualContentAgent).not.toBe(durableVisualContentAgent);
   });
 
   it('binds exactly the two research tools plus task tracking and nothing else', async () => {
@@ -469,7 +522,16 @@ describe('thread title generation (main agents only)', () => {
     ['social-media-supervisor-agent', socialMediaSupervisorAgent],
   ] as const)('enables Mastra title generation on %s', async (_id, agent) => {
     const memory = await agent.getMemory();
-    expect(memory?.getMergedThreadConfig().generateTitle).toBe(true);
+    const generateTitle = memory?.getMergedThreadConfig().generateTitle;
+    // Opt-in carries either the default boolean or the strict instructions
+    // object the first-turn title paths resolve.
+    expect(
+      generateTitle === true
+        || (typeof generateTitle === 'object'
+          && generateTitle !== null
+          && typeof generateTitle.instructions === 'string'
+          && generateTitle.instructions.length > 0),
+    ).toBe(true);
   });
 
   it.each([

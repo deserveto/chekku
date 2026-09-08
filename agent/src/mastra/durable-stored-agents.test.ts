@@ -9,6 +9,7 @@ function makeStoredAgent(id: string): Agent {
   return new Agent({
     id,
     name: `Stored ${id}`,
+    description: `Stored description for ${id}`,
     instructions: 'test agent',
     // A model callback keeps the durable wrapper's eager `getModel()` cheap
     // and offline — it only resolves the id string, never a provider call.
@@ -34,6 +35,19 @@ describe('durable stored agents (Task D Fase 3)', () => {
     // thread-id ownership, and the `/runs` surface resolve unchanged.
     expect(registered?.id).toBe('stored-echo-agent');
     expect(registry.getAgentById('stored-echo-agent')).toBe(registered);
+  });
+
+  it('forwards the stored description and preserves it through the fork path', () => {
+    // The upstream DurableAgent constructor drops the description; the
+    // local forwarding factory must keep it, and `__fork()` (editor and
+    // version-preview clones) must not lose the override because it
+    // rebuilds with `this.constructor`.
+    const registry = makeRegistry();
+    registry.addAgent(makeStoredAgent('stored-echo-agent'), 'stored-echo-agent', { source: 'stored' });
+    const registered = registry.listAgents()['stored-echo-agent'];
+
+    expect(registered?.getDescription()).toBe('Stored description for stored-echo-agent');
+    expect(registered?.__fork().getDescription()).toBe('Stored description for stored-echo-agent');
   });
 
   it('leaves the live registration untouched on duplicate keys (version-preview hydration)', () => {

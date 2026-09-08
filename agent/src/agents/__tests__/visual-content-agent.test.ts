@@ -178,6 +178,25 @@ describe('visual-content-agent (instructions)', () => {
     expect(text).toContain('visualIdentity');
   });
 
+  it('requires the schema-mandatory imagePrompt field in every tool call', async () => {
+    const text = await instructions();
+    // Regression (2026-09): the tool schema requires `imagePrompt`, but the
+    // instructions said "Instead of a single imagePrompt" — the model omitted
+    // the field and every preview_image call failed input validation, which
+    // fatally killed the supervisor delegation.
+    expect(text).toContain('REQUIRED — the tool schema rejects the call without it');
+    // The worked example must demonstrate the field too.
+    expect(text).toContain('"imagePrompt"');
+  });
+
+  it('tells the agent to shorten over-long fact lines instead of failing validation', async () => {
+    const text = await instructions();
+    // The supervisor concept block may carry "Short Title: description" lines
+    // longer than the 80-char schema cap; the agent compresses them.
+    expect(text).toContain('exceeds 80 characters');
+    expect(text).toContain('shorten it');
+  });
+
   it('forbids asking the image model for text, logos, headlines, numbers', async () => {
     const text = await instructions();
     expect(text).toContain('no text, no typography, no logos');

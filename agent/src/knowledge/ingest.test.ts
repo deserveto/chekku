@@ -9,7 +9,10 @@ import {
 
 import { runKnowledgeIngestion, type KnowledgeIngestionDeps } from './ingest.js';
 import type { EmbeddingsClient } from './embeddings.js';
-import type { KnowledgeVectorIndex } from './qdrant-index.js';
+import {
+  KnowledgeIndexError,
+  type KnowledgeVectorIndex,
+} from './qdrant-index.js';
 
 function createMemoryStorage(): BinaryObjectStorage {
   const objects = new Map<string, string>();
@@ -64,13 +67,19 @@ function createMemoryStorage(): BinaryObjectStorage {
 const USER = 'user-a';
 const TEXT = 'Fakta satu tentang produk. \n\nFakta dua tentang jadwal rilis. ';
 
-function createFakes(options: { embedError?: Error; upsertError?: Error; extract?: () => string } = {}) {
+function createFakes(options: {
+  embedError?: Error;
+  upsertError?: Error;
+  ensureError?: Error;
+  extract?: () => string;
+} = {}) {
   const store = createMemoryStorage();
   const upserted: Array<{ payload: Record<string, unknown> }> = [];
   const deleted: Array<{ resourceId: string; documentId: string }> = [];
   const index: KnowledgeVectorIndex = {
     async ensureCollection() {
       // dimension detection is covered by the qdrant-index tests
+      if (options.ensureError) throw options.ensureError;
     },
     async deleteDocumentPoints(resourceId, documentId) {
       deleted.push({ resourceId, documentId });
@@ -172,6 +181,51 @@ describe('runKnowledgeIngestion', () => {
     expect(result.error).toContain('embedding model request failed');
     expect(deleted).toContainEqual({ resourceId: USER, documentId });
     expect(upserted).toHaveLength(0);
+  });
+
+  it('distinguishes an unreachable index from a rejected update', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const unreachable = createFakes({
+      ensureError: new KnowledgeIndexError('unavailable', 'The knowledge index is currently unavailable.'),
+    });
+    const documentId = await upload(unreachable.store);
+    const result = await runKnowledgeIngestion({ documentId, resourceId: USER }, unreachable.deps);
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe(
+      'The knowledge index is currently unreachable. Check the Qdrant service and retry.',
+    );
+  });
+
+  it('keeps the generic index failure for format errors', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const malformed = createFakes({
+      ensureError: new KnowledgeIndexError('format', 'Unexpected payload shape.'),
+    });
+    const documentId = await upload(malformed.store);
+    const result = await runKnowledgeIngestion({ documentId, resourceId: USER }, malformed.deps);
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe('The knowledge index rejected the update.');
+  });
+
+  it('logs the failure code and document id at step level', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const broken = createFakes({
+      ensureError: new KnowledgeIndexError('unavailable', 'The knowledge index is currently unavailable.'),
+    });
+    const documentId = await upload(broken.store);
+    await runKnowledgeIngestion({ documentId, resourceId: USER }, broken.deps);
+
+    const logs = errorSpy.mock.calls.map((call) => call.map(String).join(' '));
+    expect(
+      logs.some((line) => line.includes('ingestion failed:') && line.includes('unavailable')),
+      'step-level log with code expected',
+    ).toBe(true);
+    expect(
+      logs.some((line) => line.includes('ingestion failed:') && line.includes(documentId)),
+      'step-level log with document id expected',
+    ).toBe(true);
   });
 
   it('deletes old vectors before upserting so retries never duplicate', async () => {

@@ -14,7 +14,10 @@ import {
 } from '@chekku/storage';
 
 import { composeVisual, loadBrandLogoBytes } from '../../image-generation/compositor.js';
-import { isImageGenerationClientError } from '../../image-generation/errors.js';
+import {
+  describeImageGenerationFailure,
+  isImageGenerationClientError,
+} from '../../image-generation/errors.js';
 import { imageClient } from '../../image-generation/client.js';
 import {
   CONTENT_PILLAR_SCHEMA,
@@ -252,6 +255,9 @@ export function createGenerateImageTool(options: GenerateImageToolOptions = {}) 
           ...(imageSize ? { imageSize } : {}),
         });
       } catch (error) {
+        console.warn(
+          `[generate_image] image generation failed: ${describeImageGenerationFailure(error)}`,
+        );
         if (isImageGenerationClientError(error)) {
           throw new Error(error.message);
         }
@@ -261,7 +267,10 @@ export function createGenerateImageTool(options: GenerateImageToolOptions = {}) 
       let logoBytes: Uint8Array;
       try {
         logoBytes = loadBrandLogoBytes(options.logoPath);
-      } catch {
+      } catch (error) {
+        console.warn(
+          `[generate_image] brand logo load failed: ${describeImageGenerationFailure(error)}`,
+        );
         throw new Error(SAFE_ERRORS.composition);
       }
 
@@ -285,7 +294,10 @@ export function createGenerateImageTool(options: GenerateImageToolOptions = {}) 
           logoBytes,
           canvasSize: canvasSizeFor(imageSize, canvasSize),
         });
-      } catch {
+      } catch (error) {
+        console.warn(
+          `[generate_image] composition failed: ${describeImageGenerationFailure(error)}`,
+        );
         throw new Error(SAFE_ERRORS.composition);
       }
 
@@ -305,6 +317,9 @@ export function createGenerateImageTool(options: GenerateImageToolOptions = {}) 
       try {
         await store.createBytes(built.objectKey, composed, finalMime);
       } catch (error) {
+        console.warn(
+          `[generate_image] visual storage failed: ${describeImageGenerationFailure(error)}`,
+        );
         if (error instanceof ObjectStorageError) {
           throw new Error(SAFE_ERRORS.storage);
         }
@@ -315,6 +330,9 @@ export function createGenerateImageTool(options: GenerateImageToolOptions = {}) 
       try {
         updated = await attachVisualAsset(store, postId, built.asset);
       } catch (error) {
+        console.warn(
+          `[generate_image] metadata attach failed: ${describeImageGenerationFailure(error)}`,
+        );
         if (error instanceof ObjectStorageError) {
           throw new Error(SAFE_ERRORS.storage);
         }

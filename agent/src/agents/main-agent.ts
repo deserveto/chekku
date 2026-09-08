@@ -1,7 +1,12 @@
 import { Agent, type AgentConfig, type ToolsInput } from '@mastra/core/agent';
-import { createDurableAgent } from '@mastra/core/agent/durable';
 import { providerContextSchema, type ProviderContext } from './context.js';
-import { createAgentContextLimiter, createAgentMemory, createCharBudgetGuard } from '../mastra/processors/context-limit.js';
+import { createDescriptionForwardingDurableAgent } from '../mastra/durable-agent.js';
+import {
+  createAgentContextLimiter,
+  createAgentMemory,
+  createCharBudgetGuard,
+  TITLE_GENERATION_INSTRUCTIONS,
+} from '../mastra/processors/context-limit.js';
 import { searchKnowledgeBaseTool } from '../mastra/tools/knowledge-search.js';
 import { createTaskNudgeProcessor } from '../mastra/tasks/task-nudge-processor.js';
 import { TASK_GUIDANCE, createTaskSignals } from '../mastra/tasks/task-signals.js';
@@ -10,10 +15,11 @@ import { getServerModel } from '../providers/model.js';
 const mainAgentConfig: AgentConfig<string, ToolsInput, undefined, ProviderContext> = {
   id: 'main-agent',
   name: 'Chekku Assistant',
-  description: 'A general-purpose AI assistant for everyday tasks.',
+  description:
+    'A general-purpose AI assistant for everyday tasks: answering questions, drafting and improving content, reasoning through problems, and searching uploaded documents in the Knowledge Base. Use for general requests; browser QA belongs to the QA Web Agent.',
   model: () => getServerModel(),
   requestContextSchema: providerContextSchema,
-  memory: createAgentMemory({ generateTitle: true }),
+  memory: createAgentMemory({ generateTitle: { instructions: TITLE_GENERATION_INSTRUCTIONS } }),
   signals: createTaskSignals(),
   tools: { searchKnowledgeBaseTool },
   inputProcessors: [createAgentContextLimiter(), createTaskNudgeProcessor(), createCharBudgetGuard()],
@@ -34,13 +40,14 @@ export const mainAgent = new Agent(mainAgentConfig);
 
 /**
  * Durable rollout (Task D, Fase 1): the general-purpose assistant runs
- * through `createDurableAgent` for a uniform runtime across the studio —
+ * through `createDescriptionForwardingDurableAgent` (the local wrapper that
+ * also forwards the wrapped agent's description to the native catalog) —
  * same contract as `durablePmAgent` (in-process PubSub, no Redis, public
  * id stays `main-agent`, composition key stays `mainAgent`, `/runs`
  * surface unchanged, `cleanup()` on terminal states, crash recovery not
  * available in the pinned `@mastra/core` 1.50.1). Its only caller is the
  * chat run surface.
  */
-export const durableMainAgent = createDurableAgent({
+export const durableMainAgent = createDescriptionForwardingDurableAgent({
   agent: mainAgent as Agent<string, ToolsInput, undefined>,
 });

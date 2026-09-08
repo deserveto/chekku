@@ -285,3 +285,52 @@ describe('generateSocialPostVisual workflow', () => {
     expect(generateSocialPostVisual).toBeDefined();
   });
 });
+
+describe('defaultGenerateVisual (durable-run-memory wiring)', () => {
+  it('routes through the durable visual agent with delegation memory options when no override is injected', async () => {
+    // `defaultGenerateVisual` closes over the module-level durable agent and
+    // constructs the memory options internally, so the seam is the module
+    // itself: mock it, re-import the workflow fresh, and run the step WITHOUT
+    // the `generateVisual` dep override so the default executes.
+    const generate = vi.fn();
+    vi.doMock('../../../agents/visual-content-agent.js', () => ({
+      durableVisualContentAgent: { generate },
+    }));
+    try {
+      vi.resetModules();
+      const fresh = await import('../generate-social-post-visual.js');
+      const { root, social } = createMemoryStorage();
+      await seedCaptionApprovedPost(social);
+      generate.mockImplementation(async () => {
+        await attachVisualLikeTheTool(social);
+        return { text: 'Visual ready.' };
+      });
+
+      const result = await fresh.runGenerateSocialPostVisual(
+        { postId: POST_ID },
+        { storeFactory: () => root },
+      );
+
+      // The fake agent output flowed through as the step result: the
+      // generation succeeded and the re-read found the attached asset.
+      expect(result).toEqual({ ok: true, postId: POST_ID, hasVisual: true });
+      expect(generate).toHaveBeenCalledTimes(1);
+      const [prompt, options] = generate.mock.calls[0] as unknown as [
+        string,
+        { memory?: { thread: string; resource: string } },
+      ];
+      expect(prompt).toContain(`Use generate_image with postId ${POST_ID}`);
+      // The durable engine fails a run without a memory thread, so the
+      // default must carry the delegation-memory options from
+      // `durable-run-memory.ts` (reserved `delegation` resource, canonical
+      // `{agentId}-delegation-{uuid}` thread shape).
+      expect(options?.memory?.resource).toBe('delegation');
+      expect(options?.memory?.thread).toMatch(
+        /^visual-content-agent-delegation-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+      );
+    } finally {
+      vi.doUnmock('../../../agents/visual-content-agent.js');
+      vi.resetModules();
+    }
+  });
+});

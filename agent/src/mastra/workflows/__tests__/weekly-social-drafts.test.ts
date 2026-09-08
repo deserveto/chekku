@@ -42,8 +42,7 @@ const envMock = vi.hoisted(() => ({
   PUBLIC_HOLIDAY_CACHE_DIR: '',
   WEB_READER_BASE_URL: '',
   // The durable wrappers (supervisor, strategist, visual) resolve their
-  // model eagerly at construction (`createDurableAgent` calls
-  // `agent.getModel()`), and importing the supervisor transitively imports
+  // model eagerly during construction, and importing the supervisor imports
   // the strategist/visual modules. Without a configured model the wrapper
   // construction throws under this partial env mock. `getServerModel`
   // only returns a router id string — no network access happens here.
@@ -877,13 +876,24 @@ describe('Content Writer mode resolution (review issue #1)', () => {
       // `generate` is overloaded; cast through unknown to read the options arg.
       const [, options] = spy.mock.calls[0] as unknown as [
         unknown,
-        { instructions?: unknown; requestContext?: { get?: (k: string) => unknown } },
+        {
+          instructions?: unknown;
+          requestContext?: { get?: (k: string) => unknown };
+          memory?: { thread: string; resource: string };
+        },
       ];
       // The bug under review: passing `instructions` here overrode the
       // supervisor's routing. The fix carries the mode in requestContext and
       // passes NO instructions option.
       expect(options?.instructions).toBeUndefined();
       expect(options?.requestContext?.get?.('socialDraftMode')).toBe('canonical');
+      // The durable engine computes state signals per LLM step and fails a
+      // run without a memory thread, so the workflow must pass the
+      // delegation-memory options from `durable-run-memory.ts`.
+      expect(options?.memory?.resource).toBe('delegation');
+      expect(options?.memory?.thread).toMatch(
+        /^social-media-supervisor-agent-delegation-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+      );
     } finally {
       spy.mockRestore();
     }

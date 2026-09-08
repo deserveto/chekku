@@ -2,6 +2,7 @@ import { createNamespacedObjectStorage, SOCIAL_MEDIA_AGENT_ID, type ObjectStorag
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ImageGenerationClient, ImageGenerationResult } from '../../image-generation/types.js';
+import { ImageGenerationClientError } from '../../image-generation/errors.js';
 import { createPreviewImageTool, PREVIEW_ID_PATTERN } from './preview-image.js';
 
 const TEST_LOGO_PATH = 'agent/src/assets/__test-logo.png';
@@ -217,7 +218,24 @@ describe('preview_image tool', () => {
     // tool must reject (not hang, not leak a stack).
     await expect(runTool(tool)).rejects.toThrow();
   });
-});
 
-// Silence the unused-import lint for the vi import when no spies are declared.
-void vi;
+  it('logs the failure cause server-side while rejecting with the fixed safe message', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const failing: ImageGenerationClient = {
+        async generate() {
+          throw new ImageGenerationClientError('configuration');
+        },
+      };
+      const root = fakeRootStore();
+      const tool = makeTool({ imageClient: failing, storeFactory: () => root });
+
+      await expect(runTool(tool)).rejects.toThrow('Image generation is not configured.');
+      expect(warn).toHaveBeenCalledWith(
+        '[preview_image] image generation failed: category=configuration',
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});

@@ -367,6 +367,14 @@ Ownership is structural: every registry key is scoped under the session user's i
 
 No-config smoke: start the server without `QDRANT_URL`/`LLM_EMBEDDING_MODEL`, upload a document, and confirm the Knowledge page shows it as `Failed` with `Knowledge indexing is not configured…` (or `...could not be started`) rather than hanging in `Processing`. Deterministic tests require no live Qdrant or embedding endpoint.
 
+Troubleshooting failed ingestion — the fixed reasons on the Knowledge page map to distinct boundaries, and the agent server log names the failing operation:
+
+- `Knowledge indexing is not configured…` — `QDRANT_URL` or `LLM_EMBEDDING_MODEL` is unset on the agent server.
+- `The embedding model request failed.` — the embeddings gateway call failed (timeout, non-JSON, or non-2xx). The agent log carries `[knowledge] embeddings request failed: status=…` / `…: timeout`.
+- `The knowledge index is currently unreachable. Check the Qdrant service and retry.` — a Qdrant HTTP call failed as unavailable/format. The agent log names the exact operation: `[knowledge] qdrant ensureCollection|deleteDocumentPoints|upsertPoints|search failed: <code>` — check the `qdrant` container and the persisted `QDRANT_URL` first.
+- `Knowledge index "…" was created for N-dimension vectors…` — the collection dimension mismatches the configured embedding model; restore the model or reindex into a new collection.
+- `[knowledge-ingestion] ingestion failed: <code> documentId: <id>` — the step-level line pairs every persisted failure with its error class and document id.
+
 Security note: the dev-stack Qdrant runs keyless (loopback-only publish) and holds every tenant's chunks in plaintext — an accepted local-first trade-off. Production deployments must set `QDRANT_API_KEY` (and configure the matching key on Qdrant) or front Qdrant with an authenticated proxy.
 
 ## Chat slash-command picker

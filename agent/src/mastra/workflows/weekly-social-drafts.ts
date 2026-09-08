@@ -12,6 +12,7 @@ import {
   socialMediaContentWriter,
 } from '../../agents/social-media-content-writer.js';
 import { durableSocialMediaSupervisorAgent } from '../../agents/social-media-supervisor-agent.js';
+import { createDurableRunMemoryOptions } from '../../agents/durable-run-memory.js';
 import { env } from '../../config/env.js';
 import {
   createPublicHolidayClient,
@@ -626,7 +627,10 @@ export interface WeeklySocialDraftsDeps {
  */
 export const defaultGenerateCanonical: CanonicalGenerateFn = (prompt) =>
   durableSocialMediaSupervisorAgent
-    .generate(prompt, { requestContext: createSocialDraftRequestContext('canonical') })
+    .generate(prompt, {
+      requestContext: createSocialDraftRequestContext('canonical'),
+      ...createDurableRunMemoryOptions('social-media-supervisor-agent'),
+    })
     .then((result) => result.text);
 
 /**

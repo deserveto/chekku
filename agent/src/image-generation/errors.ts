@@ -40,3 +40,19 @@ export function isImageGenerationClientError(
 ): value is ImageGenerationClientError {
   return value instanceof ImageGenerationClientError;
 }
+
+/**
+ * Server-side failure summary for operator logs. The chat stream keeps
+ * receiving only the fixed safe message; this keeps the underlying category
+ * or error name visible in the agent server console so a swallowed cause
+ * (e.g. a 403 model-access denial mapped to "not configured") is diagnosable.
+ */
+export function describeImageGenerationFailure(error: unknown): string {
+  if (error instanceof ImageGenerationClientError) {
+    return `category=${error.category}`;
+  }
+  if (error instanceof Error) {
+    return `${error.name}: ${error.message}`.slice(0, 300);
+  }
+  return String(error).slice(0, 300);
+}

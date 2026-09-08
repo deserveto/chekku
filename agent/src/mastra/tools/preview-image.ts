@@ -13,7 +13,10 @@ import { z } from 'zod';
 
 import { env } from '../../config/env.js';
 import { composeVisual, loadBrandLogoBytes } from '../../image-generation/compositor.js';
-import { isImageGenerationClientError } from '../../image-generation/errors.js';
+import {
+  describeImageGenerationFailure,
+  isImageGenerationClientError,
+} from '../../image-generation/errors.js';
 import { imageClient } from '../../image-generation/client.js';
 import {
   FACTS_SCHEMA,
@@ -230,6 +233,9 @@ export function createPreviewImageTool(options: PreviewImageToolOptions = {}) {
           ...(imageSize ? { imageSize } : {}),
         });
       } catch (error) {
+        console.warn(
+          `[preview_image] image generation failed: ${describeImageGenerationFailure(error)}`,
+        );
         if (isImageGenerationClientError(error)) {
           throw new Error(error.message);
         }
@@ -239,7 +245,10 @@ export function createPreviewImageTool(options: PreviewImageToolOptions = {}) {
       let logoBytes: Uint8Array;
       try {
         logoBytes = loadBrandLogoBytes(options.logoPath);
-      } catch {
+      } catch (error) {
+        console.warn(
+          `[preview_image] brand logo load failed: ${describeImageGenerationFailure(error)}`,
+        );
         throw new Error(SAFE_ERRORS.composition);
       }
 
@@ -263,7 +272,10 @@ export function createPreviewImageTool(options: PreviewImageToolOptions = {}) {
           logoBytes,
           canvasSize: imageSize === '2K' ? 2048 : canvasSize,
         });
-      } catch {
+      } catch (error) {
+        console.warn(
+          `[preview_image] composition failed: ${describeImageGenerationFailure(error)}`,
+        );
         throw new Error(SAFE_ERRORS.composition);
       }
 
@@ -276,6 +288,9 @@ export function createPreviewImageTool(options: PreviewImageToolOptions = {}) {
       try {
         await store.createBytes(objectKey, composed, 'image/png');
       } catch (error) {
+        console.warn(
+          `[preview_image] preview storage failed: ${describeImageGenerationFailure(error)}`,
+        );
         if (error instanceof ObjectStorageError) {
           throw new Error(SAFE_ERRORS.storage);
         }
