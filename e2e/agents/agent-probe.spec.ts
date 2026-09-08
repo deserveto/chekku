@@ -1,15 +1,11 @@
 import { expect, test, type Page } from '@playwright/test';
+import { closeAuthDb, sweepStaleTestUsers } from '../helpers/auth-db';
 import {
-  closeAuthDb,
-  deleteTestUser,
-  markEmailVerified,
-  sweepStaleTestUsers,
-} from '../helpers/auth-db';
+  createVerifiedChatSession,
+  deleteChatSessionUser,
+} from '../helpers/chat-session';
 
-const runStamp = `${Date.now().toString(36)}-${process.pid ?? 0}`;
-const testEmail = `e2e-agent-probe-${runStamp}@chekku.test`;
-const testPassword = 'e2e-TestPass-42';
-const testUserName = 'E2E Agent Probe';
+let testEmail: string;
 
 const PROBE_PROMPT = 'Apa yang kamu bisa lakukan untuk saya?';
 const CATALOG_TIMEOUT_MS = 30_000;
@@ -23,39 +19,20 @@ const PER_AGENT_BUDGET_MS = 180_000;
 let page: Page;
 
 test.beforeAll(async ({ browser }) => {
-  test.setTimeout(120_000);
+  // The shared helper backs off on the auth rate limiter's 429, which a full
+  // suite run reaches; budget for one retry wait on top of the sign-up flow.
+  test.setTimeout(240_000);
   // Remove users left behind by an interrupted previous run.
   await sweepStaleTestUsers();
 
   const context = await browser.newContext();
   page = await context.newPage();
-
-  await page.goto('/signup');
-  await page.getByLabel('Name').fill(testUserName);
-  await page.getByLabel('Email').fill(testEmail);
-  await page.getByLabel('Password', { exact: true }).fill(testPassword);
-  await page.getByLabel('Confirm password').fill(testPassword);
-  await page.getByRole('button', { name: 'Create account' }).click();
-  await expect(page.getByText('Check your email.')).toBeVisible();
-
-  // Local dev cannot complete a real mailbox round trip.
-  await markEmailVerified(testEmail);
-
-  await page.goto('/login');
-  await page.getByLabel('Email').fill(testEmail);
-  await page.getByLabel('Password', { exact: true }).fill(testPassword);
-  await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page).toHaveURL(/\/agents$/);
+  testEmail = await createVerifiedChatSession(page, 'agent-probe');
 });
 
 test.afterAll(async () => {
   await page?.context().close().catch(() => {});
-  await deleteTestUser(testEmail).catch((error: unknown) => {
-    console.warn(
-      '[e2e] agent-probe test-user cleanup failed (%s); the next run sweeps stale rows',
-      error instanceof Error ? error.name : 'unknown',
-    );
-  });
+  if (testEmail) await deleteChatSessionUser(testEmail);
   await closeAuthDb();
 });
 
