@@ -56,6 +56,10 @@ test.describe('authenticated agent catalog', () => {
 
     const agentCards = page.locator('article.studio-agent-card');
     await expect(agentCards).toHaveCount(5);
+    // Regression guard for PR #53: a durable wrapper dropping the agent
+    // description used to render this fallback sentence on every card while
+    // ids, counts, and tabs all stayed green.
+    const descriptionFallback = 'No description has been provided for this agent.';
     for (const agentId of [
       'main-agent',
       'pm-agent',
@@ -64,6 +68,11 @@ test.describe('authenticated agent catalog', () => {
       'social-media-supervisor-agent',
     ]) {
       await expect(page.getByText(agentId, { exact: true })).toBeVisible();
+      const card = page
+        .locator('article.studio-agent-card')
+        .filter({ has: page.locator('code', { hasText: agentId }) });
+      await expect(card).toHaveCount(1);
+      await expect(card).not.toContainText(descriptionFallback);
     }
 
     const allTab = page.getByRole('tab', { name: /All/ });
