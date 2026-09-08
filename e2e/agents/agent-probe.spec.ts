@@ -59,12 +59,19 @@ test.afterAll(async () => {
   await closeAuthDb();
 });
 
+interface CatalogAgent {
+  id: string;
+  /** True for a user-created (`source: 'stored'`) agent's card. */
+  isStored: boolean;
+}
+
 /**
- * Read the agent ids the studio catalog actually offers. This is the same list
- * a user sees, so built-ins and stored agents are both covered and a newly
- * created agent is picked up without touching this spec.
+ * Read the agent ids the studio catalog actually offers. This is the same
+ * list a user sees, so a newly added built-in is picked up without touching
+ * this spec. Stored (user-created) agents are reported but not probed here —
+ * see the skip note where this is consumed.
  */
-async function discoverCatalogAgentIds(): Promise<string[]> {
+async function discoverCatalogAgents(): Promise<CatalogAgent[]> {
   await page.goto('/agents');
   const cards = page.locator('article.studio-agent-card');
   await expect(
@@ -73,14 +80,23 @@ async function discoverCatalogAgentIds(): Promise<string[]> {
   ).toBeVisible({ timeout: CATALOG_TIMEOUT_MS });
   await expect(page.locator('.studio-alert-error')).toHaveCount(0);
 
-  const ids = (
-    await cards.locator('.studio-agent-card-body code').allInnerTexts()
-  )
-    .map((value) => value.trim())
-    .filter(Boolean);
+  const count = await cards.count();
+  const agents: CatalogAgent[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const card = cards.nth(index);
+    const id = (
+      await card.locator('.studio-agent-card-body code').innerText()
+    ).trim();
+    if (!id) continue;
+    const isStored =
+      (await card.locator('.studio-source-badge.stored').count()) > 0;
+    agents.push({ id, isStored });
+  }
 
-  expect(ids.length, 'the agent catalog listed no agents').toBeGreaterThan(0);
-  return ids;
+  expect(agents.length, 'the agent catalog listed no agents').toBeGreaterThan(
+    0,
+  );
+  return agents;
 }
 
 /** Open a fresh chat for one agent through the catalog and probe it once. */
@@ -139,27 +155,56 @@ async function probeAgent(agentId: string): Promise<void> {
   await expect(page.getByText('Assistant is idle')).toBeVisible();
 }
 
-test('every agent in the studio catalog answers the capability probe without crashing', async () => {
-  const agentIds = await discoverCatalogAgentIds();
+test('every built-in agent in the studio catalog answers the capability probe without crashing', async () => {
+  // Provisional upper bound so the ambient default test timeout (30s) never
+  // races the catalog-render expect inside discoverCatalogAgents (also 30s):
+  // that expect only starts counting after `goto('/agents')` has already
+  // spent part of the ambient budget, so without this the ambient timeout
+  // always fires first and swallows the "is the agent server running?"
+  // diagnostic. Refined below once the real agent count is known.
+  test.setTimeout(CATALOG_TIMEOUT_MS * 2);
+
+  const agents = await discoverCatalogAgents();
+  const builtIn = agents.filter((agent) => !agent.isStored);
+  const stored = agents.filter((agent) => agent.isStored);
+
   // Budget scales with what the catalog actually holds.
-  test.setTimeout(CATALOG_TIMEOUT_MS + agentIds.length * PER_AGENT_BUDGET_MS);
-  console.log('[e2e] probing %d catalog agents: %s', agentIds.length, agentIds.join(', '));
+  test.setTimeout(CATALOG_TIMEOUT_MS + builtIn.length * PER_AGENT_BUDGET_MS);
+  console.log(
+    '[e2e] probing %d built-in catalog agent(s): %s',
+    builtIn.length,
+    builtIn.map((agent) => agent.id).join(', '),
+  );
+  if (stored.length > 0) {
+    // Stored agents are user-created and deliberately skipped: opening their
+    // chat can call ensureStoredAgentUsesServerGateway, which writes a real
+    // model-gateway migration to the shared stored-agent record, and their
+    // configured tools (e.g. Garage MCP) could execute real side effects in
+    // response to the probe prompt. A half-configured custom agent must also
+    // not fail regression coverage of the built-ins this suite exists to
+    // protect. Probe a specific stored agent manually when needed.
+    console.log(
+      '[e2e] skipping %d stored (user-created) agent(s), not probed: %s',
+      stored.length,
+      stored.map((agent) => agent.id).join(', '),
+    );
+  }
 
   const failures: string[] = [];
-  for (const agentId of agentIds) {
+  for (const agent of builtIn) {
     // Catching outside the step keeps it red in the report while letting the
     // remaining agents run — one broken agent must not hide the others.
     await test
-      .step(`probe agent "${agentId}"`, () => probeAgent(agentId))
+      .step(`probe agent "${agent.id}"`, () => probeAgent(agent.id))
       .catch((error: unknown) => {
         failures.push(
-          `${agentId}: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`,
+          `${agent.id}: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`,
         );
       });
   }
 
   expect(
     failures,
-    `${failures.length} of ${agentIds.length} agents failed the probe:\n${failures.join('\n')}`,
+    `${failures.length} of ${builtIn.length} built-in agents failed the probe:\n${failures.join('\n')}`,
   ).toEqual([]);
 });

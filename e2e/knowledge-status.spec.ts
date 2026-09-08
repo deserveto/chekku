@@ -41,12 +41,15 @@ test.describe('knowledge chip reconciliation', () => {
 
     await sendChatTurn(page, 'What file did I attach? Answer in one sentence.');
 
+    // KnowledgeStatusChip is deliberately icon-only (no visible text): the
+    // state lives in the accessible label / tooltip, not the element's text
+    // content, so assert on the accessible name rather than toContainText.
     const chip = page.locator('.chat-knowledge-status').first();
     await expect(chip).toBeVisible({ timeout: 30_000 });
-    await expect(chip).toContainText('Indexing');
+    await expect(chip).toHaveAccessibleName(/Indexing/);
 
     // The chip must REACH a terminal state, not stay "indexing" forever.
-    await expect(chip).toContainText('Added to Knowledge', {
+    await expect(chip).toHaveAccessibleName('Added to Knowledge', {
       timeout: 120_000,
     });
 
