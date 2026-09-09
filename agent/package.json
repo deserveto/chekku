@@ -23,12 +23,12 @@
     "@ai-sdk/openai-compatible-v5": "npm:@ai-sdk/openai-compatible@1.0.39",
     "@chat-adapter/telegram": "4.34.0",
     "@chekku/storage": "^0.1.0",
-    "@mastra/agent-browser": "^0.4.0",
-    "@mastra/core": "^1.49.0",
-    "@mastra/editor": "^0.13.5",
-    "@mastra/loggers": "^1.2.0",
-    "@mastra/mcp": "^1.14.0",
-    "@mastra/memory": "^1.22.1",
+    "@mastra/agent-browser": "0.4.1",
+    "@mastra/core": "1.50.1",
+    "@mastra/editor": "0.13.13",
+    "@mastra/loggers": "1.2.0",
+    "@mastra/mcp": "1.14.0",
+    "@mastra/memory": "1.26.2",
     "@mastra/pg": "1.15.0",
     "@napi-rs/canvas": "^0.1.65",
     "@qdrant/js-client-rest": "1.19.0",
@@ -40,7 +40,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.1.0",
-    "mastra": "^1.18.0",
+    "mastra": "1.18.2",
     "typescript": "^6.0.3"
   }
 }
