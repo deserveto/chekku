@@ -47,6 +47,9 @@
   "overrides": {
     "@mastra/core": "1.50.1",
     "@mastra/deployer": "1.50.1",
+    "@mastra/memory": {
+      "zod": "^4.4.3"
+    },
     "@mastra/pg": "1.15.0",
     "@mastra/server": "1.50.1",
     "@puppeteer/browsers": "3.2.2",
