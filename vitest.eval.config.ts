@@ -10,11 +10,11 @@ import { defineConfig } from 'vitest/config';
  * - Deliberately NO setupFiles: vitest.setup.js pins inert LLM_* defaults
  *   (`??=`) that would shadow the real agent/.env gateway values this eval
  *   needs, and mocks PostgresStore for composition-root imports this eval
- *   never performs (the eval registers the strategist on its own storageless
- *   Mastra instance instead).
+ *   never performs (each eval registers its target on its own in-memory Mastra
+ *   instance instead).
  * - Long timeout: each case is a live agent turn plus judge calls.
  *
- * Run: npm run eval:social-strategy
+ * Run one agent eval at a time: npm run eval:social-strategy or npm run eval:qa-web
  */
 export default defineConfig({
   test: {
