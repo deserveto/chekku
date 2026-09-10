@@ -12,18 +12,22 @@ const CATALOG_TIMEOUT_MS = 30_000;
 const RUN_START_TIMEOUT_MS = 30_000;
 const RESPONSE_TIMEOUT_MS = 150_000;
 /**
- * Worst-case legal duration of ONE probe, derived from the phase caps the
- * probe itself waits on — never a hand-picked number. A budget smaller than
- * the sum of the caps expires the derived suite timeout mid-loop once a few
- * agents run slow, which silently swallows the aggregated failure report at
- * the end (the test still fails, but without the per-agent summary).
+ * Upper bound for ONE probe, derived from the phase caps the probe itself
+ * waits on — never a hand-picked number. A budget smaller than the sum of
+ * the caps expires the derived suite timeout mid-loop once a few agents run
+ * slow, which silently swallows the aggregated failure report at the end
+ * (the test still fails, but without the per-agent summary).
  */
 const PER_AGENT_BUDGET_MS =
   RUN_START_TIMEOUT_MS + // Open chat → ?agent= URL
   RUN_START_TIMEOUT_MS + // composer ready
   RUN_START_TIMEOUT_MS + // run start / fast-terminal signal
   RESPONSE_TIMEOUT_MS + // run terminal (stop button hidden)
-  30_000; // goto navigation + reply assertions headroom
+  // Headroom for the phases without their own named cap: the per-probe
+  // `page.goto('/agents')` carries Playwright's default 30s navigation
+  // timeout, and the post-reply assertions run on the default 5s expect
+  // timeout each — together they can legally outlast a bare-30s headroom.
+  90_000;
 
 // One shared page for the whole file: sign in once, then probe each agent the
 // catalog offers. Keeps the suite under the auth rate-limit caps.
@@ -112,6 +116,13 @@ async function probeAgent(agentId: string): Promise<void> {
     timeout: RUN_START_TIMEOUT_MS,
   });
 
+  // The catalog's "Open chat" resolves the agent's MOST RECENT thread, not
+  // necessarily a fresh one; this suite's fresh-user-per-run invariant is
+  // what guarantees an empty thread here. Pin it: on a reused thread the
+  // previous turn's assistant article would already satisfy the 'reply'
+  // fast-path below and false-green the probe.
+  await expect(page.locator('article.chat-message')).toHaveCount(0);
+
   await composer.fill(PROBE_PROMPT);
   await page.getByRole('button', { name: 'Send message' }).click();
 
@@ -125,10 +136,14 @@ async function probeAgent(agentId: string): Promise<void> {
   // budget and reports "stop generation never appeared" instead of the real
   // error, and an ultra-fast reply can retire the stop button before the
   // first visibility poll (latent flake on fast local gateways). The
-  // assistant article's mere PRESENCE cannot be a signal: the composer
-  // renders an optimistic empty placeholder the moment a send happens, so
-  // only the stop button, reply CONTENT, the error class, or the composer
-  // alert carry meaning.
+  // assistant article's mere PRESENCE cannot be a signal: the composer adds
+  // an optimistic empty placeholder to React state the moment a send
+  // happens, but it only reaches the DOM when the run subscription begins
+  // after `startRun` resolves — the same React commit that mounts the stop
+  // button (between the click and that commit there are zero assistant
+  // articles) — and once attached it renders only a TypingIndicator with
+  // empty text until content streams. So only the stop button, reply
+  // CONTENT, the error class, or the composer alert carry meaning.
   type RunSignal = 'stop' | 'alert' | 'error-reply' | 'reply';
   let runSignal: RunSignal | null = null;
   await expect
