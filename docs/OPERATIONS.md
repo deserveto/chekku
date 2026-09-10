@@ -313,6 +313,21 @@ npm run test:web-reader:live
 
 Without a reachable Reader, the live command stops with a local base-URL-required test error before any provider access. Live provider access is optional and not required by CI.
 
+## Agent evals (on demand)
+
+Agent quality evals live under `agent/src/evals/` and run through `vitest.eval.config.ts`, separate from the unit-test config: `.eval.ts` files are not discovered by `npm test`, `npm run check`, or CI. Evals make live LLM calls through the same OpenAI-compatible gateway the agents use; the only configuration they need is a real `agent/.env` (`LLM_BASE_URL`, `LLM_API_KEY`, `LLM_DEFAULT_MODEL`). No Postgres, Garage, SearXNG, or Reader service is required — the eval registers the agent under test on its own storageless Mastra instance and runs single-turn (threadless), so nothing persists.
+
+```bash
+npm run eval:social-strategy
+```
+
+The social-media-strategy eval covers the Social Media Strategist's critical path (generate strategi konten — brand-strategy mode). Two committed cases (`agent/src/evals/social-media-strategy/cases.ts`) each carry a self-contained brand request and a golden-reference Content Strategy Brief. Scorers:
+
+- `strategy-brief-structure` — deterministic gate (no LLM): output must be a substantive brief containing the required sections. A gate failure fails the run (exit non-zero) — it signals a structural regression.
+- `strategy-vs-golden` — LLM judge (same gateway transport, `LLM_DEFAULT_MODEL`) scoring coverage of golden key points, scope alignment, and factual consistency; weighted average tracked against a lenient 0.6 threshold. A missed threshold keeps the run green (verdict `scored`); per meeting N11_2 the bar is "acceptable, not perfect" because the golden references were authored by a SOTA model while the pipeline runs the medium model.
+
+The command prints per-case scores with judge reasons, per-scorer averages, gate/threshold results, and the final verdict. Re-run it before deployments that touch the strategist's instructions, model, or gateway to catch quality regressions.
+
 ## PM competitive analysis
 
 PM Agent exposes `weekly-report-analysis` and `competitive-analysis` as user-invocable skills. Weekly analysis behavior and `pmr_...` links remain unchanged. Competitive prompts may use slash convention or natural language:
