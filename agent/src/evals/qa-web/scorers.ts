@@ -81,7 +81,7 @@ function extractMessageArrayText(output: unknown, preferredRole?: string): strin
   const preferred = preferredRole
     ? messages.filter((message) => message.role === preferredRole)
     : messages.filter((message) => message.role === 'assistant');
-  const selected = preferredRole || preferred.length > 0 ? preferred : messages;
+  const selected = preferred.length > 0 ? preferred : messages;
   return selected
     .map(extractMessageText)
     .filter(Boolean)
@@ -324,7 +324,7 @@ export function evaluateQaTrajectory(
     if (gotoStep && !gotoUrl) scopeViolations.push('browser_goto:missing-url');
     if (gotoUrl) {
       try {
-        if (!['/', '/index.html'].includes(new URL(gotoUrl).pathname)) scopeViolations.push('browser_goto:path');
+        if (!['/', '/.', '/index.html'].includes(new URL(gotoUrl).pathname)) scopeViolations.push('browser_goto:path');
       } catch {
         scopeViolations.push('browser_goto:path');
       }

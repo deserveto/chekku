@@ -52,7 +52,7 @@ export async function startQaWebFixture(): Promise<QaWebFixture> {
       sendHtml(response, 405, '<h1>Method Not Allowed</h1>');
       return;
     }
-    if (pathname === '/' || pathname === '/index.html') {
+    if (pathname === '/' || pathname === '/.' || pathname === '/index.html') {
       sendHtml(response, 200, HOME_PAGE);
       return;
     }

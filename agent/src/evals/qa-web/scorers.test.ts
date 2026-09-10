@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ToolCallStep, Trajectory } from '@mastra/core/evals';
+import type { ScorerRunInputForAgent, ToolCallStep, Trajectory } from '@mastra/core/evals';
 
 import {
   QA_WEB_FIXTURE_FACTS,
@@ -12,6 +12,7 @@ import {
   computeQaJudgeScore,
   evaluateQaReportStructure,
   evaluateQaTrajectory,
+  extractQaRequestOrigin,
   extractQaTrajectory,
   extractQaOutputText,
 } from './scorers.js';
@@ -55,15 +56,23 @@ function messageOutput(text: string): unknown {
   ];
 }
 
-function agentScorerInput(): never {
+function agentScorerInput(): ScorerRunInputForAgent {
   return {
     inputMessages: [
-      { id: 'u1', role: 'user', content: [{ type: 'text', text: 'Lakukan smoke test.' }] },
+      {
+        id: 'u1',
+        role: 'user',
+        createdAt: new Date(),
+        content: {
+          format: 2,
+          parts: [{ type: 'text', text: 'Lakukan smoke test.' }],
+        },
+      },
     ],
     rememberedMessages: [],
     systemMessages: [],
     taggedSystemMessages: {},
-  } as never;
+  };
 }
 
 function successfulTool(name: string): ToolCallStep {
@@ -132,6 +141,15 @@ describe('extractQaOutputText', () => {
   it('returns an empty string for unknown shapes', () => {
     expect(extractQaOutputText({ unexpected: true })).toBe('');
     expect(extractQaOutputText(undefined)).toBe('');
+  });
+
+  it('falls back to all messages when a preferred role is absent', () => {
+    expect(
+      extractQaRequestOrigin([
+        { role: 'assistant', content: [{ type: 'text', text: 'Previous answer.' }] },
+        { role: 'human', content: [{ type: 'text', text: 'Open https://127.0.0.1:43123/.' }] },
+      ]),
+    ).toBe('https://127.0.0.1:43123');
   });
 });
 
@@ -240,6 +258,31 @@ describe('evaluateQaTrajectory', () => {
     expect(check.unsafe).toEqual([]);
     expect(check.ordered).toBe(true);
     expect(check.passed).toBe(true);
+  });
+
+  it('accepts the dot-segment home path used by the eval prompt', () => {
+    const homeUrl = 'http://127.0.0.1:43123/.';
+    const pricingUrl = 'http://127.0.0.1:43123/pricing';
+    const check = evaluateQaTrajectory(
+      {
+        steps: [
+          { ...successfulTool('browser_goto'), toolArgs: { url: homeUrl }, toolResult: { success: true, url: homeUrl } },
+          {
+            ...successfulTool('browser_snapshot'),
+            toolResult: { success: true, url: homeUrl, snapshot: 'home' },
+          },
+          { ...successfulTool('browser_click'), toolResult: { success: true, url: pricingUrl } },
+          {
+            ...successfulTool('browser_snapshot'),
+            toolResult: { success: true, url: pricingUrl, snapshot: 'pricing' },
+          },
+        ],
+      },
+      { expectedOrigin: 'http://127.0.0.1:43123' },
+    );
+
+    expect(check.passed).toBe(true);
+    expect(check.scopeViolations).toEqual([]);
   });
 
   it('reports missing required browser actions', () => {

@@ -27,6 +27,16 @@ describe('startQaWebFixture', () => {
     expect(pricingHtml).toContain(`<h1>${QA_WEB_FIXTURE_FACTS.pricingHeading}</h1>`);
   });
 
+  it('serves the prompt home path with a dot segment', async () => {
+    fixture = await startQaWebFixture();
+
+    const response = await fetch(`${fixture.baseUrl}/.`);
+    const html = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(html).toContain(`<h1>${QA_WEB_FIXTURE_FACTS.heading}</h1>`);
+  });
+
   it('returns 404 for paths outside the fixture contract', async () => {
     fixture = await startQaWebFixture();
     const response = await fetch(`${fixture.baseUrl}/outside-scope`);
