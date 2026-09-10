@@ -187,6 +187,7 @@ Local file: `client/.env.local`
 | `npm run lint` | Run the client ESLint configuration. |
 | `npm test` | Run all Vitest tests. |
 | `npm run test:web-reader:live` | Optionally read `https://example.com/` through the self-hosted Reader container; requires `WEB_READER_BASE_URL` to resolve to a running `reader` service. |
+| `npm run eval:social-strategy` | Run the on-demand Mastra eval for the Social Media Strategist's critical path (generate strategi konten): 2 golden-reference cases, a deterministic brief-structure gate, and an LLM-judge score. Requires a configured model gateway in `agent/.env` (`LLM_BASE_URL`, `LLM_API_KEY`, `LLM_DEFAULT_MODEL`); no other service. Not part of `npm run check` or CI. |
 | `npm run test:e2e` | Run the local Playwright E2E suites (`e2e/`); type-checks the specs first. Requires Postgres running and a configured `client/.env.local`; the agent-probe suite additionally needs the agent server and its model gateway running (see below). |
 | `npm run check` | Run typecheck, lint, and tests. |
 | `npm run build` | Build Mastra and Next.js for production. |
@@ -220,6 +221,10 @@ Notes:
 - The client's auth rate limiter allows 5 POSTs per scope per 60 seconds; the suite runs serially with `workers: 1` and stays under the caps. If you re-run the suite within a minute of a previous run, wait ~60 seconds or restart the dev client first. The agent probe suite adds one signup and one sign-in POST, which keeps both scopes within the caps even when run right after the auth suite.
 - Email verification cannot be completed through a real mailbox in local dev, so the suite signs up through the UI and then flips `emailVerified` directly in `chekku_auth` via `e2e/helpers/auth-db.ts` (connection resolved from `AUTH_DATABASE_URL`; override with `CHEKKU_E2E_AUTH_DATABASE_URL`). Test users are deleted afterwards.
 - Point the suite at another origin with `CHEKKU_E2E_BASE_URL` (default `http://localhost:3000`). The override retargets the browser only; the target stack must already be running — the Playwright `webServer` readiness poll always checks the local origin.
+
+### Agent evals (Mastra scorers)
+
+On-demand quality evals live under `agent/src/evals/` and run through a dedicated vitest config (`vitest.eval.config.ts`), so `.eval.ts` files never execute inside `npm test`, `npm run check`, or CI — they make real LLM calls through the production model gateway. `npm run eval:social-strategy` evaluates the Social Media Strategist's critical path (generate strategi konten): each case sends a self-contained brand-strategy request, compares the drafted Content Strategy Brief against a committed golden reference (`cases.ts`, authored with a SOTA model per `reference/N11_2.md`) through two scorers — a deterministic brief-structure gate (must pass) and an LLM judge scoring coverage / scope alignment / factual consistency against a lenient 0.6 threshold (informational; the run only fails on the gate). The judge reuses the same OpenAI-compatible gateway transport as the agent under test, so no extra credentials are needed.
 
 ## Production deployment
 
