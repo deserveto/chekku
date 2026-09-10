@@ -188,6 +188,7 @@ Local file: `client/.env.local`
 | `npm test` | Run all Vitest tests. |
 | `npm run test:web-reader:live` | Optionally read `https://example.com/` through the self-hosted Reader container; requires `WEB_READER_BASE_URL` to resolve to a running `reader` service. |
 | `npm run eval:social-strategy` | Run the on-demand Mastra eval for the Social Media Strategist's critical path (generate strategi konten): 2 golden-reference cases, a deterministic brief-structure gate, and an LLM-judge score. Requires a configured model gateway in `agent/.env` (`LLM_BASE_URL`, `LLM_API_KEY`, `LLM_DEFAULT_MODEL`); no other service. Not part of `npm run check` or CI. |
+| `npm run eval:pm` | Run the live PM Agent eval suite (3 golden-reference critical paths, deterministic hard gates, advisory LLM judge) against the configured model gateway in `agent/.env`; no other service. Not part of `npm run check` or CI. |
 | `npm run test:e2e` | Run the local Playwright E2E suites (`e2e/`); type-checks the specs first. Requires Postgres running and a configured `client/.env.local`; the agent-probe suite additionally needs the agent server and its model gateway running (see below). |
 | `npm run check` | Run typecheck, lint, and tests. |
 | `npm run build` | Build Mastra and Next.js for production. |
