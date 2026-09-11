@@ -328,6 +328,20 @@ The social-media-strategy eval covers the Social Media Strategist's critical pat
 
 The command prints per-case scores with judge reasons, per-scorer averages, gate/threshold results, and the final verdict. Re-run it before deployments that touch the strategist's instructions, model, or gateway to catch quality regressions.
 
+### PM Agent evals
+
+The PM suite lives in `agent/src/evals/pm/` and covers three response-critical paths: weekly risk analysis, missing competitive-analysis anchor, and competitive-analysis intake with too many competitors. Run it with:
+
+```bash
+npm run eval:pm
+```
+
+It uses an eval-only in-memory Mastra store and activates only the PM skill tool, so Garage, SearXNG, Web Reader, and Postgres are not required. Each case is scored by an advisory LLM judge plus a deterministic hard gate (required/forbidden phrases and patterns, forbidden research/persistence tools, cross-domain save receipts) wired as a native Mastra gate. The command prints both scores per case with judge reasons and fails when any hard gate fails; judge scores below `0.75` are advisory warnings only.
+
+Because the pinned `DurableAgent` returns its final answer in `output.text` rather than in the message list when the model emits intro text before a tool call, the eval target (`agent/src/evals/pm/target.ts`) reconstructs the scorer payload for `runEvals`; production run execution is unchanged.
+
+### QA Web Agent evals
+
 ```bash
 npx playwright install chromium   # once per machine; add --with-deps on fresh Linux hosts missing system libraries
 npm run eval:qa-web

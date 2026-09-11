@@ -33,6 +33,7 @@
     "test:web-reader:live": "vitest run agent/src/mastra/web-reader/client.live.test.ts",
     "eval:social-strategy": "vitest run --config vitest.eval.config.ts agent/src/evals/social-media-strategy/run.eval.ts",
     "eval:qa-web": "vitest run --config vitest.eval.config.ts agent/src/evals/qa-web/run.eval.ts",
+    "eval:pm": "vitest run --config vitest.eval.config.ts agent/src/evals/pm/run-pm-evals.eval.ts",
     "test:e2e": "tsc -p e2e --noEmit && playwright test",
     "check": "npm run typecheck && npm run lint && npm test && tsc -p e2e --noEmit"
   },
