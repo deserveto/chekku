@@ -1,30 +1,26 @@
+import { randomUUID } from 'node:crypto';
+
 import { runEvals } from '@mastra/core/evals';
 import type { Agent, ToolsInput } from '@mastra/core/agent';
 import { Mastra } from '@mastra/core/mastra';
 import { InMemoryStore } from '@mastra/core/storage';
 import { expect, it } from 'vitest';
 
-import { durablePmAgent } from '../../agents/pm-agent.js';
-import { OpenAICompatibleGateway } from '../../mastra/gateways/openai-compatible.js';
+import { env } from '../../config/env.js';
 import { PM_EVAL_CASES } from './fixtures.js';
-import { createDurableEvalTarget } from './target.js';
-import {
-  PM_EVAL_HARD_GATE_THRESHOLD,
-  PM_EVAL_SCORE_THRESHOLD,
-  pmHardGateScorer,
-  pmReferenceScorer,
-} from './scorer.js';
+import { PM_EVAL_HARD_GATE_THRESHOLD, PM_EVAL_SCORE_THRESHOLD } from './scorer.js';
 
-// PM Agent carries its concrete ProviderContext generic. Mastra's runEvals
-// overload accepts unknown request context, so widen only this eval boundary.
-//
-// DurableAgent in the pinned Mastra version returns FullOutput without the
-// scorer payload that runEvals expects. The adapter delegates to the
-// production durable instance, then reconstructs that payload from its
-// returned messages so the eval still exercises the production path.
-const evalTarget = createDurableEvalTarget(
-  durablePmAgent as unknown as Agent<string, ToolsInput, undefined, unknown>,
-);
+function assertLlmConfigured(): void {
+  const missing = (['LLM_BASE_URL', 'LLM_API_KEY', 'LLM_DEFAULT_MODEL'] as const).filter(
+    (key) => !env[key].trim(),
+  );
+  if (missing.length > 0) {
+    throw new Error(
+      `The PM eval needs a live model gateway. Missing in agent/.env: ${missing.join(', ')}. ` +
+        'Set them (LLM_BASE_URL, LLM_API_KEY, LLM_DEFAULT_MODEL) and re-run npm run eval:pm.',
+    );
+  }
+}
 
 type PmEvalResult = {
   id: string;
@@ -48,6 +44,28 @@ function report(line = ''): void {
 }
 
 it('scores PM Agent critical paths against golden references', async () => {
+  assertLlmConfigured();
+
+  // Keep the model-resolving imports after the preflight: importing the PM
+  // agent module constructs the production DurableAgent, whose constructor
+  // eagerly resolves the model, so an env-less machine must hit the
+  // actionable message above — never an import-time crash.
+  const [
+    { durablePmAgent },
+    { OpenAICompatibleGateway },
+    { createDurableEvalTarget },
+    { createPmReferenceScorer, pmHardGateScorer },
+    { getServerModel },
+  ] = await Promise.all([
+    import('../../agents/pm-agent.js'),
+    import('../../mastra/gateways/openai-compatible.js'),
+    import('./target.js'),
+    import('./scorer.js'),
+    import('../../providers/model.js'),
+  ]);
+
+  const pmReferenceScorer = createPmReferenceScorer(getServerModel());
+
   // Register the same durable PM Agent used by production against an eval-only
   // runtime, never the production Postgres runtime.
   const evalStorage = new InMemoryStore({ id: 'pm-agent-evals' });
@@ -61,6 +79,14 @@ it('scores PM Agent critical paths against golden references', async () => {
 
   const memory = await durablePmAgent.getMemory();
   memory?.setStorage(evalStorage);
+
+  // DurableAgent in the pinned Mastra version returns FullOutput without the
+  // scorer payload that runEvals expects. The adapter delegates to the
+  // production durable instance, then reconstructs that payload from its
+  // returned messages so the eval still exercises the production path.
+  const evalTarget = createDurableEvalTarget(
+    durablePmAgent as unknown as Agent<string, ToolsInput, undefined, unknown>,
+  );
 
   const caseResults: PmEvalResult[] = [];
 
@@ -77,11 +103,14 @@ it('scores PM Agent critical paths against golden references', async () => {
       scorers: [pmReferenceScorer, pmHardGateScorer],
       gates: [pmHardGateScorer],
       targetOptions: {
-        // PM's task signals require an active Memory scope. A unique scope per
-        // case prevents conversation history from leaking between fixtures.
+        // PM's task signals require an active Memory scope. A fresh scope per
+        // case, in the canonical {agentId}-{resourceId}-{uuid} thread shape
+        // under the reserved `evals` resource, prevents conversation history
+        // from leaking between fixtures and keeps the eval out of every user
+        // thread listing.
         memory: {
-          thread: `pm-eval-${PM_EVAL_CASES[index].id}`,
-          resource: 'pm-agent-evals',
+          thread: `pm-agent-evals-${randomUUID()}`,
+          resource: 'evals',
         },
         // Skill activation is part of the PM routing path. Keep research and
         // persistence tools disabled so this suite needs only the model gateway.

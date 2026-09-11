@@ -34,6 +34,13 @@ const FORBIDDEN_RESEARCH_AND_PERSISTENCE_TOOLS = [
  * Small, response-focused PM suite. External research and persistence are
  * intentionally excluded from this first-level eval so it runs without
  * Garage or SearXNG.
+ *
+ * The weekly case scores a deliberate response-only variant: the harness
+ * disables persistence tools and the gate forbids save receipts, so the
+ * POSITIVE half of the PM determinism contract (a complete analysis MUST be
+ * saved and MUST emit `Saved reportId:` / `Saved analysisId:`) is covered
+ * nowhere in this suite. Never reuse this gate against a production-shaped
+ * run where saving is expected.
  */
 export const PM_EVAL_CASES: PmEvalCase[] = [
   {
@@ -96,7 +103,9 @@ The payment provider sandbox "intermittently returns 502", which can block or ma
         ],
         forbiddenPhrases: FORBIDDEN_SAVE_RECEIPTS,
         requiredPatterns: [
-          '\\*\\*Risk Rating:\\s*(?:8|9|10)\\/10\\s*[-\\u2014]\\s*IN-DANGER',
+          // CRITICAL issues mandate a 9-10 rating per the weekly skill's hard
+          // rule, and the rating line is accepted bolded or plain.
+          '\\*{0,2}Risk Rating\\*{0,2}:\\s*(?:9|10)\\/10\\s*[-\\u2014]\\s*IN-DANGER',
         ],
         forbiddenTools: FORBIDDEN_RESEARCH_AND_PERSISTENCE_TOOLS,
       },
@@ -130,8 +139,13 @@ Please provide the anchor product and, if you have them, any mandatory competito
       hardChecks: {
         requiredPhrases: ['anchor', 'research'],
         forbiddenPhrases: FORBIDDEN_SAVE_RECEIPTS,
+        // Ask-for-the-anchor behavior, phrasing-agnostic: an ask verb (in
+        // English or Indonesian) near "anchor", a need for a named product,
+        // or the anchor requested first. Enumerating deferral connectives
+        // ("before", "until", …) both missed correct refusals and accepted
+        // non-deferring text.
         requiredPatterns: [
-          '(?:before|until|without|prior\\s+to).{0,80}(?:research|competitive[-\\s]analysis)|(?:can(?:not|\'t)?|will\\s+not|won\'t).{0,80}(?:research|competitive[-\\s]analysis)',
+          '(?:(?:name|provide|confirm|specify|need|sebutkan|berikan|tentukan)[^.\\n]{0,80}anchor)|(?:need[^.\\n]{0,80}(?:anchor|named product))|(?:anchor[^.\\n]{0,80}(?:first|sebelum|dahulu))',
         ],
         forbiddenTools: FORBIDDEN_RESEARCH_AND_PERSISTENCE_TOOLS,
       },
@@ -166,9 +180,14 @@ After you confirm the reduced set, I can research each required product using pr
         requiredPhrases: ['Notion', 'competitor'],
         forbiddenPhrases: FORBIDDEN_SAVE_RECEIPTS,
         requiredPatterns: [
-          '(?:eight|8)\\s+(?:supplied\\s+)?competitors',
+          // Count mentioned in either order ("eight (8) competitors",
+          // "8 seed competitors", "delapan kompetitor", …), not just the
+          // golden's exact adjacency.
+          '(?:(?:eight|8|delapan)[^.\\n]{0,40}(?:competitor|kompetitor)|(?:competitor|kompetitor)[^.\\n]{0,40}(?:eight|8|delapan))',
           '(?:at\\s+most|no\\s+more\\s+than|maximum(?:\\s+of)?|max\\.?|five\\s+to).{0,40}(?:seven|7)|(?:5|five)\\s*[-\\u2013\\u2014]\\s*(?:7|seven)',
-          '(?:before|prior to|until).{0,60}research',
+          // Research deferred until the list is narrowed, in either clause
+          // order ("before research", "researching until", "after … research").
+          '(?:(?:before|until|prior\\s+to|after|once|sebelum|setelah)[^.\\n]{0,60}resea(?:rch|rching)|resea(?:rch|rching)[^.\\n]{0,60}(?:before|until|prior\\s+to|after|once|sebelum|setelah))',
         ],
         forbiddenTools: FORBIDDEN_RESEARCH_AND_PERSISTENCE_TOOLS,
       },

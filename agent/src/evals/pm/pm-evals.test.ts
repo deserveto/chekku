@@ -4,9 +4,12 @@ import { runEvals } from '@mastra/core/evals';
 import { describe, expect, it, vi } from 'vitest';
 
 import { durablePmAgent } from '../../agents/pm-agent.js';
-import { PM_EVAL_CASES } from './fixtures.js';
+import { getServerModel } from '../../providers/model.js';
+import { PM_EVAL_CASES, type PmEvalReference } from './fixtures.js';
 import { buildDurableScoringData, createDurableEvalTarget } from './target.js';
 import {
+  computePmJudgeScore,
+  createPmReferenceScorer,
   evaluatePmHardChecks,
   PM_EVAL_HARD_GATE_THRESHOLD,
   PM_EVAL_SCORE_THRESHOLD,
@@ -14,8 +17,30 @@ import {
   extractAssistantText,
   extractToolInvocationEvidence,
   pmHardGateScorer,
-  pmReferenceScorer,
 } from './scorer.js';
+
+// vitest.setup.js seeds inert LLM_* defaults before imports, so resolving the
+// judge model here is safe under `npm test`; the live runner resolves it for
+// real after its own preflight.
+const pmReferenceScorer = createPmReferenceScorer(getServerModel());
+
+function referenceWith(
+  hardChecks: Partial<PmEvalReference['hardChecks']>,
+): PmEvalReference {
+  return {
+    referenceResponse: 'ok',
+    mustInclude: [],
+    mustNot: [],
+    evaluationMode: 'test',
+    hardChecks: {
+      requiredPhrases: [],
+      forbiddenPhrases: [],
+      requiredPatterns: [],
+      forbiddenTools: [],
+      ...hardChecks,
+    },
+  };
+}
 
 describe('PM Agent eval fixtures', () => {
   it('contains the selected critical paths with inspectable golden references', () => {
@@ -47,9 +72,13 @@ describe('PM Agent eval fixtures', () => {
     expect(prompt).toContain(item.input);
     expect(prompt).toContain(item.reference.referenceResponse);
     expect(prompt).toContain('actual PM response');
-    expect(prompt).toContain('Observed tool trajectory');
+    expect(prompt).toContain('OBSERVED TOOL TRAJECTORY');
     expect(prompt).toContain('must include');
     expect(prompt).toContain('must not');
+    // Model-authored text is fenced behind sentinels so an output echoing
+    // section headers or embedding instructions stays data for the judge.
+    expect(prompt).toContain('BEGIN UNTRUSTED USER REQUEST');
+    expect(prompt).toContain('BEGIN UNTRUSTED ACTUAL PM AGENT RESPONSE');
   });
 
   it('extracts assistant text while ignoring tool messages', () => {
@@ -356,6 +385,127 @@ describe('PM Agent eval fixtures', () => {
         item.id,
       ).toEqual({ passed: true, failures: [] });
     }
+  });
+
+  it('anchors markdown-heading required phrases to line starts', () => {
+    const deeperHeading = evaluatePmHardChecks(
+      referenceWith({ requiredPhrases: ['## Summary'] }),
+      '### Summary\ncontent',
+    );
+    expect(deeperHeading.passed).toBe(false);
+    expect(deeperHeading.failures).toContain('missing required phrase: ## Summary');
+    expect(
+      evaluatePmHardChecks(
+        referenceWith({ requiredPhrases: ['## Summary'] }),
+        'prose first\n\n## Summary\ncontent',
+      ).passed,
+    ).toBe(true);
+  });
+
+  it('fails on a missing required phrase even when nothing else is wrong', () => {
+    // Mutation guard: every other `passed: false` expectation in this suite is
+    // simultaneously covered by a pattern or a forbidden check, so disabling
+    // the required-phrase branch must fail here.
+    const result = evaluatePmHardChecks(
+      referenceWith({ requiredPhrases: ['## On Track'] }),
+      'All good.\n## Summary\nNothing else missing.',
+    );
+    expect(result.passed).toBe(false);
+    expect(result.failures).toEqual(['missing required phrase: ## On Track']);
+  });
+
+  it('matches forbidden tool names exactly, not by prefix and not inside results', () => {
+    const reference = referenceWith({ forbiddenTools: ['search_web'] });
+    expect(evaluatePmHardChecks(
+      reference,
+      'response',
+      '- 1. search_web_v2 (result) args={} result=ok',
+    ).passed,
+    ).toBe(true);
+    expect(evaluatePmHardChecks(
+      reference,
+      'response',
+      '- 1. skill (result) args={} result=loaded\n- 2. search_web (result) args={} result=ok',
+    ).passed,
+    ).toBe(false);
+    // A tool RESULT whose payload mentions a forbidden tool name must not
+    // trip the invocation check.
+    expect(evaluatePmHardChecks(
+      reference,
+      'response',
+      '- 1. skill (result) args={} result=- search_web was used previously',
+    ).passed,
+    ).toBe(true);
+  });
+
+  it('flags forbidden save receipts regardless of casing', () => {
+    const result = evaluatePmHardChecks(
+      referenceWith({ forbiddenPhrases: ['Saved reportId:'] }),
+      'saved reportid: pmr_20260101120000_deadbeef',
+    );
+    expect(result.passed).toBe(false);
+    expect(result.failures).toContain('contains forbidden phrase: Saved reportId:');
+  });
+
+  it('rejects a whole-reply code fence but allows inline fences', () => {
+    const wrapped = evaluatePmHardChecks(
+      referenceWith({ requiredPhrases: ['risk'] }),
+      '```markdown\nrisk review\n```',
+    );
+    expect(wrapped.passed).toBe(false);
+    expect(wrapped.failures).toContain('response is wrapped in a code fence');
+    expect(evaluatePmHardChecks(
+      referenceWith({ requiredPhrases: ['risk'] }),
+      'risk review:\n```json\n{"a":1}\n```\ndone',
+    ).passed,
+    ).toBe(true);
+  });
+
+  it('keeps the rating pattern robust to bolding and strict to critical severity', () => {
+    const [ratingPattern] = PM_EVAL_CASES[0].reference.hardChecks.requiredPatterns;
+    const rating = new RegExp(ratingPattern, 'i');
+    expect(rating.test('**Risk Rating: 9/10 - IN-DANGER**')).toBe(true);
+    expect(rating.test('Risk Rating: 9/10 - IN-DANGER')).toBe(true);
+    expect(rating.test('Risk Rating: 10/10 — IN-DANGER')).toBe(true);
+    expect(rating.test('**Risk Rating: 8/10 - IN-DANGER**')).toBe(false);
+  });
+
+  it('matches competitor-count, deferral, and anchor-ask phrasings beyond golden wording', () => {
+    const [countPattern, , deferPattern] = PM_EVAL_CASES[2].reference.hardChecks.requiredPatterns;
+    const count = new RegExp(countPattern, 'i');
+    expect(count.test('You listed eight (8) competitors.')).toBe(true);
+    expect(count.test('The request includes 8 seed competitors.')).toBe(true);
+    expect(count.test('please select at most seven competitors to keep')).toBe(false);
+    const defer = new RegExp(deferPattern, 'i');
+    expect(defer.test("I can't begin researching until you narrow the list.")).toBe(true);
+    expect(defer.test('I cannot begin research until the anchor is named.')).toBe(true);
+    expect(defer.test('Only after that will I begin the research.')).toBe(true);
+
+    const [askPattern] = PM_EVAL_CASES[1].reference.hardChecks.requiredPatterns;
+    const ask = new RegExp(askPattern, 'i');
+    expect(ask.test('Please name the anchor product first. Only after that will I begin the research.')).toBe(true);
+    expect(ask.test('Please provide the anchor product and, if you have them, any mandatory competitors.')).toBe(true);
+    expect(ask.test('I need at least one named product before starting the competitive analysis.')).toBe(true);
+    expect(ask.test('Starting the competitive analysis now.')).toBe(false);
+  });
+
+  it('aggregates judge dimensions with clamping and falls back to the holistic score', () => {
+    expect(
+      computePmJudgeScore({ score: 0.9, correctness: 1, completeness: 0.8, relevance: 1, safety: 1 }),
+    ).toBeCloseTo(0.95);
+    // A zero safety dimension must pull the aggregate down even when the
+    // judge's holistic score is high.
+    expect(
+      computePmJudgeScore({ score: 0.8, correctness: 1, completeness: 1, relevance: 1, safety: 0 }),
+    ).toBe(0.75);
+    // Out-of-range judge numbers clamp instead of zeroing the analysis.
+    expect(
+      computePmJudgeScore({ score: 0, correctness: 1.5, completeness: 0.5, relevance: 1, safety: 1 }),
+    ).toBeCloseTo(0.875);
+    // Non-finite dimensions fall back to the clamped holistic score.
+    expect(
+      computePmJudgeScore({ score: 1.2, correctness: Number.NaN, completeness: 1, relevance: 1, safety: 1 }),
+    ).toBe(1);
   });
 
   it('defines one Mastra scorer with score and reason steps', () => {
