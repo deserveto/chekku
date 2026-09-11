@@ -315,7 +315,7 @@ Without a reachable Reader, the live command stops with a local base-URL-require
 
 ## Agent evals (on demand)
 
-Agent quality evals live under `agent/src/evals/` and run through `vitest.eval.config.ts`, separate from the unit-test config: `.eval.ts` files are not discovered by `npm test`, `npm run check`, or CI. Evals make live LLM calls through the same OpenAI-compatible gateway the agents use; the only configuration they need is a real `agent/.env` (`LLM_BASE_URL`, `LLM_API_KEY`, `LLM_DEFAULT_MODEL`). No Postgres, Garage, SearXNG, or Reader service is required — the eval registers the agent under test on its own storageless Mastra instance and runs single-turn (threadless), so nothing persists.
+Agent quality evals live under `agent/src/evals/` and run through `vitest.eval.config.ts`, separate from the unit-test config: `.eval.ts` files are not discovered by `npm test`, `npm run check`, or CI. Evals make live LLM calls through the same OpenAI-compatible gateway the agents use; configure `LLM_BASE_URL`, `LLM_API_KEY`, and `LLM_DEFAULT_MODEL` in `agent/.env`. Each eval registers its target on a lightweight Mastra instance with `InMemoryStore` and uses a fresh in-memory evaluation thread isolated under the `evals` resource, so no Postgres, Garage, SearXNG, or Reader service is required and no production data is persisted.
 
 ```bash
 npm run eval:social-strategy
@@ -327,6 +327,21 @@ The social-media-strategy eval covers the Social Media Strategist's critical pat
 - `strategy-vs-golden` — LLM judge (same gateway transport, `LLM_DEFAULT_MODEL`) scoring coverage of golden key points, scope alignment, and factual consistency; weighted average tracked against a lenient 0.6 threshold. A missed threshold keeps the run green (verdict `scored`); per meeting N11_2 the bar is "acceptable, not perfect" because the golden references were authored by a SOTA model while the pipeline runs the medium model.
 
 The command prints per-case scores with judge reasons, per-scorer averages, gate/threshold results, and the final verdict. Re-run it before deployments that touch the strategist's instructions, model, or gateway to catch quality regressions.
+
+```bash
+npx playwright install chromium   # once per machine; add --with-deps on fresh Linux hosts missing system libraries
+npm run eval:qa-web
+```
+
+The QA Web eval covers one critical read-only smoke-test case for `qa-web-agent` against a local HTTP fixture. The fixture has a stable home page and `/pricing` route, so the score does not depend on a remote website. Scorers:
+
+- `qa-browser-trajectory` — deterministic gate requiring the ordered `browser_goto`, pre-click `browser_snapshot`, a successful `browser_click`, and post-click `browser_snapshot` path, a same-origin `/pricing` destination reached after a click, and no prohibited interaction/navigation tools (`browser_type`, `browser_press`, `browser_select`, `browser_dialog`, `browser_drag`, `browser_evaluate`, `browser_back`, or `browser_tabs`). Benign extra clicks are allowed before the pricing navigation.
+- `qa-report-structure` — deterministic gate requiring a substantive report with `Summary`, `Checks`, `Evidence`, and `Blockers` sections plus five PASS/FAIL checks covering the requested facts.
+- `qa-report-vs-golden` — LLM judge scoring task coverage, evidence accuracy, scope safety, and report clarity against the committed golden reference. It uses `LLM_DEFAULT_MODEL` through the existing gateway by default; its 0.6 threshold is reported as `passed` or `scored`, and a deterministic gate failure is the only QA Web quality failure that makes the command exit non-zero.
+
+The command prints the case score, gate results, judge reason, aggregate score, and final verdict. If the model gateway or Chromium is missing, it fails before importing the agent and prints the exact configuration/install action needed.
+
+Security note: the local fixture avoids a remote-site dependency, but this eval launches a real headless Chromium with unrestricted outbound network egress. Prompt instructions and trajectory checks are post-hoc evaluation controls, not a network sandbox. Run the command only in a trusted environment and do not use a browser profile containing sensitive credentials.
 
 ## PM competitive analysis
 
