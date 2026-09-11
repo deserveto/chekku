@@ -6,13 +6,14 @@
  *   npm run eval:qa-web
  *
  * This file is intentionally outside the regular Vitest include pattern. It
- * makes one live agent call and one judge call, then prints the score report.
+ * makes one live agent turn, a possible memory-title call, and one judge call,
+ * then prints the score report.
  */
 
 import { randomUUID } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
 
-import { chromium } from '@playwright/test';
+import { chromium } from 'playwright-core';
 import { describe, it } from 'vitest';
 import { Mastra } from '@mastra/core';
 import { runEvals } from '@mastra/core/evals';
@@ -221,9 +222,12 @@ describe('eval: qa-web-agent — public read-only smoke test', () => {
       } finally {
         if (browserModule) {
           try {
-            const closeResult = await browserModule.browser.closeBrowser();
-            if ('success' in closeResult && closeResult.success !== true) {
-              console.warn('[qa-web eval] Browser cleanup returned an error result.');
+            const browserState = await browserModule.browser.getBrowserState();
+            if (browserState) {
+              const closeResult = await browserModule.browser.closeBrowser();
+              if ('success' in closeResult && closeResult.success !== true) {
+                console.warn('[qa-web eval] Browser cleanup returned an error result.');
+              }
             }
           } catch {
             console.warn('[qa-web eval] Browser cleanup threw an error.');

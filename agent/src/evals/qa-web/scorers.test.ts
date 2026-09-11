@@ -9,6 +9,7 @@ import {
 import {
   MIN_QA_REPORT_OUTPUT_CHARS,
   REQUIRED_QA_REPORT_SECTIONS,
+  buildQaJudgePrompt,
   computeQaJudgeScore,
   evaluateQaReportStructure,
   evaluateQaTrajectory,
@@ -65,7 +66,7 @@ function agentScorerInput(): ScorerRunInputForAgent {
         createdAt: new Date(),
         content: {
           format: 2,
-          parts: [{ type: 'text', text: 'Lakukan smoke test.' }],
+          parts: [{ type: 'text', text: 'Lakukan smoke test pada http://127.0.0.1:43123/.' }],
         },
       },
     ],
@@ -91,6 +92,25 @@ function completeTrajectory(): Trajectory {
       successfulTool('browser_snapshot'),
       successfulTool('browser_click'),
       successfulTool('browser_snapshot'),
+    ],
+  };
+}
+
+function completeTrajectoryForOrigin(origin: string): Trajectory {
+  const homeUrl = `${origin}/.`;
+  const pricingUrl = `${origin}/pricing`;
+  return {
+    steps: [
+      { ...successfulTool('browser_goto'), toolArgs: { url: homeUrl }, toolResult: { success: true, url: homeUrl } },
+      {
+        ...successfulTool('browser_snapshot'),
+        toolResult: { success: true, url: homeUrl, snapshot: 'home' },
+      },
+      { ...successfulTool('browser_click'), toolResult: { success: true, url: pricingUrl } },
+      {
+        ...successfulTool('browser_snapshot'),
+        toolResult: { success: true, url: pricingUrl, snapshot: 'pricing' },
+      },
     ],
   };
 }
@@ -175,6 +195,15 @@ describe('createQaWebEvalCase', () => {
   });
 });
 
+describe('trajectory origin requirements', () => {
+  it('fails closed when the request origin cannot be determined', () => {
+    const check = evaluateQaTrajectory(completeTrajectory());
+
+    expect(check.passed).toBe(false);
+    expect(check.scopeViolations).toContain('request-origin:missing');
+  });
+});
+
 describe('evaluateQaReportStructure', () => {
   it('accepts a complete substantive report', () => {
     const check = evaluateQaReportStructure(VALID_REPORT);
@@ -188,10 +217,29 @@ describe('evaluateQaReportStructure', () => {
 
   it('requires exact heading lines rather than substring matches', () => {
     const check = evaluateQaReportStructure(
-      VALID_REPORT.replace('## Evidence', 'Evidence is discussed below'),
+      VALID_REPORT.replace('## Evidence', '## Evidence and findings'),
     );
     expect(check.missing).toContain('## Evidence');
     expect(check.evidenceSubstantive).toBe(false);
+  });
+
+  it('recognizes Indonesian wording that says the page was loaded', () => {
+    const check = evaluateQaReportStructure(
+      VALID_REPORT.replace(
+        '- Page load: PASS — the fixture loaded successfully.',
+        '- Halaman dimuat dengan berhasil: PASS.',
+      ),
+    );
+
+    expect(check.missingChecks).not.toContain('page load');
+    expect(check.checksSubstantive).toBe(true);
+  });
+
+  it('rejects a status-only summary as non-substantive', () => {
+    expect(
+      evaluateQaReportStructure(VALID_REPORT.replace('PASS — public smoke test completed successfully.', 'PASS'))
+        .summarySubstantive,
+    ).toBe(false);
   });
 
   it('rejects an empty evidence section', () => {
@@ -252,7 +300,9 @@ describe('evaluateQaReportStructure', () => {
 
 describe('evaluateQaTrajectory', () => {
   it('accepts the required successful browser path', () => {
-    const check = evaluateQaTrajectory(completeTrajectory());
+    const check = evaluateQaTrajectory(completeTrajectoryForOrigin('http://127.0.0.1:43123'), {
+      expectedOrigin: 'http://127.0.0.1:43123',
+    });
     expect(check.missing).toEqual([]);
     expect(check.failed).toEqual([]);
     expect(check.unsafe).toEqual([]);
@@ -283,6 +333,60 @@ describe('evaluateQaTrajectory', () => {
 
     expect(check.passed).toBe(true);
     expect(check.scopeViolations).toEqual([]);
+  });
+
+  it('fails when off-origin URLs are the only defect', () => {
+    const check = evaluateQaTrajectory(completeTrajectoryForOrigin('https://outside.example'), {
+      expectedOrigin: 'http://127.0.0.1:43123',
+    });
+
+    expect(check.missing).toEqual([]);
+    expect(check.failed).toEqual([]);
+    expect(check.unsafe).toEqual([]);
+    expect(check.ordered).toBe(true);
+    expect(check.scopeViolations.length).toBeGreaterThan(0);
+    expect(check.passed).toBe(false);
+  });
+
+  it('allows benign clicks before the eventual pricing navigation', () => {
+    const homeUrl = 'http://127.0.0.1:43123/.';
+    const pricingUrl = 'http://127.0.0.1:43123/pricing';
+    const check = evaluateQaTrajectory(
+      {
+        steps: [
+          { ...successfulTool('browser_goto'), toolArgs: { url: homeUrl }, toolResult: { success: true, url: homeUrl } },
+          { ...successfulTool('browser_snapshot'), toolResult: { success: true, url: homeUrl, snapshot: 'home' } },
+          { ...successfulTool('browser_click'), toolArgs: { ref: '@e2' }, toolResult: { success: true } },
+          {
+            ...successfulTool('browser_snapshot'),
+            toolResult: { success: true, url: homeUrl, snapshot: 'home after benign click' },
+          },
+          { ...successfulTool('browser_click'), toolArgs: { ref: '@e1' }, toolResult: { success: true, url: pricingUrl } },
+          { ...successfulTool('browser_snapshot'), toolResult: { success: true, url: pricingUrl, snapshot: 'pricing' } },
+        ],
+      },
+      { expectedOrigin: 'http://127.0.0.1:43123' },
+    );
+
+    expect(check.passed).toBe(true);
+    expect(check.scopeViolations).toEqual([]);
+  });
+
+  it('rejects browser navigation helpers outside the read-only action contract', () => {
+    const base = completeTrajectoryForOrigin('http://127.0.0.1:43123');
+    const check = evaluateQaTrajectory(
+      {
+        steps: [
+          ...base.steps,
+          { ...successfulTool('browser_tabs'), toolArgs: { action: 'list' } },
+          successfulTool('browser_back'),
+        ],
+      },
+      { expectedOrigin: 'http://127.0.0.1:43123' },
+    );
+
+    expect(check.unsafe).toEqual(['browser_tabs', 'browser_back']);
+    expect(check.passed).toBe(false);
   });
 
   it('reports missing required browser actions', () => {
@@ -398,6 +502,22 @@ describe('computeQaJudgeScore', () => {
         reportClarity: 0,
       }),
     ).toBe(0);
+  });
+});
+
+describe('buildQaJudgePrompt', () => {
+  it('fences every model-controlled judge input block', () => {
+    const prompt = buildQaJudgePrompt({
+      requestText: 'request data',
+      goldenText: 'golden data',
+      outputText: 'report data',
+      trajectorySummary: 'trajectory data',
+    });
+
+    expect(prompt).toContain('<<<BEGIN_ORIGINAL_REQUEST>>>\nrequest data\n<<<END_ORIGINAL_REQUEST>>>');
+    expect(prompt).toContain('<<<BEGIN_GOLDEN_REFERENCE>>>\ngolden data\n<<<END_GOLDEN_REFERENCE>>>');
+    expect(prompt).toContain('<<<BEGIN_AGENT_REPORT>>>\nreport data\n<<<END_AGENT_REPORT>>>');
+    expect(prompt).toContain('<<<BEGIN_BROWSER_TRAJECTORY>>>\ntrajectory data\n<<<END_BROWSER_TRAJECTORY>>>');
   });
 });
 

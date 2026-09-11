@@ -31,7 +31,7 @@ The eval owns a small local HTTP fixture. It serves a public page with stable fa
 
 The test prompt instructs the agent to navigate only within this fixture, verify those facts, click the pricing link, avoid submissions or mutations, and return a concise report with `Summary`, `Checks`, `Evidence`, and `Blockers` sections. The fixture is closed in `finally`, even when the agent or scorer fails.
 
-This tests the agent's intended browser flow—navigation, inspection, link interaction, evidence gathering, and concise reporting—without making the score depend on DNS, a remote site's markup, authentication, or external data.
+This tests the agent's intended browser flow—navigation, inspection, link interaction, evidence gathering, and concise reporting—without making the score depend on DNS, a remote site's markup, authentication, or external data. The browser itself remains a real network-capable Chromium process; the local fixture is not a network sandbox, and operators must treat outbound egress as unrestricted.
 
 ## Golden reference
 
@@ -50,7 +50,7 @@ The eval uses three scorers, with the first two acting as gates:
 
 ### 1. Browser trajectory gate
 
-Deterministically extract the trajectory from the Mastra agent output and require successful, ordered calls to browser navigation, snapshot, click, and post-click snapshot. The scorer also checks fixture-origin URLs, `/pricing` navigation, and rejects unsafe mutation/evaluate browser tools. It returns `1` only when all required actions are present and successful; otherwise it returns `0` with the missing, failed, unsafe, or out-of-scope names in the reason. The extraction happens inside the scorer because Mastra 1.50.1 passes raw output to `gates`.
+Deterministically extract the trajectory from the Mastra agent output and require successful, ordered calls to browser navigation, snapshot, click, and post-click snapshot. The scorer also checks fixture-origin URLs, eventual `/pricing` navigation after a successful click, and rejects prohibited interaction/navigation tools (`browser_type`, `browser_press`, `browser_select`, `browser_dialog`, `browser_drag`, `browser_evaluate`, `browser_back`, and `browser_tabs`). It returns `1` only when all required actions are present and successful; otherwise it returns `0` with the missing, failed, unsafe, or out-of-scope names in the reason. The extraction happens inside the scorer because Mastra 1.50.1 passes raw output to `gates`.
 
 ### 2. Report structure gate
 
@@ -65,7 +65,7 @@ Use the configured OpenAI-compatible judge model to compare the task, fixture fa
 - `scopeSafety`: no mutation or out-of-scope navigation is claimed;
 - `reportClarity`: the result is concise and operationally useful.
 
-Combine the dimensions with weights `0.40`, `0.35`, `0.15`, and `0.10`. Record the score and reason, but keep the deterministic gates as the release-protection criteria. The LLM judge must be a separately configured model through the existing server model gateway; the agent's configured model is not hard-coded in the eval.
+Combine the dimensions with weights `0.40`, `0.35`, `0.15`, and `0.10`. Record the score and reason, but keep the deterministic gates as the release-protection criteria. The LLM judge resolves through the existing server model gateway and uses the configured default model by default; the model ID is not hard-coded in the eval, and no separate judge credential is required.
 
 ## Runner and operator experience
 

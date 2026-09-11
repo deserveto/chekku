@@ -62,7 +62,7 @@ Implementation:
 1. Reuse the defensive output extraction pattern already proven by the social eval, with QA-specific names.
 2. Use line-based, case-insensitive heading matching and explicit non-empty section checks.
 3. Define the deterministic trajectory scorer as an agent scorer with a preprocess step that calls `extractTrajectory`; Mastra 1.50.1 passes raw agent output to `gates`, so extraction must happen inside the scorer.
-4. Require successful navigation, pre-click inspection, click, post-click inspection, ordered execution, same-origin URLs, `/pricing` navigation, and no unsafe mutation/evaluate tools.
+4. Require successful navigation, pre-click inspection, click, post-click inspection, ordered execution, a determined same-origin boundary, eventual same-origin `/pricing` navigation after a click, and no prohibited interaction/navigation tools.
 5. Define the LLM judge schema with coverage, evidence accuracy, scope safety, clarity, and missing points; include a compact trajectory summary and compute the documented weighted score.
 6. Keep the judge instructions grounded in the case facts and tell the judge not to reward unsupported claims or exact wording.
 
@@ -77,13 +77,13 @@ File:
 Implementation:
 
 1. Check LLM variables before dynamically importing `qa-web-agent`, avoiding import-time model failures.
-2. Check the configured browser executable or Playwright's Chromium executable path and provide the install command when absent.
+2. Check the configured browser executable or Playwright Chromium executable path and provide the install command when absent; use the same `playwright-core` launcher API used by the browser dependency.
 3. Start the local fixture and create the one case.
 4. Build the judge model through the existing OpenAI-compatible gateway.
 5. Register the plain `qaWebAgent`, scorers, and `InMemoryStore` on a lightweight `Mastra` instance.
 6. Run the case through `runEvals` with a fresh `qa-web-agent-evals` memory thread, deterministic gates, and a tracked golden threshold.
 7. Print per-scorer results, aggregate scores, gate/threshold status, and the final verdict.
-8. Close the fixture and browser in `finally` and fail only for missing execution/structure gates or an unevaluated case.
+8. Close the browser only when a browser state exists, then close the fixture in `finally`; fail only for missing execution/structure gates or an unevaluated case.
 
 Run the eval command once. If this environment still lacks LLM credentials or Chromium, verify the actionable preflight error and record the limitation rather than fabricating a live score.
 
