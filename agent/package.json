@@ -40,7 +40,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.1.0",
-    "mastra": "1.18.2",
+    "mastra": "1.34.2",
     "typescript": "^6.0.3"
   }
 }
